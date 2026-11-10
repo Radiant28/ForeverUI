@@ -21,16 +21,19 @@ local large = {
     portrait = { 157, 35, 53 }, health = { 12, 29, 119, 15 },
     power = { 12, 45, 119, 10 }, name = { 12, 16, 119 }, level = { 176, 56 },
 }
+-- Chrome slot interiors measured on CharacterFrames.tga (texture px × 0.4) so the fills sit inside the borders.
+-- Fills reach 2 px under the opaque chrome so its anti-aliased inner edge leaves no gap; neighbouring
+-- slots meet in the middle of the 4 px border between them.
 local player = {
     chrome = { 0, 178, 71 }, portrait = { 35.5, 35.5, 57 },
-    name = { 71.5, 15.5, 115 }, health = { 70.8, 32.4, 117.1, 11.8 },
-    power = { 70.8, 46.9, 117.1, 9.1 }, level = { 13, 62 },
+    name = { 71.2, 15.6, 116 }, nameSlot = { 14.4, 14.4 }, health = { 69.2, 30.7, 120, 14.8 },
+    power = { 69.2, 45.5, 120, 12.4 }, level = { 13, 62 },
     aggro = true,
 }
 local target = {
     chrome = { 192, 187, 75 }, portrait = { 157, 37.3, 57 },
-    name = { 6, 13, 114.5 }, nameFill = { 5, 12, 116, 15.5 },
-    health = { 5.2, 30.9, 115.8, 12.9 }, power = { 5.2, 47, 115.8, 12.2 },
+    name = { 6, 15.6, 114 }, nameSlot = { 14.1, 15.2 }, nameFill = { 3.2, 12.1, 119.6, 19.2 },
+    health = { 3.2, 31.3, 119.6, 16 }, power = { 3.2, 47.7, 119.6, 15.2 },
     level = { 179, 63.5 }, aggro = true,
 }
 local arena = {
@@ -58,6 +61,11 @@ local healthBars = {}
 local powerBars = {}
 local barPanels = {}
 local chromeRings, portraitRings, dividers, pvpIcons, restIcons = {}, {}, {}, {}, {}
+-- Halo textures generated from the chrome silhouette: canvas size and margin in CharacterFrames px.
+local chromeGlows = {
+    player = { file = "Player-ChromeGlow", margin = 28, width = 536, height = 234 },
+    target = { file = "Target-ChromeGlow", margin = 28, width = 536, height = 243 },
+}
 
 local function updateHealthColor(bar)
     local state = healthBars[bar]
@@ -129,22 +137,59 @@ local function center(region, relative)
     end
 end
 
+-- Remembers where a bar panel sits so the border can be drawn outside the bars, whatever its thickness.
+local function rememberPanel(panel)
+    panel.base = {}
+    for i = 1, panel:GetNumPoints() do panel.base[i] = { panel:GetPoint(i) } end
+    if #panel.base == 1 then panel.baseSize = { panel:GetWidth(), panel:GetHeight() } end
+end
+
+local function placePanel(panel, outset)
+    if not panel.base then return end
+    panel:ClearAllPoints()
+    for _, anchor in ipairs(panel.base) do
+        local point, relative, relativePoint, x, y = unpack(anchor, 1, 5)
+        local dx = point:find("LEFT") and -outset or point:find("RIGHT") and outset or 0
+        local dy = point:find("TOP") and outset or point:find("BOTTOM") and -outset or 0
+        if panel.baseSize then
+            -- A single corner anchor grows the panel by the outset on every side.
+            dx, dy = point:find("RIGHT") and outset or -outset, point:find("BOTTOM") and -outset or outset
+        end
+        panel:SetPoint(point, relative, relativePoint, (x or 0) + dx, (y or 0) + dy)
+    end
+    if panel.baseSize then panel:SetSize(panel.baseSize[1] + 2 * outset, panel.baseSize[2] + 2 * outset) end
+end
+
 local function applyPanelMedia(panel, scale)
     local settings = ui.Settings()
     local background = ui.MediaPath("background", settings.unitBarBackground)
     local border = ui.MediaPath("border", settings.unitBarBorder)
+    -- The bronze chrome of the player, target and party frames already is their border.
+    if panel.foreverChrome then border = "" end
+    local edgeSize, inset = 0, 0
+    if border ~= "" then
+        if border == art .. "UnitFrame-Edge" then
+            edgeSize, inset = 4, 1.5
+        else
+            edgeSize, inset = setting("ufBorderSize", 12), setting("ufBorderInset", 3)
+        end
+        edgeSize, inset = edgeSize * scale, inset * scale
+    end
+    placePanel(panel, inset)
     if background == "" and border == "" then
         panel:SetBackdrop(nil)
         return
     end
-    local foreverEdge = border == art .. "UnitFrame-Edge"
-    local inset = (foreverEdge and 1.5 or 4) * scale
     panel:SetBackdrop({
         bgFile = background ~= "" and background or nil,
-        edgeFile = border ~= "" and not (foreverEdge and panel.foreverChrome) and border or nil,
-        edgeSize = (foreverEdge and 4 or 8) * scale,
+        edgeFile = border ~= "" and border or nil,
+        edgeSize = edgeSize,
         insets = { left = inset, right = inset, top = inset, bottom = inset },
     })
+    if border ~= "" then
+        local edge = color("ufBorderColor", { 1, 1, 1, 1 })
+        panel:SetBackdropBorderColor(edge[1], edge[2], edge[3], edge[4] or 1)
+    end
     local tint = color("ufPanelColor", { 0.13, 0.085, 0.048, 0.30 })
     if background == white then
         panel:SetBackdropColor(tint[1], tint[2], tint[3], tint[4] or 0.30)
@@ -259,6 +304,8 @@ local function apply(frame, style, originX, originY, scale, flip)
     local bottom = bottomBar[2] + bottomBar[4] + 2.5
     local panel = createBarPanel(frame, health, power, scale, style.chrome ~= nil)
     position(panel, "TOPLEFT", left, top, right - left, bottom - top)
+    rememberPanel(panel)
+    applyPanelMedia(panel, scale)
 
     local function divide(parent, bar, geometry)
         local leftOffset = left + 1 - geometry[1]
@@ -299,9 +346,17 @@ local function apply(frame, style, originX, originY, scale, flip)
         if name then
             local x, y, width = unpack(style.name)
             local left = flip and -x - width or x
-            place(name, frame, "TOPLEFT", originX + left * scale, originY + y * scale)
             local roleSpace = isParty and role and 14 or 0
-            name:SetSize(width * scale - roleSpace, isParty and 10 or 12)
+            local height = isParty and 10 or 12
+            if style.nameSlot and scale < 0.9 then
+                -- Scaled-down chrome: fill the name slot and shrink the font to fit it.
+                y, height = style.nameSlot[1], style.nameSlot[2] * scale
+                local font, _, flags = name:GetFont()
+                if font then name:SetFont(font, math.max(6, math.min(12, math.floor(height * 0.8 + 0.5))), flags) end
+            end
+            place(name, frame, "TOPLEFT", originX + left * scale, originY + y * scale)
+            name:SetSize(width * scale - roleSpace, height)
+            name:SetWordWrap(false)
             name:SetJustifyH("CENTER")
         end
     end
@@ -318,7 +373,7 @@ local function apply(frame, style, originX, originY, scale, flip)
     if style.aggro and not isParty then
         skin.aggro = ring
     end
-    if frame == TargetFrame then
+    if style.nameFill then
         local accent = panel:CreateTexture(nil, "ARTWORK", nil, -1)
         accent:SetTexture(white)
         position(accent, "TOPLEFT", unpack(style.nameFill))
@@ -393,12 +448,61 @@ local function apply(frame, style, originX, originY, scale, flip)
         region:SetSize(portraitSize * 1.27, portraitSize * 1.27)
         center(region, portrait)
     end
+    -- The stock status and threat glows keep their colours, pulsing and timing from the client;
+    -- only their art is replaced by a halo cut to the WoW: Forever chrome.
+    local function chromeGlow(region, enabled)
+        if not region then return end
+        if not enabled then
+            region:SetTexture(nil)
+            return
+        end
+        local glow = style.chrome and chromeGlows[style == target and "target" or "player"]
+        if not glow then
+            portraitGlow(region)
+            return
+        end
+        region:SetParent(portraitLayer)
+        region:SetDrawLayer("ARTWORK", -5)
+        region:SetTexture(art .. glow.file)
+        region:SetTexCoord(0, 1, 0, 1)
+        region:SetBlendMode("ADD")
+        local sy = style.chrome[3] / style.chrome[2]
+        position(region, "TOPLEFT", -glow.margin * 0.4, -glow.margin * sy, glow.width * 0.4, glow.height * sy)
+    end
     if frame == PlayerFrame then
-        portraitGlow(PlayerFrameFlash)
-        portraitGlow(PlayerStatusTexture)
+        skin.reglow = function()
+            chromeGlow(PlayerFrameFlash, setting("ufThreatGlow", true))
+            chromeGlow(PlayerStatusTexture, setting("ufStatusGlow", true))
+        end
+        skin.reglow()
+        -- The client pulses the alpha of these every frame, so only an empty texture hides them.
+        if PlayerAttackBackground then PlayerAttackBackground:SetTexture(nil) end
+        if PlayerRestGlow then PlayerRestGlow:SetTexture(nil) end
+        -- In combat the stock frame swaps the level for crossed swords: show them on the level badge.
+        if skin.badge and PlayerAttackIcon then
+            for _, icon in ipairs({ PlayerAttackIcon, PlayerAttackGlow }) do
+                if icon then
+                    icon:SetParent(portraitLayer)
+                    icon:SetDrawLayer("OVERLAY", 1)
+                    icon:ClearAllPoints()
+                    icon:SetPoint("CENTER", skin.badge, "CENTER", 0, 0)
+                end
+            end
+            PlayerAttackIcon:SetSize(17 * scale, 17 * scale)
+            if PlayerAttackGlow then PlayerAttackGlow:SetSize(28 * scale, 28 * scale) end
+        end
+        skin.updateBadge = function()
+            if not skin.badge then return end
+            if PlayerLevelText:IsShown() or (PlayerAttackIcon and PlayerAttackIcon:IsShown()) then
+                skin.badge:Show()
+            else
+                skin.badge:Hide()
+            end
+        end
+        hooksecurefunc("PlayerFrame_UpdateStatus", skin.updateBadge)
+        skin.updateBadge()
         if PlayerRestIcon then
             PlayerRestIcon:SetAlpha(0)
-            if PlayerRestGlow then PlayerRestGlow:SetAlpha(0) end
             local rest = portraitLayer:CreateTexture(nil, "OVERLAY", nil, 2)
             rest:SetTexture(frameArt)
             rest:SetTexCoord(0, 64 / 512, 384 / 512, 448 / 512)
@@ -412,7 +516,10 @@ local function apply(frame, style, originX, originY, scale, flip)
             updateRest()
         end
     elseif isParty then
-        if frame.threatIndicator then portraitGlow(frame.threatIndicator) end
+        if frame.threatIndicator then
+            skin.reglow = function() chromeGlow(frame.threatIndicator, setting("ufThreatGlow", true)) end
+            skin.reglow()
+        end
         for _, suffix in ipairs({ "Status", "LeaderIcon", "GuideIcon", "MasterIcon", "Disconnect" }) do
             local icon = _G[prefix .. suffix]
             if icon then icon:SetParent(portraitLayer) end
@@ -426,8 +533,11 @@ local function apply(frame, style, originX, originY, scale, flip)
         end
     end
     skins[frame] = skin
-    if style == large or frame == TargetFrame then
-        if frame.threatIndicator then portraitGlow(frame.threatIndicator) end
+    if not skin.reglow and frame ~= PlayerFrame and frame.threatIndicator then
+        skin.reglow = function() chromeGlow(frame.threatIndicator, setting("ufThreatGlow", true)) end
+        skin.reglow()
+    end
+    if style == large or style == target then
         local dragon = portraitLayer:CreateTexture(nil, "ARTWORK", nil, -2)
         dragon:SetTexture(art .. "uiunitframeboss2x")
         skin.dragon = function(kind, refresh)
@@ -450,9 +560,8 @@ local function reskinPlayer()
     if not skin then return end
     skin.bars()
     skin.portrait()
-    if skin.badge then
-        if PlayerLevelText:IsShown() then skin.badge:Show() else skin.badge:Hide() end
-    end
+    if skin.reglow then skin.reglow() end
+    if skin.updateBadge then skin.updateBadge() end
 end
 
 local function updatePartyLevel(frame)
@@ -474,6 +583,8 @@ local function reskinRaid(pullout)
             local plate = createBarPanel(member, health, power, 1)
             plate:SetPoint("TOPLEFT", member, "TOPLEFT", -2.5, 6)
             plate:SetPoint("BOTTOMRIGHT", power, "BOTTOMRIGHT", 2.5, -2.5)
+            rememberPanel(plate)
+            applyPanelMedia(plate, 1)
             addBarDivider(plate, health, -2.5, 1.5, 1)
             addBarDivider(power, power, -2.5, 1.5, 1)
             for _, suffix in ipairs({ "HealthBar", "ManaBar", "Target", "TargetTarget" }) do
@@ -544,25 +655,40 @@ local function updateAggro(indicator)
     elseif UnitExists("target") then
         status = UnitThreatSituation("player", "target")
     end
-    local active = status and status >= 2
-    skin.aggro:SetVertexColor(rgb(active and aggroColor() or chromeColor()))
-    indicator:SetAlpha(active and 0 or 1)
+    -- Tinting the bronze chrome is optional; by default the stock threat glow shows instead.
+    local tint = status and status >= 2 and setting("ufAggroTint", false)
+    skin.aggro:SetVertexColor(rgb(tint and aggroColor() or chromeColor()))
+    indicator:SetAlpha(tint and 0 or 1)
 end
 
 local function applyStock()
     apply(PlayerFrame, player, 36, 8, 1)
     apply(TargetFrame, target, 4, 6, 1)
-    apply(FocusFrame, large, 1, 9, 1)
-    apply(TargetFrameToT, secondary, 2, 3, 0.79)
-    apply(FocusFrameToT, secondary, 2, 3, 0.79)
-    apply(PetFrame, small, 1, 5, 1)
+    -- Every other frame uses the same bronze chrome, scaled so its portrait stays where the stock one is.
+    local chrome = setting("ufChromeAll", true)
+    if chrome then
+        apply(FocusFrame, target, 4, 6, 1)
+        apply(TargetFrameToT, player, 3, 3.5, 0.55)
+        apply(FocusFrameToT, player, 3, 3.5, 0.55)
+        apply(PetFrame, player, 3.7, 6.7, 0.6)
+    else
+        apply(FocusFrame, large, 1, 9, 1)
+        apply(TargetFrameToT, secondary, 2, 3, 0.79)
+        apply(FocusFrameToT, secondary, 2, 3, 0.79)
+        apply(PetFrame, small, 1, 5, 1)
+    end
     for i = 1, 4 do
         local prefix = "PartyMemberFrame" .. i
         apply(_G[prefix], player, 2, 1, 0.625)
-        apply(_G[prefix .. "PetFrame"], small, 1, 1, 0.53)
+        if chrome then
+            apply(_G[prefix .. "PetFrame"], player, -0.5, -1, 0.4)
+        else
+            apply(_G[prefix .. "PetFrame"], small, 1, 1, 0.53)
+        end
 
         local boss = _G["Boss" .. i .. "TargetFrame"]
-        local skin = apply(boss, large, 0, 12, 0.8)
+        local skin
+        if chrome then skin = apply(boss, target, 0, 10, 0.8) else skin = apply(boss, large, 0, 12, 0.8) end
         if skin then
             skin.dragon("worldboss")
             skin.bossPortrait = _G[boss:GetName() .. "Portrait"]
@@ -587,6 +713,8 @@ local function applyStock()
         if skin and skin.dragon then
             skin.dragon(not forceNormal and UnitClassification(frame.unit))
         end
+        -- The stock code resets the threat flash art for elite and normal targets.
+        if skin and skin.reglow then skin.reglow() end
     end)
     hooksecurefunc("TargetFrame_Update", function(frame)
         local skin = skins[frame]
@@ -623,7 +751,7 @@ loader:SetScript("OnEvent", function(self, event, name)
         return
     end
     if event == "UNIT_HEALTH" then
-        local skin = name == "target" and skins[TargetFrame]
+        local skin = (name == "target" and skins[TargetFrame]) or (name == "focus" and skins[FocusFrame])
         if skin and skin.updateTarget then skin.updateTarget() end
         return
     end
@@ -685,6 +813,8 @@ local function applyVisibility()
         if type(skin) == "table" then
             if skin.updateTarget then skin.updateTarget() end
             if skin.dragon then skin.dragon(nil, true) end
+            if skin.reglow then skin.reglow() end
+            if skin.updateBadge then skin.updateBadge() end
         end
     end
     if TargetFrame_UpdateAuras and TargetFrame and UnitExists("target") then TargetFrame_UpdateAuras(TargetFrame) end
