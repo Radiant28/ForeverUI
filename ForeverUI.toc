@@ -1,0 +1,60 @@
+## Interface: 30300
+## Title: Forever UI
+## Notes: WoW: Forever styling and equipment labels for the stock interface.
+## Notes-ruRU: Оформление штатного интерфейса в стиле WoW: Forever и подписи экипировки.
+## Version: 1.2.0
+## SavedVariables: ForeverStockUIDB, ForeverUI_NameplatesDB
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
+
+# Core: configuration, widget factory, options window, legacy control API
+Core\Config.lua
+Core\Widgets.lua
+Core\OptionsFrame.lua
+Core\Compat.lua
+
+BundledMedia.lua
+Media.lua
+
+# Modules
+ForeverUI.lua
+ForeverUI_NameplateBoxes.lua
+ForeverUI_NameplateStyle.lua
+ForeverUI_NameplateOptions.lua
+ForeverUI_Nameplates.lua
+StockPanels.lua
+EditMode.lua
+Performance.lua
+Chat.lua
+Loot.lua
+LootRolls.lua
+Minimap.lua
+Equipment.lua
+MicroMenu.lua
+Bags.lua
+Merchant.lua
+CastBarOptions.lua
+CombatMeterData.lua
+CombatMeter.lua
+CombatText.lua
+Cursor.lua
+CursorOptions.lua
+
+# Declarative option schemas, one file per module
+Options\General.lua
+Options\EditMode.lua
+Options\Performance.lua
+Options\UnitFrames.lua
+Options\CastBar.lua
+Options\ActionBars.lua
+Options\MicroMenu.lua
+Options\Minimap.lua
+Options\CombatText.lua
+Options\CombatMeter.lua
+Options\Cursor.lua
+Options\Bags.lua
+Options\Equipment.lua
+Options\Merchant.lua
+Options\Chat.lua
