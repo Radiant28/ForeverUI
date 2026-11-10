@@ -26,6 +26,7 @@ python -c "import lupa.luajit21 as L,sys;r=L.LuaRuntime();r.execute('arg={}');r.
 ```
 - `tests/Options.lua` — мок WoW API. Грузит Core, Media и все схемы `Options/*`, строит каждую страницу и дёргает контролы. Проверяет запрещённые API в Core и в Options.
 - `tests/Nameplates.lua` — неймплейты: схема, CVars, боксы, касты, ауры.
+- `tests/Minimap.lua` — мок миникарты: кнопки на оправе, обход штатных элементов, масштаб, поздние кнопки, LibDBIcon `Refresh`, перетаскивание, панель.
 - В тестах модули подменены заглушками-рекордерами: `ui.UnitFrames`, `ui.CombatMeter` и другие. **Если добавили функцию в API модуля, которую вызывает схема, добавьте её и в заглушку** в `tests/Options.lua`.
 
 ## Порядок загрузки (ForeverUI.toc)
@@ -70,7 +71,7 @@ ui.RegisterOptions("id", { title=, description=, icon=, group="general|frames|co
 | Каст-бары (`castbar`) | `CastBarOptions.lua` | `Options/CastBar.lua` | `ui.CastBar {stock, Apply}` | Скин каст-баров игрока, питомца, цели, фокуса, боссов и арены |
 | Панели действий (`actionbars`) | `StockPanels.lua` | `Options/ActionBars.lua` | `ui.ActionBars {Apply}`, `ui.ApplyGryphons`, `ui.ApplySlotEdge` | Грифоны, цвет арта, рамки слотов, рамка полосы опыта |
 | Микроменю (`micromenu`) | `MicroMenu.lua` | `Options/MicroMenu.lua` | `ui.MicroMenu {ApplyColors}` | Иконки микроменю из атласа |
-| Миникарта и кнопки аддонов (`minimap`, `addonbar`) | `Minimap.lua` | `Options/Minimap.lua` | `ui.Minimap {Layout}` | Кольцо миникарты, баффы и панель кнопок аддонов. Через LibDBIcon хук `Refresh`/`Register` |
+| Миникарта и кнопки аддонов (`minimap`, `addonbar`) | `Minimap.lua` | `Options/Minimap.lua` | `ui.Minimap {Layout}` | Кольцо миникарты, баффы и панель кнопок аддонов (подробности — «Minimap.lua: где что») |
 | Урон, лечение, угроза (`meter`) | `CombatMeterData.lua` (сбор из combat log, история боёв), `CombatMeter.lua` (окна) | `Options/CombatMeter.lua` | `ui.CombatMeterData`, `ui.CombatMeterLimits`, `ui.CombatMeter {Apply, ResetWidth, ResetDamageRows, ResetHealingRows, BuildPreview, BuildWindowList, Create, Remove, RemoveAll, Count}` | Произвольное число окон (до 10), стыковка пар окон, режимы из таблицы `modes` (урон, DPS, лечение, HPS, угроза) |
 | Всплывающий текст боя (`combattext`) | `CombatText.lua` (порт NiceDamage) | `Options/CombatText.lua` | `ui.CombatText {defaults, switches, sliders, schools, Apply, Test, active}`, `/nd` | Цифры урона над целями и неймплейтами |
 | Производительность (`performance`) | `Performance.lua` | `Options/Performance.lua` | `ui.Performance {Apply}` | Счётчик FPS и пинга с порогами цвета |
@@ -91,6 +92,13 @@ ui.RegisterOptions("id", { title=, description=, icon=, group="general|frames|co
 - Хуки на штатные функции: `PlayerFrame_UpdateStatus`, `UnitFrame_UpdateThreatIndicator` (функция `updateAggro`), `TargetFrame_CheckClassification` (дракон), `PartyMemberFrame_*`, `RaidPullout_Update`.
 - `applyColors`, `applyVisibility`, `applyPanelMedia`, `applyBarFill` — live-apply функции для схемы.
 - Штатные текстуры статуса клиент пульсирует каждый кадр, поэтому их прячут через `SetTexture(nil)`, а не через `SetAlpha`.
+
+## Minimap.lua: где что
+- Геометрия в единицах `Minimap` от её центра: `rimRadius` (середина полосы `Map-Rim.tga`, 85.5 px), глаз LFG на оправе под углом `eyeAngle`, `battlefieldX/Y`, `moonX/Y`, `headerGap`.
+- Сбор кнопок `collect` по детям `Minimap`, `MinimapBackdrop`, `MinimapCluster`: `LibDBIcon10_*`, `legacy` и обычные кнопки (`isAddonButton`: имя с `minimap`/`button`, размер 14–48, без `stock` и пинов из `ignored`). Скин `skinAddonButton` — только для кнопок в стиле штатной (рамка `MiniMap-TrackingBorder`), отмечаются в `skinned`.
+- Поздние кнопки: хуки методов LibDBIcon в `hookLibrary` (обновляются, если новая версия библиотеки заменила функцию), `watcher` раз в 1 с сверяет число детей, `hooksecurefunc(button, "SetPoint")` → `onMoved` возвращает кнопку, сдвинутую чужим кодом.
+- `hookScript` заново вешает `OnShow`/`OnHide`/`OnDragStart`/`OnDragStop` на каждой раскладке: `SetScript` в LibDBIcon (`Lock`, `Unlock`, `Refresh`) снимает прежние хуки.
+- Кольцо: радиус `ringRadius()` (край карты + `mapRingOffset`), масштаб кнопок как у карты (размер панели `mapButtonsScale` действует только на панель). `stockBlocks` — прямоугольники штатных элементов, `clearance`/`findAngle` ищут свободный угол; сохранённые углы (`mapButtonAngles`) ставятся первыми, остальные пакуются от `firstAngle` против часовой. `settleDropped` сдвигает брошенную кнопку с занятого места и сохраняет угол.
 
 ## CombatMeter.lua: где что
 - `modes` — режимы окна. Первое поле: 1 урон, 2 лечение, `THREAT` = 3 угроза. `demo` — данные для превью в Edit Mode.
@@ -116,4 +124,4 @@ ui.RegisterOptions("id", { title=, description=, icon=, group="general|frames|co
   2. Добавьте оба файла в `ForeverUI.toc`: модуль в секцию модулей, схему в конец.
 - **Новый перемещаемый фрейм:** у фрейма должно быть имя. Вызовите `ui.RegisterEditFrame(frame, label, "<id схемы>")`. Флаги записи `entry`: `docked`, `moving`, `removed`, а также колбэки `onDragStart`/`onDragStop`/`changeScale`.
 - **Действие с защищёнными фреймами из настроек:** оберните в `ui.RunOutOfCombat(token, fn)` или пометьте опцию `protected = true`.
-- **Перед коммитом:** прогоните оба теста.
+- **Перед коммитом:** прогоните все тесты из `tests/`.

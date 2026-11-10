@@ -28,12 +28,22 @@ buffAnchor:SetSize(1, 1)
 
 MinimapCluster:SetSize(200, 240)
 Minimap:SetSize(165, 165)
-anchor(Minimap, "TOP", header, "BOTTOM", 0, -34)
+local headerGap = 34
+anchor(Minimap, "TOP", header, "BOTTOM", 0, -headerGap)
+
+-- Map-Rim.tga is drawn at 200 px; its opaque band spans 81..89 px from the centre.
+local rimRadius = 85.5
+local eyeAngle = 215
+local eyeX = math.cos(math.rad(eyeAngle)) * rimRadius
+local eyeY = math.sin(math.rad(eyeAngle)) * rimRadius
+local battlefieldX, battlefieldY = -35, -43
+local moonX, moonY = 47, 73.4
 
 local queue = MiniMapLFGFrame
 if queue and queue.eye and queue.eye.texture then
     queue:SetSize(35, 35)
-    anchor(queue, "CENTER", Minimap, "BOTTOM", 0, 35)
+    -- Sit on the rim at the lower left, clear of the map and the PvP queue icon.
+    anchor(queue, "CENTER", Minimap, "CENTER", eyeX, eyeY)
     if MiniMapLFGFrameBorder then MiniMapLFGFrameBorder:SetAlpha(0) end
     queue.eye:SetSize(35, 35)
     anchor(queue.eye, "CENTER", queue, "CENTER", 0, 0)
@@ -41,7 +51,7 @@ if queue and queue.eye and queue.eye.texture then
     queue.eye.texture:SetTexCoord(0, 0.125, 0, 0.25)
 end
 if MiniMapBattlefieldFrame then
-    anchor(MiniMapBattlefieldFrame, "CENTER", Minimap, "CENTER", -35, -43)
+    anchor(MiniMapBattlefieldFrame, "CENTER", Minimap, "CENTER", battlefieldX, battlefieldY)
 end
 
 MinimapZoneTextButton:SetSize(90, 13)
@@ -95,7 +105,7 @@ if GameTimeTexture then
     moon:SetTexture(timeArt)
     moon:SetTexCoord(188 / 256, 1, 0, 68 / 128)
     moon:SetSize(28, 28)
-    moon:SetPoint("CENTER", Minimap, "CENTER", 47, 73.4)
+    moon:SetPoint("CENTER", Minimap, "CENTER", moonX, moonY)
     moon:Hide()
 end
 if MiniMapMailFrame then
@@ -179,16 +189,110 @@ row:Hide()
 
 local events = CreateFrame("Frame")
 local legacy = { Gatherer_MinimapOptionsButton = true, XPerl_MinimapButton_Frame = true }
+-- Named minimap children owned by the client, never gathered as addon buttons.
+local stock = {
+    Minimap = true, MinimapBackdrop = true, MiniMapTracking = true, MiniMapTrackingButton = true,
+    MiniMapMailFrame = true, MiniMapBattlefieldFrame = true, MiniMapLFGFrame = true, MiniMapWorldMapButton = true,
+    MinimapZoomIn = true, MinimapZoomOut = true, GameTimeFrame = true, TimeManagerClockButton = true,
+    MiniMapVoiceChatFrame = true, MinimapZoneTextButton = true, MiniMapInstanceDifficulty = true,
+    MinimapPing = true, MiniMapRecordingButton = true, MinimapToggleButton = true, MiniMapCompassRing = true,
+}
+-- Map pins and markers of gathering, quest and note addons are children of Minimap too.
+local ignored = { "pin", "poi", "note", "node", "blip", "arrow", "ping", "gathermate", "handynotes", "tomtom",
+    "routes", "questhelper", "cartographer", "carbonite", "nxmap" }
+local firstAngle = 135
 local tracked = {}
+local skinned = {}
+local hooked = {}
 local dragUpdates = {}
-local hookedLibrary
+local libraryHooks = {}
+local placing
 local scheduleLayout
 
-local function placeOnRing(button, angle)
-    local offset = ui.Settings().mapRingOffset or 2
-    local radius = (Minimap:GetWidth() / 2 + offset) * Minimap:GetEffectiveScale() / button:GetEffectiveScale()
+local function isAddonButton(button, name)
+    if legacy[name] or name:match("^LibDBIcon10_") then return true end
+    if stock[name] or not button:IsObjectType("Button") then return false end
+    local lower = name:lower()
+    if not lower:find("minimap", 1, true) and not lower:find("button", 1, true) then return false end
+    for _, word in ipairs(ignored) do
+        if lower:find(word, 1, true) then return false end
+    end
+    local width, height = button:GetWidth(), button:GetHeight()
+    return width >= 14 and width <= 48 and height >= 14 and height <= 48
+end
+
+local function savedAngle(name)
+    local angle = ui.Settings().mapButtonAngles[name]
+    if type(angle) == "number" and angle == angle and math.abs(angle) ~= math.huge then return angle % 360 end
+end
+
+local function ringRadius()
+    return Minimap:GetWidth() / 2 + (ui.Settings().mapRingOffset or 2)
+end
+
+-- Radius of a ring button in minimap units; a skinned button shows a 27 px rim.
+local function buttonRadius(button)
+    local size = skinned[button] and 27 or math.max(button:GetWidth(), button:GetHeight())
+    return size * button:GetEffectiveScale() / Minimap:GetEffectiveScale() / 2
+end
+
+-- Stock elements around the rim as {x, y, halfWidth, halfHeight} from the minimap centre.
+local function stockBlocks()
+    local half = Minimap:GetWidth() / 2
+    local top = half + headerGap
+    local blocks = {
+        { 0, top + 10, 83, 10 },             -- header: tracking, zone, clock, calendar
+        { 73.6, top - 10, 8, 8 },            -- date badge
+        { -65.8, top - 10.7, 10.7, 10.7 },   -- mail at 0.65 scale
+        { moonX, moonY, 12, 12 },
+        { battlefieldX, battlefieldY, 18, 18 },
+        { 0, -half - 14.5, 24, 5 },          -- coordinates
+    }
+    if queue then blocks[#blocks + 1] = { eyeX, eyeY, 17.5, 17.5 } end
+    return blocks
+end
+
+-- Smallest gap between a button at this angle and everything around it; negative means overlap.
+local function clearance(angle, radius, size, blocks, placed)
+    local x, y = math.cos(math.rad(angle)) * radius, math.sin(math.rad(angle)) * radius
+    local worst = math.huge
+    for _, block in ipairs(blocks) do
+        local dx = math.max(math.abs(x - block[1]) - block[3], 0)
+        local dy = math.max(math.abs(y - block[2]) - block[4], 0)
+        worst = math.min(worst, math.sqrt(dx * dx + dy * dy) - size)
+    end
+    for _, other in ipairs(placed) do
+        local dx, dy = x - other[1], y - other[2]
+        worst = math.min(worst, math.sqrt(dx * dx + dy * dy) - size - other[3] - 1)
+    end
+    return worst
+end
+
+-- Nearest free angle from start (counter-clockwise only unless both), or the roomiest one on a full ring.
+local function findAngle(start, radius, size, blocks, placed, both)
+    local best, bestGap = start, -math.huge
+    for step = 0, 359 do
+        for sign = 1, both and -1 or 1, -2 do
+            local angle = (start + sign * step) % 360
+            local gap = clearance(angle, radius, size, blocks, placed)
+            if gap >= 0 then return angle end
+            if gap > bestGap then best, bestGap = angle, gap end
+        end
+    end
+    return best
+end
+
+local function occupy(placed, button, angle, radius)
     local radians = math.rad(angle)
+    placed[#placed + 1] = { math.cos(radians) * radius, math.sin(radians) * radius, buttonRadius(button) }
+end
+
+local function placeOnRing(button, angle)
+    local radius = ringRadius() * Minimap:GetEffectiveScale() / button:GetEffectiveScale()
+    local radians = math.rad(angle)
+    placing = true
     anchor(button, "CENTER", Minimap, "CENTER", math.cos(radians) * radius, math.sin(radians) * radius)
+    placing = nil
 end
 
 local function updateRingDrag(button, elapsed)
@@ -205,16 +309,73 @@ local function updateRingDrag(button, elapsed)
     placeOnRing(button, angle)
 end
 
+-- A dropped button slides to the nearest spot that covers no stock element and no pinned button.
+local function settleDropped(button)
+    local settings = ui.Settings()
+    local angle = savedAngle(button:GetName())
+    if not settings.mapButtonsCircle or not angle or InCombatLockdown() then return end
+    local radius, placed = ringRadius(), {}
+    for other in pairs(tracked) do
+        local otherAngle = other ~= button and other:IsShown() and savedAngle(other:GetName())
+        if otherAngle then occupy(placed, other, otherAngle, radius) end
+    end
+    settings.mapButtonAngles[button:GetName()] =
+        findAngle(angle, radius, buttonRadius(button), stockBlocks(), placed, true)
+end
+
 local function stopRingDrag(button)
-    if dragUpdates[button] ~= nil and button:GetScript("OnUpdate") == updateRingDrag then
-        button:SetScript("OnUpdate", legacy[button:GetName()] and dragUpdates[button] or nil)
+    local dragging = dragUpdates[button] ~= nil
+    if dragging and button:GetScript("OnUpdate") == updateRingDrag then
+        button:SetScript("OnUpdate", dragUpdates[button] or nil)
     end
     dragUpdates[button] = nil
+    if dragging then settleDropped(button) end
     scheduleLayout()
 end
 
+local function startRingDrag(button)
+    if not ui.Settings().mapButtonsCircle or InCombatLockdown() or (button.db and button.db.lock) then return end
+    dragUpdates[button] = button:GetScript("OnUpdate") or false
+    button:SetScript("OnUpdate", updateRingDrag)
+    updateRingDrag(button, 0)
+end
+
+-- LibDBIcon:Refresh and other addons move buttons back with SetPoint; put them back on the next frame.
+local function onMoved(button)
+    if not placing and dragUpdates[button] == nil then scheduleLayout() end
+end
+
+-- SetScript (LibDBIcon Lock, Unlock and Refresh) drops earlier hooks, so they are checked on every layout.
+local function hookScript(button, script, handler)
+    local marks = hooked[button]
+    local current = button:GetScript(script)
+    if current and marks[script] == current then return end
+    button:HookScript(script, handler)
+    marks[script] = button:GetScript(script)
+end
+
+local function findIcon(button)
+    if button.icon then return button.icon end
+    if button == XPerl_MinimapButton_Frame then return XPerl_MinitmapButton_Icon end
+    -- A plain button in the stock style: tracking border plus an icon on the ARTWORK layer.
+    local border, icon
+    for _, region in ipairs({ button:GetRegions() }) do
+        if region:IsObjectType("Texture") then
+            local texture = region:GetTexture()
+            local path = type(texture) == "string" and texture:lower() or ""
+            if path:find("minimap-trackingborder", 1, true) then
+                border = true
+            elseif not icon and region:GetDrawLayer() == "ARTWORK" and region ~= button:GetHighlightTexture()
+                and not path:find("ui-minimap-background", 1, true) then
+                icon = region
+            end
+        end
+    end
+    return border and icon
+end
+
 local function skinAddonButton(button)
-    local icon = button.icon or (button == XPerl_MinimapButton_Frame and XPerl_MinitmapButton_Icon)
+    local icon = findIcon(button)
     if not icon then return end
     for _, region in ipairs({button:GetRegions()}) do
         local texture = region.GetTexture and region:GetTexture()
@@ -232,27 +393,38 @@ local function skinAddonButton(button)
     rim:SetSize(27, 27)
     icon:SetSize(12, 12)
     anchor(icon, "CENTER", button, "CENTER", 0, 0)
+    skinned[button] = true
 end
 
 local function collect(container, visible)
+    if not container then return end
     for _, button in ipairs({ container:GetChildren() }) do
         local name = button:GetName()
-        if name and button:IsObjectType("Button") and (name:match("^LibDBIcon10_") or legacy[name]) then
+        if name and (tracked[button] or isAddonButton(button, name)) then
             if not tracked[button] then
                 tracked[button] = button:GetScale()
+                hooked[button] = {}
                 skinAddonButton(button)
-                button:HookScript("OnShow", scheduleLayout)
-                button:HookScript("OnHide", stopRingDrag)
-                if legacy[name] then button:RegisterForDrag("LeftButton") end
-                button:HookScript("OnDragStart", function(self)
-                    if not ui.Settings().mapButtonsCircle or InCombatLockdown() or (self.db and self.db.lock) then return end
-                    dragUpdates[self] = self:GetScript("OnUpdate") or false
-                    self:SetScript("OnUpdate", updateRingDrag)
-                    updateRingDrag(self, 0)
-                end)
-                button:HookScript("OnDragStop", stopRingDrag)
+                hooksecurefunc(button, "SetPoint", onMoved)
+                if not name:match("^LibDBIcon10_") then button:RegisterForDrag("LeftButton") end
             end
+            hookScript(button, "OnShow", scheduleLayout)
+            hookScript(button, "OnHide", stopRingDrag)
+            hookScript(button, "OnDragStart", startRingDrag)
+            hookScript(button, "OnDragStop", stopRingDrag)
             if button:IsShown() then visible[#visible + 1] = button end
+        end
+    end
+end
+
+-- Later LibDBIcon versions replace these methods, so the hooks are renewed when the function changes.
+local function hookLibrary()
+    local library = LibStub and LibStub("LibDBIcon-1.0", true)
+    if not library then return end
+    for _, method in ipairs({ "Register", "Refresh", "Show", "EnableLibrary" }) do
+        if type(library[method]) == "function" and libraryHooks[method] ~= library[method] then
+            hooksecurefunc(library, method, scheduleLayout)
+            libraryHooks[method] = library[method]
         end
     end
 end
@@ -298,33 +470,50 @@ local function layout()
         return
     end
     local spacing = settings.mapButtonsSpacing or 2
-
-    local library = LibStub and LibStub("LibDBIcon-1.0", true)
-    if library and library.Refresh and not hookedLibrary then
-        hooksecurefunc(library, "Refresh", scheduleLayout)
-        hooksecurefunc(library, "Register", scheduleLayout)
-        hookedLibrary = true
-    end
+    hookLibrary()
 
     local buttons = {}
     collect(Minimap, buttons)
+    collect(MinimapBackdrop, buttons)
     collect(MinimapCluster, buttons)
     table.sort(buttons, function(a, b) return a:GetName() < b:GetName() end)
 
+    local ring = settings.mapButtonsCircle
+    -- On the ring buttons follow the minimap scale; in the bar they follow the bar scale.
+    local effectiveScale = ring and Minimap:GetEffectiveScale() or row:GetEffectiveScale()
+    for _, button in ipairs(buttons) do
+        button:SetScale(tracked[button] * effectiveScale / button:GetParent():GetEffectiveScale())
+        button:ClearAllPoints()
+    end
+
+    if ring then
+        local radius, blocks, placed, free = ringRadius(), stockBlocks(), {}, {}
+        for _, button in ipairs(buttons) do
+            local angle = savedAngle(button:GetName())
+            if angle then
+                -- A saved spot can end up covered after the ring offset changes; use the nearest free one.
+                angle = findAngle(angle, radius, buttonRadius(button), blocks, placed, true)
+                placeOnRing(button, angle)
+                occupy(placed, button, angle, radius)
+            else
+                free[#free + 1] = button
+            end
+        end
+        for _, button in ipairs(free) do
+            local angle = findAngle(firstAngle, radius, buttonRadius(button), blocks, placed)
+            placeOnRing(button, angle)
+            occupy(placed, button, angle, radius)
+        end
+        row:Hide()
+        return
+    end
+
     local length, breadth = 3, 0
     local vertical = settings.mapButtonsVertical
-    local effectiveScale = row:GetEffectiveScale()
-    for index, button in ipairs(buttons) do
+    placing = true
+    for _, button in ipairs(buttons) do
         local scale = tracked[button]
-        button:SetScale(scale * effectiveScale / button:GetParent():GetEffectiveScale())
-        button:ClearAllPoints()
-        if settings.mapButtonsCircle then
-            local angle = settings.mapButtonAngles[button:GetName()]
-            if type(angle) ~= "number" or angle ~= angle or math.abs(angle) == math.huge then
-                angle = 120 + (index - 1) * 320 / #buttons
-            end
-            placeOnRing(button, angle)
-        elseif vertical then
+        if vertical then
             button:SetPoint("TOP", row, "TOP", 0, -length / scale)
             length = length + button:GetHeight() * scale + spacing
             breadth = math.max(breadth, button:GetWidth() * scale)
@@ -334,13 +523,29 @@ local function layout()
             breadth = math.max(breadth, button:GetHeight() * scale)
         end
     end
-    if #buttons > 0 and not settings.mapButtonsCircle then
+    placing = nil
+    if #buttons > 0 then
         if vertical then row:SetSize(breadth + 4, length + 1) else row:SetSize(length + 1, breadth + 4) end
         row:Show()
     else
         row:Hide()
     end
 end
+
+-- Buttons created later by timers or load-on-demand addons show up as new minimap children.
+local watcher = CreateFrame("Frame")
+local watchElapsed, childCount = 0, -1
+watcher:SetScript("OnUpdate", function(_, delta)
+    watchElapsed = watchElapsed + delta
+    if watchElapsed < 1 then return end
+    watchElapsed = 0
+    local count = Minimap:GetNumChildren() + MinimapCluster:GetNumChildren()
+        + (MinimapBackdrop and MinimapBackdrop:GetNumChildren() or 0)
+    if count ~= childCount then
+        childCount = count
+        scheduleLayout()
+    end
+end)
 
 scheduleLayout = function()
     events:SetScript("OnUpdate", function(self)
