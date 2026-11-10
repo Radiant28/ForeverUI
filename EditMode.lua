@@ -192,7 +192,7 @@ local function setScale(entry, value)
 end
 
 local function apply(entry)
-    if entry.docked or held(entry) then return end
+    if entry.removed or entry.docked or held(entry) then return end
     if entry.castOwner and entry.config.detached ~= true then return end
     local saved = entry.config.scale
     if entry.castOwner and not number(saved) then
@@ -218,6 +218,10 @@ end
 local function refreshOverlay(entry)
     local overlay = entry.overlay
     if not overlay or dragging == entry then return end
+    if entry.removed then
+        overlay:Hide()
+        return
+    end
     local left, bottom, width, height = rect(entry.frame)
     if not left or held(entry) or (entry.castOwner and entry.config.detached ~= true) then
         overlay:Hide()
@@ -479,6 +483,8 @@ function ui.RegisterEditFrame(frame, label, category, slider, legacyPosition)
         entry.config = layout[name]
         schedule()
     end
+    -- Frames registered while the editor is open (a newly added meter window) get their overlay at once.
+    if editor:IsShown() and not entry.overlay then createOverlay(entry) end
     return entry
 end
 
