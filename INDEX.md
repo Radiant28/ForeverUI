@@ -93,6 +93,44 @@ ui.RegisterOptions("id", { title=, description=, icon=, group="general|frames|co
 - `applyColors`, `applyVisibility`, `applyPanelMedia`, `applyBarFill` — live-apply функции для схемы.
 - Штатные текстуры статуса клиент пульсирует каждый кадр, поэтому их прячут через `SetTexture(nil)`, а не через `SetAlpha`.
 
+## Неймплейты: где что
+- Настройки лежат в `cfg` (`ForeverUI_NameplatesDB`). Дефолты и проверка типов находятся в таблице `defaults` и в `LoadConfig` (`ForeverUI_Nameplates.lua`). Схема `RegisterSchema` в `ForeverUI_NameplateOptions.lua` берёт дефолты оттуда же.
+- Цикл работы: `ScanWorldFrame` → `SyncPlate`, по каждой плашке раз в 0.05 с. В 3.3.5 у плашки нет unit-токена: unit есть только у цели и у mouseover.
+- Ауры читаются только для цели и mouseover:
+  - `UpdateAuras` — сбор аур;
+  - `AuraAllowed` — фильтр: свои, чужие, чужие моего класса, баффы;
+  - `LayoutAuras` — шрифт и размер таймера; цифры таймера отключаются ключом `auraTimerText` в `UpdateTimers`;
+  - `UpdateTimers` — анимации.
+- Анимации таймера:
+  - `static`;
+  - `forever` и `foreverPulse` — `UpdateRadial` и `MakeRadial`: две полуплоскости `Art/Nameplates/Aura-Half.tga`, каждая — обычная текстура ровно на половину иконки, поворот целиком в координатах текстуры (`MapRotated`, 8-аргументный `SetTexCoord`, без ScrollFrame), плюс луч `Aura-Edge.tga`. Новые файлы в `Art/` клиент видит только после полного перезапуска игры, а не после `/reload`;
+  - `sweep` — штатный Cooldown;
+  - `pulse`, `both`.
+- Класс игрока определяет `PlayerClass`: unit (цель/mouseover) → `NativeClass` (только если есть пользовательский DLL `NozdorActionNative`/аддон NozdorAction; игра их не даёт) → `GetPlayerInfoByGUID` → кэш имён `classByName`. Кэш пополняют `LearnFromEvent` (журнал боя и чат через GUID + `GetPlayerInfoByGUID`, `UPDATE_MOUSEOVER_UNIT`, `GUILD_ROSTER_UPDATE`), `RememberRoster` (группа/рейд) и `learnTokens` (focus, цель цели и т. п. каждый скан); он сохраняется между сессиями как `cfg.classCache`. Цвет врагов дополнительно задаёт CVar `ShowClassColorInNameplate` в `ApplyCVars`.
+- Память журнала боя (рядом с `LearnFromEvent`): `TrackCombat` отмечает в `engagedGUID`/`engagedName` юнитов, которые бьют меня, моего питомца, группу или рейд (или которых бьём мы); очищается по `PLAYER_REGEN_ENABLED` и при смерти. `TrackCast` запоминает касты (`castByGUID`/`castByName`, `spellByIcon`).
+- Фильтр «в бою только противники» (`combatOnlyEngaged`, `combatKeepFriends`): `Engaged` в `SyncPlate` — угроза (штатное свечение или `UnitThreatSituation`), цель юнита — я или группа, GUID из журнала боя, имя из журнала боя только для раненых (чтобы одноимённая пачка не загоралась целиком). Цель видна всегда.
+- Название каста без unit: штатный каст-бар 3.3.5 не содержит текста, поэтому `wfn.DrawCast` (`ForeverUI_NameplateStyle.lua`) берёт его из `wfn.CastLabel` (по GUID, затем по имени, сверяя иконку, затем по иконке).
+- Синяя штатная полоса = дружественный игрок (правило RBP): в `SyncPlate` такая плашка получает `kind = "player"` независимо от формата GUID. Диагностика класса — `/wfn class` (`wfn.DebugClasses`).
+- Подписи под именем (`npcTitles`, `playerGuilds`, `subtitleSize`): `Subtitle` → `DrawSubtitle`. Титул NPC — из скрытой подсказки `ForeverUINameplateScan` (с unit — `SetUnit`, без unit — `SetHyperlink("unit:"..GUID)` из кэша существ, повтор раз в 1 с), гильдия игрока — `guildByName` (сохраняется как `cfg.guildCache`; пополняют `LearnUnit` для любых токенов — mouseover в мире, цель, фокус, цель цели, группа — и `RememberGuild` для своей гильдии; пустая гильдия не кэшируется); кэш титулов `titleByGUID` и `npcTitleByName` (NPC, сохраняется как `cfg.npcTitleCache`). `LearnTitle` каждый скан читает титулы target/mouseover/focus (в том числе наведение на модель в мире), поэтому NPC, увиденный однажды, подписан всегда.
+- Дружественные NPC в режиме «только имя» (`friendlyNPCNameOnly`, по умолчанию вкл.) — `nameOnly` в `SyncPlate`. Под именем в режиме «только имя», иначе под полосой; скрывается во время каста.
+- Цвет шрифта имени (`nameTextColour`) в `StyleName`; цвет класса (`nameColour = "class"` или «только имя») имеет приоритет.
+- Лимит букв в имени (`nameMaxLetters`, 0 = все): `CutLetters` в `SetName` (UTF-8).
+- Затухание к краям экрана (`edgeFade`, `edgeFadeInner`, `edgeFadeOuter` — % от половины высоты экрана): `EdgeFade` умножает альфу в `UpdatePerspective` (smoothstep между радиусами, цель не гаснет).
+- Режим «только имя» (`friendlyNameOnly`) работает через headline-режим `SetBarMode(view, false)`.
+- Вертикальный ряд (`stackForever`) — функция `StackPlates`, вызывается перед циклом `SyncPlate`:
+  - считает в экранных пикселях и поднимает перекрывающиеся плашки снизу вверх;
+  - смещение `view.stackOffset` плавно подаётся в `SnapChrome`;
+  - в режиме `stackForever` CVar `nameplateAllowOverlap` = 1, чтобы штатное раздвигание не двигало плашки второй раз.
+
+  - один проход на плашку: уже поставленные лежат в `stackPlaced`, отсортированные по слоту.
+
+  Штатный стек (`stacking`) работает только при выключенном `stackForever`.
+- Производительность в скоплениях:
+  - экономный режим (`crowdSaver`, `crowdThreshold`): если видимых плашек больше порога, спокойные (без unit, каста и угрозы, не бывшая цель) проходят `SyncPlate` раз в `CROWD_INTERVAL` (0.2 с, с разбросом), остальные — каждый скан; цикл в конце `ScanWorldFrame`;
+  - сканы подсказки для титулов ограничены `SCAN_BUDGET` на скан, повторы с нарастающей паузой, GUID без ответа после `SCAN_TRIES` попыток помечается пустым титулом (`Subtitle`, `LearnTitle`);
+  - обрезанные имена кэшируются в `fitted` (имя + шрифт + ширина), `StyleName` меняет шрифт только при смене шрифта/размера, якоря — только при переходе «имя под кастом», цвет — только при изменении.
+- Зона клика и mouseover (`clickFollowsPlate`, встроена: `LoadConfig` всегда ставит true, переключателя в настройках нет), по образцу RefinedBlizzPlates: `ApplyClickSize`/`SizePlate` задают штатному фрейму плашки размер нарисованной (`ClickSize`); в бою фреймы защищены, поэтому новые плашки ресайзит `resizer` (SecureHandlerShowHideTemplate, запуск через `UIPanelWindows` + `ToggleFrame`). Нарисованная плашка привязана к низу фрейма (`SnapChrome`). Смещение X/Y и подъём в ряду (`view.stackRaise`) двигают сам фрейм через `SetClampedToScreen` + `SetClampRectInsets` в `PlacePlate` каждый кадр; исходное место клиента — `NativeRect` по `plate:GetPoint(1)`.
+
 ## Minimap.lua: где что
 - Геометрия в единицах `Minimap` от её центра: `rimRadius` (середина полосы `Map-Rim.tga`, 85.5 px), глаз LFG на оправе под углом `eyeAngle`, `battlefieldX/Y`, `moonX/Y`, `headerGap`.
 - Сбор кнопок `collect` по детям `Minimap`, `MinimapBackdrop`, `MinimapCluster`: `LibDBIcon10_*`, `legacy` и обычные кнопки (`isAddonButton`: имя с `minimap`/`button`, размер 14–48, без `stock` и пинов из `ignored`). Скин `skinAddonButton` — только для кнопок в стиле штатной (рамка `MiniMap-TrackingBorder`), отмечаются в `skinned`.

@@ -25,6 +25,7 @@ local numbers = {
     {"nameSizeFriend", "Размер имени союзника", "Friendly name size", 8, 26, 1, 14},
     {"nameLift", "Отступ имени", "Name spacing", 0, 24, 1, 6},
     {"nameX", "Смещение имени X", "Name offset X", -80, 80, 1, 0},
+    {"nameMaxLetters", "Букв в имени (0 = все)", "Name letters (0 = all)", 0, 40, 1, 0},
 }
 local auraNumbers = {
     {"auraSize", "Размер значка ауры", "Aura icon size", 10, 32, 1, 16},
@@ -34,7 +35,9 @@ local auraNumbers = {
 }
 local auraModes = {
     {"static", "Без анимации", "No animation"},
-    {"sweep", "Круговая заливка", "Cooldown sweep"},
+    {"forever", "Заливка с яркой линией (Forever)", "Radial fill with a bright edge (Forever)"},
+    {"foreverPulse", "Заливка с линией и пульс", "Radial fill, edge and pulse"},
+    {"sweep", "Круговая заливка (штатная)", "Cooldown sweep"},
     {"pulse", "Пульс перед спадом", "Expiry pulse"},
     {"both", "Заливка и пульс", "Sweep and pulse"},
 }
@@ -42,7 +45,7 @@ local choices = {
     {"glowBlend", "Смешивание ореола", "Halo blending", {"light", "colour"}, {"свет", "цвет"}},
     {"castTextPlace", "Текст заклинания", "Cast text position", {"inside", "below"}, {"внутри", "снизу"}},
     {"castTextAlign", "Выравнивание заклинания", "Cast text alignment", {"left", "center", "right"}, {"слева", "центр", "справа"}},
-    {"nameColour", "Цвет имени", "Name colour", {"white", "class"}, {"белый", "класс"}},
+    {"nameColour", "Цвет имени", "Name colour", {"white", "class"}, {"свой цвет", "класс"}},
     {"nameOutline", "Обводка имени", "Name outline", {"soft", "softer", "thin", "thick"}, {"тень", "мягкая тень", "тонкая", "толстая"}},
     {"namePlace", "Положение имени", "Name position", {"above", "undercast"}, {"над полосой", "под кастом"}},
     {"nameAlign", "Выравнивание имени", "Name alignment", {"center", "left", "right"}, {"центр", "слева", "справа"}},
@@ -61,6 +64,7 @@ local colours = {
     {"castColourOpen", "Прерывание готово", "Interrupt ready"},
     {"castColourBusy", "Прерывание недоступно", "Interrupt unavailable"},
     {"castColourShut", "Каст непрерываемый", "Uninterruptible cast"},
+    {"nameTextColour", "Цвет шрифта имени", "Name text colour"},
 }
 
 local media = LibStub and LibStub("LibSharedMedia-3.0", true)
@@ -81,7 +85,7 @@ function wfn.NormalizeStyle()
     local db = wfn.db
     NormalizeNumbers(db, numbers)
     NormalizeNumbers(db, auraNumbers)
-    local animation = auraModes[1][1]
+    local animation = "forever"
     for _, mode in ipairs(auraModes) do if db.auraTimerAnimation == mode[1] then animation = mode[1]; break end end
     db.auraTimerAnimation = animation
     for _, row in ipairs(choices) do
@@ -301,6 +305,9 @@ local general = {
     {"hideFriendlyInDungeons", "Скрывать дружественных NPC в подземельях и рейдах", "Hide friendly NPCs in dungeons and raids"},
     {"hideFullHealthOutOfCombat", "Скрывать мобов с полным здоровьем вне боя", "Hide full-health mobs out of combat"},
     {"headlineOutOfCombat", "Только имя для обычных мобов вне боя", "Name only for normal mobs out of combat"},
+    {"combatOnlyEngaged", "В бою только противники, с которыми идёт бой", "In combat only the enemies you fight"},
+    {"combatKeepFriends", "В бою оставлять союзников", "Keep allies in combat"},
+    {"crowdSaver", "Экономный режим при скоплении", "Saver mode when crowded"},
     {"fadeDistance", "Затухание по дистанции", "Fade by distance"},
     {"showEliteDragon", "Показывать элитного дракона", "Show elite dragon"},
 }
@@ -327,7 +334,7 @@ local function Build(panel, applyCVars, defaults)
     ui.Checkbox(content, "stacking", L("Нативное размещение в стек", "Native stacking"), y, defaults.stacking, applyCVars, db)
     local unavailable = L(" (недоступно в клиенте)", " (unavailable on this client)")
     local canSpace = GetCVar("nameplateOverlapV") ~= nil
-    local spacing = ui.Slider(content, "verticalSpacing", L("Вертикальный интервал", "Vertical spacing") .. (canSpace and "" or unavailable), y - 42, {0.5, 2, 0.05, 1.1}, applyCVars, nil, db)
+    local spacing = ui.Slider(content, "verticalSpacing", L("Вертикальный интервал", "Vertical spacing") .. (canSpace and "" or unavailable), y - 42, {0.5, 2, 0.05, 0.9}, applyCVars, nil, db)
     if not canSpace then spacing:Disable() end
     local canRange = GetCVar("nameplateMaxDistance") ~= nil or GetCVar("nameplateDistance") ~= nil
     local range = ui.Slider(content, "maxDistance", L("Радиус неймплейтов", "Nameplate range") .. (canRange and "" or unavailable), y - 87, {30, 41, 1, 41}, applyCVars, L(" ярд.", " yd"), db)
@@ -504,21 +511,101 @@ local function RegisterSchema(applyCVars, defaults)
     for _, row in ipairs(general) do
         visibility[#visibility + 1] = { "toggle", row[1], L(row[2], row[3]), default = defaults[row[1]] }
     end
+    visibility[#visibility + 1] = { "range", "crowdThreshold", L("Скопление: больше плашек, чем", "Crowded above plates"),
+        min = 5, max = 60, step = 1, default = defaults.crowdThreshold, depends = "crowdSaver",
+        tooltip = L("Если на экране больше плашек, спокойные (без каста, угрозы и не цель) обновляются 5 раз в секунду вместо 20. Цель, наведение, касты и угроза — всегда без задержки.",
+            "With more plates on screen, quiet ones (no cast, no threat, not the target) refresh 5 times a second instead of 20. Target, hover, casts and threat always refresh at full rate.") }
+    local function stackApply() applyCVars(); wfn.Changed() end
+    visibility[#visibility + 1] = { "toggle", "stackForever", L("Вертикальный ряд при скоплении", "Vertical column when crowded"),
+        default = defaults.stackForever, apply = stackApply,
+        tooltip = L("Плашки в одной точке выстраиваются столбиком снизу вверх и не перекрывают друг друга. Штатное раздвигание клиента при этом выключается, чтобы плашки не двигались дважды.",
+            "Plates gathered at one spot line up in a column from the bottom and never cover each other. The client's own spreading is turned off so plates do not move twice.") }
     visibility[#visibility + 1] = { "toggle", "stacking", L("Нативное размещение в стек", "Native stacking"),
-        default = defaults.stacking, apply = applyCVars, protected = true }
-    visibility[#visibility + 1] = { "range", "verticalSpacing",
-        L("Вертикальный интервал", "Vertical spacing") .. (canSpace and "" or unavailable), min = 0.5, max = 2, step = 0.05,
-        default = defaults.verticalSpacing, apply = applyCVars, protected = true,
-        depends = function(get) return canSpace and get("stacking") end }
+        default = defaults.stacking, apply = applyCVars, protected = true,
+        depends = function(get) return not get("stackForever") end }
+    visibility[#visibility + 1] = { "range", "verticalSpacing", L("Вертикальный интервал", "Vertical spacing"),
+        min = 0.5, max = 2, step = 0.05, default = defaults.verticalSpacing, apply = stackApply,
+        depends = function(get) return get("stackForever") or (canSpace and get("stacking")) end }
     visibility[#visibility + 1] = { "range", "maxDistance", L("Радиус неймплейтов", "Nameplate range") ..
         (canRange and "" or unavailable), min = 30, max = 41, step = 1, default = defaults.maxDistance,
         suffix = L(" ярд.", " yd"), apply = applyCVars, protected = true, depends = function() return canRange end }
+    visibility[#visibility + 1] = { "toggle", "edgeFade", L("Затухание к краям экрана", "Fade towards the screen edges"),
+        default = defaults.edgeFade,
+        tooltip = L("Как в WoW: Forever: плашки в центре экрана видны полностью и плавно гаснут к периферии, не засоряя края интерфейса. Цель не гаснет.",
+            "As in WoW: Forever: plates near the screen centre stay solid and fade towards the periphery, keeping the edges clean. The target never fades.") }
+    visibility[#visibility + 1] = { "range", "edgeFadeInner", L("Радиус полной видимости", "Fully visible radius"),
+        min = 10, max = 190, step = 5, default = defaults.edgeFadeInner, suffix = "%", depends = "edgeFade",
+        tooltip = L("В процентах от половины высоты экрана, от центра.", "Percent of half the screen height, from the centre.") }
+    visibility[#visibility + 1] = { "range", "edgeFadeOuter", L("Радиус исчезновения", "Vanishing radius"),
+        min = 20, max = 200, step = 5, default = defaults.edgeFadeOuter, suffix = "%", depends = "edgeFade",
+        tooltip = L("Дальше этого радиуса плашки не видны; между радиусами — плавный градиент.",
+            "Beyond this radius plates are hidden; between the radii they fade smoothly.") }
 
     local auras = Ranges(auraNumbers)
     local modes = {}
     for i, mode in ipairs(auraModes) do modes[i] = { mode[1], L(mode[2], mode[3]) } end
     auras[#auras + 1] = { "select", "auraTimerAnimation", L("Анимация таймера", "Timer animation"), values = modes,
-        default = auraModes[1][1] }
+        default = "forever", tooltip = L("Заливка с яркой линией затемняет прошедшую часть по часовой стрелке.",
+            "The radial fill darkens the elapsed part clockwise, led by a bright edge.") }
+
+    local filters = {
+        { "toggle", "auraDebuffs", L("Показывать дебаффы", "Show debuffs"), default = defaults.auraDebuffs },
+        { "toggle", "auraBuffs", L("Показывать баффы", "Show buffs"), default = defaults.auraBuffs },
+        { "toggle", "auraMine", L("Мои дебаффы", "My debuffs"), default = defaults.auraMine, depends = "auraDebuffs",
+            tooltip = L("Наложенные вами, вашим питомцем или транспортом.", "Cast by you, your pet or your vehicle.") },
+        { "toggle", "auraOthers", L("Чужие дебаффы", "Other debuffs"), default = defaults.auraOthers,
+            depends = "auraDebuffs", tooltip = L("Выключите вместе с включёнными «Моими», чтобы видеть только свои.",
+                "Turn off with “My debuffs” on to see only your own.") },
+        { "toggle", "auraOthersClass", L("Чужие — только моего класса", "Others — my class only"),
+            default = defaults.auraOthersClass, depends = function(get) return get("auraDebuffs") and get("auraOthers") end,
+            tooltip = L("Дебаффы других игроков вашего класса. Если заклинателя не видно, считается дебафф, который вы умеете накладывать сами.",
+                "Debuffs from other players of your class. When the caster is unknown, a debuff you can cast yourself counts.") },
+    }
+    local timerFonts = function()
+        local values = { { "", "Friz Quadrata" } }
+        local seen = { [""] = true }
+        for _, name in ipairs(media and media:List("font") or {}) do
+            if not seen[name] then seen[name] = true; values[#values + 1] = { name, name } end
+        end
+        local current = wfn.db and wfn.db.auraTimerFont
+        if type(current) == "string" and not seen[current] then values[#values + 1] = { current, current } end
+        return values
+    end
+    local timer = {
+        { "toggle", "auraTimerText", L("Показывать таймер", "Show the timer"), default = defaults.auraTimerText,
+            tooltip = L("Цифры оставшегося времени на значках аур. Анимации работают и без них.",
+                "Remaining-time numbers on aura icons. The animations work without them.") },
+        { "select", "auraTimerFont", L("Шрифт таймера", "Timer font"), values = timerFonts, default = defaults.auraTimerFont,
+            depends = "auraTimerText" },
+        { "range", "auraTimerSize", L("Размер таймера (0 = авто)", "Timer size (0 = auto)"), min = 0, max = 24, step = 1,
+            default = defaults.auraTimerSize, depends = "auraTimerText" },
+        { "select", "auraTimerOutline", L("Обводка таймера", "Timer outline"), default = defaults.auraTimerOutline,
+            depends = "auraTimerText",
+            values = { { "none", L("нет", "none") }, { "thin", L("тонкая", "thin") }, { "thick", L("толстая", "thick") } } },
+        { "color", "auraTimerColour", L("Цвет таймера", "Timer colour"), default = defaults.auraTimerColour,
+            depends = "auraTimerText" },
+    }
+    local function classApply() applyCVars(); wfn.Changed() end
+    local players = {
+        { "toggle", "classColourEnemy", L("Цвет класса у врагов", "Class colours on enemies"),
+            default = defaults.classColourEnemy, apply = classApply,
+            tooltip = L("Полоса здоровья вражеских игроков в цвет класса.", "Enemy player health bars in class colours.") },
+        { "toggle", "classColourFriend", L("Цвет класса у союзников", "Class colours on allies"),
+            default = defaults.classColourFriend, apply = classApply },
+        { "toggle", "npcTitles", L("Титул NPC под именем", "NPC title under the name"), default = defaults.npcTitles,
+            tooltip = L("Что продаёт торговец, чему учит учитель, «Распорядитель полётов» и т. п. — как на плашках оригинальной игры.",
+                "What a merchant sells, what a trainer teaches, flight masters and so on, as on the original game plates.") },
+        { "toggle", "playerGuilds", L("Гильдия игрока под именем", "Player guild under the name"), default = defaults.playerGuilds },
+        { "range", "subtitleSize", L("Размер подписи", "Subtitle size"), min = 6, max = 18, step = 1,
+            default = defaults.subtitleSize, depends = function(get) return get("npcTitles") or get("playerGuilds") end },
+        { "toggle", "friendlyNPCNameOnly", L("Дружественные NPC: только имя", "Friendly NPCs: name only"),
+            default = defaults.friendlyNPCNameOnly,
+            tooltip = L("Скрывает полосу здоровья дружественных NPC (торговцы, стража, учителя) и оставляет имя с титулом.",
+                "Hides friendly NPC health bars (merchants, guards, trainers) and keeps the name and title.") },
+        { "toggle", "friendlyNameOnly", L("Союзные игроки: только имя", "Allied players: name only"), default = defaults.friendlyNameOnly,
+            tooltip = L("Скрывает полосу здоровья дружественных игроков и оставляет имя (в цвет класса, если он включён).",
+                "Hides friendly player health bars and keeps the name (class coloured when class colours are on).") },
+    }
 
     local appearance = {}
     for _, row in ipairs(choices) do
@@ -549,7 +636,10 @@ local function RegisterSchema(applyCVars, defaults)
                 end },
             } },
             { title = L("Видимость и расположение", "Visibility and positioning"), options = visibility },
+            { title = L("Игроки", "Players"), options = players },
             { title = L("Ауры", "Auras"), options = auras },
+            { title = L("Фильтр аур", "Aura filter"), options = filters },
+            { title = L("Таймер аур", "Aura timer"), options = timer },
             { title = L("Боксы", "Boxes"), options = { { "custom", build = BuildBoxes } } },
             { title = L("Оформление", "Appearance"), options = appearance },
             { title = L("Размеры", "Dimensions"), options = Ranges(numbers) },
@@ -628,6 +718,7 @@ function wfn.RegisterSlash()
             end
         elseif (cmd == "perf" or cmd == "cost") and arg == "dump" then wfn.Print(report)
         elseif cmd == "perf" or cmd == "cost" then TogglePerf()
+        elseif cmd == "class" and wfn.DebugClasses then wfn.DebugClasses()
         elseif cmd == "check" then
             local hostVersion = GetAddOnMetadata and GetAddOnMetadata(addonName, "Version")
             wfn.Print(L("Сканер WorldFrame активен", "WorldFrame scanner active") .. " · " .. API.Version
@@ -637,6 +728,6 @@ function wfn.RegisterSlash()
                 .. " · nameplateOverlapV=" .. (GetCVar("nameplateOverlapV") or unavailable)
                 .. " · nameplateMaxDistance=" .. (GetCVar("nameplateMaxDistance") or GetCVar("nameplateDistance") or unavailable))
         elseif cmd == "" then wfn.OpenOptions()
-        else wfn.Print("/wfn · preview [friend|enemy] · boxes · check · perf [dump]") end
+        else wfn.Print("/wfn · preview [friend|enemy] · boxes · check · class · perf [dump]") end
     end
 end

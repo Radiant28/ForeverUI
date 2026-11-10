@@ -285,6 +285,8 @@ function wfn.DrawCast(view, unit, friendly, now)
         if not name then
             text = view.nativeCastText and view.nativeCastText:GetText()
             icon = view.nativeCastIcon and view.nativeCastIcon:GetTexture()
+            -- The stock 3.3.5 plate cast bar carries no spell text: take it from the combat log.
+            if (not text or text == "") and wfn.CastLabel then text = wfn.CastLabel(view, icon) end
             shield = view.nativeCastShield and view.nativeCastShield:IsShown()
         end
     elseif demo then

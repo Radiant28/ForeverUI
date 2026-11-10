@@ -9,6 +9,10 @@ end
 function CreateFrame(kind, name, parent, template)
     if template == "UIPanelScrollFrameTemplate" then assert(name, "WotLK scroll templates need a name") end
     local frame = object(kind, parent)
+    frame.name = name
+    if template == "GameTooltipTemplate" then
+        for i = 1, 2 do _G[name .. "TextLeft" .. i] = object("FontString", frame) end
+    end
     if parent then table.insert(parent.children, frame) end
     if name then _G[name] = frame end
     return frame
@@ -64,7 +68,34 @@ function methods:SetScale(value) self.scale = value end
 function methods:GetEffectiveScale() return (self.scale or 1) * (self.parent and self.parent:GetEffectiveScale() or 1) end
 function methods:GetEffectiveDepth() return self.depth or (self.parent and self.parent:GetEffectiveDepth()) or 0 end
 function methods:GetCenter() return self.centerX, self.centerY end
-function methods:GetTop() return self.centerY and self.centerY + self:GetHeight() / 2 end
+function methods:GetLeft() return self.rect and self.rect[1] end
+function methods:GetRight() return self.rect and self.rect[2] end
+function methods:GetBottom() return self.rect and self.rect[4] end
+function methods:SetHitRectInsets(...) self.hitInsets = { ... } end
+-- Hidden scanning tooltip: links resolve through `tooltipLines`, units through `tooltipUnits`.
+local tooltipLines, tooltipUnits = {}, {}
+local function fillTooltip(self, lines)
+    self.lines = lines or {}
+    for i = 1, 2 do
+        local line = _G[self.name .. "TextLeft" .. i]
+        if line then line:SetText(self.lines[i]) end
+    end
+end
+function methods:SetOwner() end
+function methods:ClearLines() fillTooltip(self, {}) end
+function methods:NumLines() return #(self.lines or {}) end
+function methods:SetHyperlink(link) fillTooltip(self, tooltipLines[link]) end
+function methods:SetUnit(unit) fillTooltip(self, tooltipUnits[unit]) end
+function methods:SetClampRectInsets(...) self.clampInsets = { ... } end
+function methods:SetClampedToScreen(value) self.clamped = value end
+function methods:IsClampedToScreen() return self.clamped end
+function methods:GetPoint(index)
+    local anchor = self.points and self.points[index or 1]
+    if anchor then return unpack(anchor) end
+end
+function methods:GetTop()
+    if self.rect then return self.rect[3] end
+    return self.centerY and self.centerY + self:GetHeight() / 2 end
 function methods:EnableDrawLayer(layer) self.enabledLayer = layer end
 function methods:SetAlpha(value) self.alpha = value end
 function methods:GetAlpha() return self.alpha end
@@ -149,7 +180,7 @@ local ui = {
 function InterfaceOptionsFrame_OpenToCategory(panel) openedCategory = panel; panel:Show() end
 local longName = string.rep("Я", 30)
 local units = { player = { level = 25 }, target = { guid = "A", name = longName, level = 23, kind = "elite",
-    debuffs = { { "poison", 3, 102 }, { "curse", 1, 130 } }, buffs = { { "ward", 1, 0 } } } }
+    debuffs = { { "poison", 3, 102, "player" }, { "curse", 1, 130 } }, buffs = { { "ward", 1, 0 } } } }
 function IsAddOnLoaded(name) return name == "!!RefinedBlizzPlates" and conflict end
 function GetCVar(name) return name == "gxResolution" and resolution or cvars[name] end
 function SetCVar(name, value) assert(cvars[name] and not locked); cvars[name] = value end
@@ -167,6 +198,15 @@ function UnitCreatureType(unit) return units[unit].creature end
 function UnitIsPlayer(unit) return units[unit].player end
 function UnitPlayerControlled(unit) return units[unit].controlled end
 function UnitIsFriend(_, unit) return units[unit].friendly end
+function UnitExists(unit) return units[unit] ~= nil end
+function UnitClass(unit) local class = units[unit] and units[unit].class return class, class end
+function GetNumRaidMembers() return 0 end
+function UnitIsUnit(a, b) return a == b end
+function UnitInParty() end
+function UnitInRaid() end
+function wipe(t) for k in pairs(t) do t[k] = nil end return t end
+function GetNumPartyMembers() return 0 end
+RAID_CLASS_COLORS = { MAGE = { r = 0.41, g = 0.8, b = 0.94 } }
 function UnitReaction(unit) return units[unit].reaction end
 function UnitCastingInfo(unit)
     local cast = units[unit].cast
@@ -181,12 +221,13 @@ local cursorX, cursorY = 0, 0
 function GetCursorPosition() return cursorX, cursorY end
 local function aura(unit, key, index)
     local entry = units[unit][key] and units[unit][key][index]
-    if entry then return entry[1], nil, entry[1], entry[2], nil, 30, entry[3] end
+    if entry then return entry[1], nil, entry[1], entry[2], nil, 30, entry[3], entry[4] end
 end
 function UnitDebuff(unit, index) return aura(unit, "debuffs", index) end
 function UnitBuff(unit, index) return aura(unit, "buffs", index) end
 
 WorldFrame = CreateFrame("Frame")
+WorldFrame:SetSize(1600, 900)
 UIParent = CreateFrame("Frame")
 SlashCmdList, UISpecialFrames = {}, {}
 local stockBorder = [[Interface\Tooltips\Nameplate-Border]]
@@ -243,11 +284,15 @@ end
 assert(WoWForeverNameplates:RegisterBox("early", { update = function() end }))
 assert(WoWForeverNameplates:SetBoxEnabled("early", false))
 driver.scripts.OnEvent(driver, "PLAYER_LOGIN")
+-- The layout checks below use the native anchoring; the clickbox mode is tested on its own further down.
+ForeverUI_NameplatesDB.clickFollowsPlate = false
+ForeverUI_NameplatesDB.combatOnlyEngaged = false
 assert(not WoWForeverNameplatesOptionsScroll)
 SlashCmdList.WOWFOREVERNAMEPLATES("")
 assert(openedCategory == mainOptions and WoWForeverNameplatesOptionsScroll.parent == mainOptions)
 assert(not WoWForeverNameplatesOptions)
-assert(cvars.nameplateAllowOverlap == "0" and cvars.nameplateDistance == "41" and options.verticalSpacing.disabled)
+-- Forever stacking is on by default, so the native spreading stays off and plates move only once.
+assert(cvars.nameplateAllowOverlap == "1" and cvars.nameplateDistance == "41" and options.verticalSpacing.disabled)
 local cfg = ForeverUI_NameplatesDB
 assert(cfg.plateOffsetX == 0 and cfg.plateOffsetY == 8)
 local API = WoWForeverNameplates
@@ -308,7 +353,7 @@ local function assertChromePixels(pixel, overlay)
     local ratio = native:GetEffectiveScale() / overlay:GetEffectiveScale()
     assert(anchor[1] == "BOTTOM" and anchor[2] == native and anchor[3] == "TOP")
     assert(math.abs(anchor[4] - cfg.plateOffsetX * ratio) <= pixel / 2 + 0.000001)
-    assert(math.abs(anchor[5] - cfg.plateOffsetY * ratio) <= pixel / 2 + 0.000001)
+    assert(math.abs(anchor[5] - cfg.plateOffsetY * ratio - (overlay.stackOffset or 0)) <= pixel / 2 + 0.000001)
     assertPixel(native.centerX * ratio + anchor[4] - overlay.width / 2, pixel)
     assertPixel(native:GetTop() * ratio + anchor[5], pixel)
     assertPixel(overlay.width, pixel)
@@ -330,7 +375,16 @@ assert(levelBox.text.text == "23" and levelBox.text.color[1] == 23 / 25 and view
 assert(view.name.text:match("%.%.%.$") and #view.name.text < #longName)
 assert(view[1].time.text == "2" and view[1].count.text == "3" and view[3].time.text == "")
 assert(view[3].icon.texture == "ward" and not view[4]:IsShown() and not second[1]:IsShown())
-assert(cfg.auraTimerAnimation == "static" and not view[1].cooldown)
+-- The WoW: Forever radial fill is the default: elapsed 28 of 30 s shows both halves and the edge ray.
+local radial = view[1].radial
+assert(cfg.auraTimerAnimation == "forever" and not view[1].cooldown and radial:IsShown())
+assert(radial.left:IsShown() and radial.right:IsShown() and radial.edge.uv and #radial.edge.uv == 8)
+assert(radial.right.points[1][3] == "TOP" and radial.left.points[2][3] == "BOTTOM" and radial.edge.allPoints == radial)
+for _, uv in ipairs({ radial.right.uv, radial.left.uv, radial.edge.uv }) do
+    for i = 1, 8 do assert(uv[i] >= -0.000001 and uv[i] <= 1.000001, "sampling stays inside the texture") end
+end
+assert(view[1].time.frameLevel == nil or view[1].time.parent.frameLevel > radial.frameLevel)
+assert(not view[3].radial, "auras without a duration get no fill")
 options.auraSize.select(24)
 options.auraGap.select(5)
 options.auraOffsetX.select(-9)
@@ -352,6 +406,7 @@ local function ChooseAuraAnimation(label)
 end
 ChooseAuraAnimation("Cooldown sweep")
 tick()
+assert(not radial:IsShown())
 local sweep = view[1].cooldown
 assert(cfg.auraTimerAnimation == "sweep" and sweep:IsShown() and sweep.start == 72 and sweep.length == 30)
 assert(sweep.frameLevel < view[1].time.parent.frameLevel and not view[3].cooldown)
@@ -364,8 +419,71 @@ tick()
 assert(view[1].cooldown == sweep and sweep:IsShown() and view[1].time:GetAlpha() == 0.5)
 ChooseAuraAnimation("No animation")
 tick()
-assert(not sweep:IsShown() and view[1].time:GetAlpha() == 1)
+assert(not sweep:IsShown() and view[1].time:GetAlpha() == 1 and not radial:IsShown())
 now = 100
+
+-- Timer font settings.
+cfg.auraTimerSize, cfg.auraTimerOutline, cfg.auraTimerFont, cfg.auraTimerColour = 13, "thick", "Test Font", { 1, 0.5, 0 }
+ui.wfn.Changed()
+tick()
+assert(view[1].time.font[1] == "test-font.ttf" and view[1].time.font[2] == 13 and view[1].time.font[3] == "THICKOUTLINE")
+assert(view[1].time.color[2] == 0.5 and view[1].count.font[3] == "THICKOUTLINE")
+cfg.auraTimerSize, cfg.auraTimerOutline, cfg.auraTimerFont, cfg.auraTimerColour = 0, "thin", "", { 1, 1, 1 }
+ui.wfn.Changed()
+
+-- The timer text can be switched off; the next tick restores it.
+cfg.auraTimerText = false
+ui.wfn.Changed()
+tick()
+assert(view[1].time.text == "" and view[2].time.text == "")
+cfg.auraTimerText = true
+ui.wfn.Changed()
+tick()
+assert(view[1].time.text == "2")
+
+-- Aura filters: poison is mine, curse has no visible caster, ward is a buff.
+local function shownAuras()
+    driver.scripts.OnEvent(driver, "UNIT_AURA", "target")
+    tick()
+    local list = {}
+    for i = 1, 4 do if view[i]:IsShown() then list[#list + 1] = view[i].icon.texture end end
+    return table.concat(list, ",")
+end
+assert(shownAuras() == "poison,curse,ward")
+cfg.auraOthers = false
+assert(shownAuras() == "poison,ward", "only my debuffs")
+cfg.auraOthers, cfg.auraMine = true, false
+assert(shownAuras() == "curse,ward", "only other debuffs")
+cfg.auraOthersClass = true
+local knows = GetSpellInfo
+GetSpellInfo = function() return nil end
+assert(shownAuras() == "ward", "other casters outside my class are hidden")
+GetSpellInfo = knows
+assert(shownAuras() == "curse,ward", "a debuff I can cast counts as my class")
+cfg.auraMine, cfg.auraOthersClass, cfg.auraBuffs = true, false, false
+assert(shownAuras() == "poison,curse", "buffs hidden")
+cfg.auraDebuffs, cfg.auraBuffs = false, true
+assert(shownAuras() == "ward", "debuffs hidden")
+cfg.auraBuffs = false
+assert(shownAuras() == "", "everything hidden")
+cfg.auraDebuffs, cfg.auraBuffs = true, true
+assert(shownAuras() == "poison,curse,ward")
+
+-- Friendly players: class colours and the name-only mode.
+local target = units.target
+target.player, target.friendly, target.class = true, true, "MAGE"
+tick()
+assert(view.health:IsShown() and view.health.color[1] == 0.41, "friendly class colour")
+cfg.friendlyNameOnly = true
+tick()
+assert(not view.health:IsShown() and view.name:IsShown() and view.name.color[1] == 0.41, "name only in class colour")
+cfg.classColourFriend = false
+tick()
+assert(view.name.color[1] == 1, "plain name without class colours")
+cfg.friendlyNameOnly, cfg.classColourFriend = false, true
+target.player, target.friendly, target.class = nil, nil, nil
+tick()
+assert(view.health:IsShown() and view.health.color[1] == 0.82, "enemy NPC keeps the native colour")
 
 local base, glow = view.chrome.rim, view.threatGlow
 local steelTint = base.vertex
@@ -635,6 +753,281 @@ SlashCmdList.WOWFOREVERNAMEPLATES("perf dump")
 SlashCmdList.WOWFOREVERNAMEPLATES("perf")
 assert(not ui.wfn.profile)
 
+-- Two plates at the same spot form a column: the first stays, the second rises by one plate footprint.
+for _ = 1, 40 do tick() end
+assert(cfg.stackForever and (view.stackOffset or 0) == 0, "lowest plate stays " .. tostring(view.stackOffset))
+local lift = second.stackOffset
+assert(lift and lift > 0 and math.abs(second.stackY - view.stackY - view.stackHeight) < 0.001, "second plate stacked")
+assert(math.abs(second.points[1][5] - (cfg.plateOffsetY * second.nativeHealth:GetEffectiveScale()
+    / second:GetEffectiveScale() + lift)) <= 1, "stack offset reaches the anchor")
+cfg.stackForever = false
+cfg.stacking = true
+options.stacking.apply()
+tick()
+assert(second.stackOffset == nil and cvars.nameplateAllowOverlap == "0", "native stacking takes over without our offsets")
+cfg.stackForever = true
+options.stacking.apply()
+assert(cvars.nameplateAllowOverlap == "1")
+
+-- Clickbox mode (after RefinedBlizzPlates): the native frame is resized to the drawn plate, the drawn
+-- plate sits on its bottom, and offsets lift the real frame through clamp insets.
+local plateWidth0, plateHeight0 = a:GetWidth(), a:GetHeight()
+WorldFrame.rect = { 0, 1600, 900, 0 }
+a.points = { { "BOTTOM", WorldFrame, "BOTTOMLEFT", 505, 300 } }
+cfg.clickFollowsPlate = true
+ui.wfn.Changed()
+tick()
+local clickWidth = math.max(cfg.widthEnemy, cfg.widthFriend)
+local clickHeight = math.max(cfg.heightEnemy, cfg.heightFriend) + cfg.nameLift + math.max(cfg.nameSizeEnemy, cfg.nameSizeFriend) + 4
+assert(a.width == clickWidth and a.height == clickHeight, "plate frame sized to the drawn plate")
+assert(view.points[1][1] == "BOTTOM" and view.points[1][2] == a and view.points[1][3] == "BOTTOM", "drawn plate on the frame")
+assert(a.clamped == true and a.clampInsets, "frame clamped")
+local insets = a.clampInsets
+local left = 505 - clickWidth / 2
+local lift = cfg.plateOffsetY + (view.stackRaise or 0)
+assert(insets[2] == 1600 - (left + clickWidth + cfg.plateOffsetX), "negative X offset pushes from the right")
+assert(insets[4] == -(300 + lift), "Y offset lifts the frame from the bottom")
+assert(insets[1] == 10000 and insets[3] == -10000)
+-- The column lifts the real frame of the second plate, not just its picture.
+b.points = { { "BOTTOM", WorldFrame, "BOTTOMLEFT", 505, 300 } }
+for _ = 1, 40 do tick() end
+assert(second.stackRaise and second.stackRaise > 0 and second.stackOffset == nil)
+assert(math.abs(b.clampInsets[4] + 300 + cfg.plateOffsetY + second.stackRaise / b:GetEffectiveScale()) < 0.001)
+-- In combat the frames are protected: nothing is resized until combat ends.
+locked = true
+cfg.nameLift = cfg.nameLift + 2
+ui.wfn.Changed()
+tick()
+assert(a.height == clickHeight, "no resize in combat")
+locked = false
+driver.scripts.OnEvent(driver, "PLAYER_REGEN_ENABLED")
+assert(a.height == clickHeight + 2, "resized after combat")
+cfg.nameLift = cfg.nameLift - 2
+cfg.clickFollowsPlate = false
+ui.wfn.Changed()
+tick()
+assert(a.width == plateWidth0 and a.height == plateHeight0 and a.clampInsets[4] == 0, "native frame restored")
+assert(view.points[1][2] == view.nativeHealth and view.points[1][3] == "TOP")
+a.points, b.points, WorldFrame.rect = nil, nil, nil
+
+-- Screen-edge fade: the second plate sits 73% of half the screen height from the centre.
+WorldFrame.centerX, WorldFrame.centerY = 800, 450
+cfg.edgeFadeInner, cfg.edgeFadeOuter = 60, 70
+for _ = 1, 30 do tick() end
+assert(second:GetEffectiveAlpha() < 0.001, "plate beyond the vanishing radius is hidden")
+assert(view:GetEffectiveAlpha() == 1, "the target never fades")
+cfg.edgeFadeOuter = 200
+for _ = 1, 30 do tick() end
+assert(second:GetEffectiveAlpha() > 0.3, "inside the gradient the plate shows again")
+cfg.edgeFadeInner, cfg.edgeFadeOuter = 60, 120
+WorldFrame.centerX, WorldFrame.centerY = nil, nil
+
+-- A friendly player is class coloured without being targeted: the Nozdor client reports its class.
+local ally = plate("Ally")
+ally.children[1]:SetStatusBarColor(0, 0, 1)
+ally.children[1]:SetValue(100)
+local nativeQuery = NozdorActionNative
+function NozdorActionNative(command, frame)
+    if command == "plateguid" then return frame == ally and "0x0000000000000042" or "" end
+    if command == "unitinfo" then return frame == "0x0000000000000042" and 8 or nil end
+end
+instance = "none"
+tick()
+local allyView = ally.children[3]
+assert(allyView:IsShown() and allyView.health.color[1] == 0.41 and allyView.health.color[3] == 0.94, "ally in mage colour")
+NozdorActionNative = nativeQuery
+
+-- A blue bar is a friendly player even when the plate GUID does not look like a player's.
+local stranger = plate("Stranger")
+stranger.children[1]:SetStatusBarColor(0, 0, 1)
+stranger.children[1]:SetValue(100)
+function NozdorActionNative(command, frame)
+    if command == "plateguid" then return frame == stranger and "F13000ABCDEF" or "" end
+    if command == "unitinfo" then return frame == "F13000ABCDEF" and 8 or nil end
+end
+tick()
+local strangerView = stranger.children[3]
+assert(strangerView.kind == "player" and strangerView.health.color[1] == 0.41, "class colour without a player-shaped GUID")
+
+-- Without any native client help, classes are learnt from the combat log and chat, and saved.
+NozdorActionNative = nil
+local passer = plate("Passer")
+passer.children[1]:SetStatusBarColor(0, 0, 1)
+passer.children[1]:SetValue(100)
+tick()
+local passerView = passer.children[3]
+assert(passerView.health.color[3] == 1, "unknown ally stays blue")
+function GetPlayerInfoByGUID(guid)
+    if guid == "0x0000000000000099" then return "Маг", "MAGE" end
+    if guid == "0x0000000000000100" then return "Воин", "WARRIOR" end
+end
+RAID_CLASS_COLORS.WARRIOR = { r = 0.78, g = 0.61, b = 0.43 }
+driver.scripts.OnEvent(driver, "COMBAT_LOG_EVENT_UNFILTERED", 0, "SPELL_HEAL", "0x0000000000000099", "Passer", 0x511,
+    "0x0000000000000099", "Passer", 0x511)
+tick()
+assert(passerView.health.color[1] == 0.41, "class learnt from the combat log")
+driver.scripts.OnEvent(driver, "CHAT_MSG_SAY", "hi", "Talker-Realm", "", "", "", "", 0, 0, "", 0, 1, "0x0000000000000100")
+assert(cfg.classCache.Passer == "MAGE" and cfg.classCache.Talker == "WARRIOR", "classes saved by name")
+NozdorActionNative = nativeQuery
+
+-- The stock cast bar has no spell text: the name comes from the combat log, matched by the icon.
+local castWas = cfg.cast
+cfg.cast = true
+local caster = plate("Caster")
+caster.children[2].regions[1]:SetText("")
+caster.children[2]:Show()
+local spellInfo = GetSpellInfo
+function GetSpellInfo(id) if id == 133 then return "Огненный шар", nil, "Cast-Icon" end return spellInfo(id) end
+driver.scripts.OnEvent(driver, "COMBAT_LOG_EVENT_UNFILTERED", 0, "SPELL_CAST_START", "0xF130000000000123", "Caster", 0xa48,
+    "", nil, 0, 133, "Огненный шар", 4)
+tick()
+local casterView = caster.children[3]
+assert(casterView.cast:IsShown() and casterView.cast.text.text == "Огненный шар", tostring(casterView.cast.text.text))
+GetSpellInfo = spellInfo
+cfg.cast = castWas
+
+-- In combat only the units fighting me or my group stay.
+cfg.combatOnlyEngaged = true
+inCombat = true
+tick()
+assert(not casterView:IsShown(), "a unit nobody fights is hidden in combat")
+driver.scripts.OnEvent(driver, "COMBAT_LOG_EVENT_UNFILTERED", 0, "SWING_DAMAGE", "0x0000000000000001", "Me", 0x511,
+    "0xF130000000000123", "Caster", 0xa48)
+tick()
+assert(casterView:IsShown(), "a unit I hit stays")
+cfg.combatKeepFriends = true
+inCombat = false
+driver.scripts.OnEvent(driver, "PLAYER_REGEN_ENABLED")
+inCombat = true
+tick()
+assert(not casterView:IsShown(), "combat memory cleared when combat ends")
+inCombat = false
+tick()
+assert(casterView:IsShown())
+cfg.combatOnlyEngaged, cfg.combatKeepFriends = false, false
+caster:Hide()
+tick()
+
+-- Friendly NPCs show the name only; their title is learnt from a world mouseover and saved by name.
+NozdorActionNative = nil
+local hideFull = cfg.hideFullHealthOutOfCombat
+cfg.hideFullHealthOutOfCombat = false
+local banker = plate("Казначей")
+banker.children[1]:SetStatusBarColor(0, 1, 0)
+banker.children[1]:SetValue(100)
+tick()
+local bankerView = banker.children[3]
+assert(bankerView:IsShown() and not bankerView.health:IsShown(), "friendly NPC shows the name only")
+assert(not bankerView.subtitle:IsShown(), "no title before the NPC was ever seen")
+units.mouseover = { name = "Казначей", level = 80, friendly = true }
+tooltipUnits.mouseover = { "Казначей", "Хранилище аккаунта" }
+tick()
+units.mouseover = nil
+tick()
+assert(bankerView.subtitle:IsShown() and bankerView.subtitle.text == "<Хранилище аккаунта>", tostring(bankerView.subtitle.text))
+assert(cfg.npcTitleCache["Казначей"] == "<Хранилище аккаунта>", "title saved by name")
+cfg.friendlyNPCNameOnly = false
+tick()
+assert(bankerView.health:IsShown())
+cfg.friendlyNPCNameOnly, cfg.hideFullHealthOutOfCombat = true, hideFull
+banker:Hide()
+tick()
+NozdorActionNative = nativeQuery
+
+-- A player's guild is learnt from a world mouseover (no plate hover, no target) and saved by name.
+NozdorActionNative = nil
+local guildie = plate("Ямамба")
+guildie.children[1]:SetStatusBarColor(0, 0, 1)
+guildie.children[1]:SetValue(100)
+tick()
+local guildieView = guildie.children[3]
+assert(guildieView:IsShown() and not guildieView.subtitle:IsShown(), "no guild before the player was ever seen")
+local guildInfo = GetGuildInfo
+function GetGuildInfo(unit) if unit == "mouseover" then return "Банки на опыт всем" end return guildInfo(unit) end
+units.mouseover = { name = "Ямамба", level = 80, player = true, friendly = true, class = "MAGE" }
+tick()
+units.mouseover = nil
+GetGuildInfo = guildInfo
+tick()
+assert(guildieView.subtitle:IsShown() and guildieView.subtitle.text == "<Банки на опыт всем>", tostring(guildieView.subtitle.text))
+assert(cfg.guildCache["Ямамба"] == "<Банки на опыт всем>", "guild saved by name")
+guildie:Hide()
+tick()
+NozdorActionNative = nativeQuery
+
+-- A crowd of namesakes: one column without overlaps, and quiet plates refresh at the slower rate.
+local snakes = {}
+for i = 1, 20 do
+    snakes[i] = plate("Змея")
+    snakes[i].children[1]:SetValue(50)
+end
+for _ = 1, 3 do tick() end
+local column = {}
+for i = 1, 20 do
+    local v = snakes[i].children[3]
+    assert(v:IsShown() and v.stackY, "snake " .. i .. " stacked")
+    column[#column + 1] = v
+end
+table.sort(column, function(x, y) return x.stackY < y.stackY end)
+for i = 2, #column do
+    assert(column[i].stackY >= column[i - 1].stackY + column[i - 1].stackHeight - 0.001, "column has no overlaps")
+end
+local quietView = snakes[1].children[3]
+snakes[1].children[1]:SetValue(20)
+tick()
+assert(quietView.health.value == 50, "a quiet plate in a crowd waits for its slower refresh")
+now = now + 0.3
+tick()
+assert(quietView.health.value == 20, "and refreshes after it")
+cfg.crowdSaver = false
+snakes[1].children[1]:SetValue(30)
+tick()
+assert(quietView.health.value == 30, "without the saver every scan refreshes")
+cfg.crowdSaver = true
+for i = 1, 20 do snakes[i]:Hide() end
+tick()
+
+-- Name text colour (players fall back to it when class colours are not used for names).
+cfg.nameTextColour = { 1, 0.8, 0.2 }
+ui.wfn.Changed()
+tick()
+assert(strangerView.name.color[2] == 0.8 and strangerView.name.color[3] == 0.2, "custom name colour")
+cfg.nameTextColour = { 1, 1, 1 }
+ui.wfn.Changed()
+tick()
+
+-- Name letter limit (0 keeps the whole name).
+cfg.nameMaxLetters = 3
+ui.wfn.Changed()
+tick()
+assert(strangerView.name.text:sub(1, 3) == "Str" and strangerView.name.text:sub(-3) == "...", strangerView.name.text)
+cfg.nameMaxLetters = 0
+ui.wfn.Changed()
+tick()
+assert(not strangerView.name.text:find("...", 1, true))
+
+-- NPC titles read from the creature cache by GUID; a guild for a targeted player.
+local merchant = plate("Brom")
+merchant.children[1]:SetStatusBarColor(0, 1, 0)
+merchant.children[1]:SetValue(90)
+tooltipLines["unit:0xF130000000000077"] = { "Brom", "Торговец оружием" }
+function NozdorActionNative(command, frame)
+    if command == "plateguid" then return frame == merchant and "0xF130000000000077" or "" end
+end
+tick()
+local merchantView = merchant.children[3]
+assert(merchantView.subtitle:IsShown() and merchantView.subtitle.text == "<Торговец оружием>", tostring(merchantView.subtitle.text))
+cfg.npcTitles = false
+tick()
+assert(not merchantView.subtitle:IsShown())
+cfg.npcTitles = true
+function GetGuildInfo(unit) if unit == "target" then return "Гильдия Тестов" end end
+units.target.player, units.target.friendly, units.target.class = true, true, "MAGE"
+tick()
+assert(view.subtitle:IsShown() and view.subtitle.text == "<Гильдия Тестов>", tostring(view.subtitle.text))
+units.target.player, units.target.friendly, units.target.class = nil, nil, nil
+NozdorActionNative = nativeQuery
+
 -- With the ForeverUI options core present the module registers a declarative schema instead of a page.
 local schema
 ui.RegisterOptions = function(id, spec) schema = { id = id, spec = spec } end
@@ -650,7 +1043,14 @@ for _, section in ipairs(schema.spec.sections) do
         end
     end
 end
-assert(customs == 2 and keys.plateOffsetY.default == cfg.plateOffsetY and keys.auraTimerAnimation.values[2][1] == "sweep")
+assert(customs == 2 and keys.plateOffsetY.default == cfg.plateOffsetY and keys.auraTimerAnimation.values[2][1] == "forever")
+for _, key in ipairs({ "auraDebuffs", "auraBuffs", "auraMine", "auraOthers", "auraOthersClass", "auraTimerText", "auraTimerFont",
+    "auraTimerSize", "auraTimerOutline", "auraTimerColour", "classColourEnemy", "classColourFriend", "friendlyNameOnly", "friendlyNPCNameOnly", "crowdSaver", "crowdThreshold", "edgeFade", "edgeFadeInner", "edgeFadeOuter", "npcTitles", "playerGuilds", "subtitleSize",
+    "nameMaxLetters", "nameTextColour" }) do
+    assert(keys[key], "schema option " .. key)
+end
+assert(keys.clickFollowsPlate == nil and keys.verticalSpacing.default == 0.9 and cfg.spacingDefault090)
+assert(#keys.auraTimerFont.values() >= 3 and keys.auraOthersClass.depends(function() return true end))
 assert(keys.castColourOpen[1] == "color" and keys.nameOutline.values[1][1] == "soft" and keys.targetGlow.default == true)
 ui.RegisterOptions = nil
 
