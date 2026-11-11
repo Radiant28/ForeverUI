@@ -35,7 +35,7 @@ end
 editor:SetFrameStrata("DIALOG")
 editor:SetFrameLevel(5)
 editor:SetPoint("TOP", UIParent, "TOP", 0, -26)
-panel(editor, 408, 164)
+panel(editor, 408, 196)
 editor:Hide()
 tinsert(UISpecialFrames, editor:GetName())
 
@@ -107,6 +107,23 @@ local scale = CreateFrame("Slider", "ForeverStockUIEditScale", options, "Options
 scale:SetPoint("TOP", 0, -54)
 scale:SetWidth(232)
 scale:SetValueStep(1)
+
+local countSlider = CreateFrame("Slider", "ForeverStockUIEditCount", options, "OptionsSliderTemplate")
+countSlider:SetPoint("TOP", 0, -94)
+countSlider:SetWidth(232)
+countSlider:SetValueStep(1)
+countSlider:SetMinMaxValues(1, 12)
+ForeverStockUIEditCountLow:SetText("1")
+ForeverStockUIEditCountHigh:SetText("12")
+countSlider:Hide()
+
+local rowsSlider = CreateFrame("Slider", "ForeverStockUIEditRows", options, "OptionsSliderTemplate")
+rowsSlider:SetPoint("TOP", 0, -132)
+rowsSlider:SetWidth(232)
+rowsSlider:SetValueStep(1)
+rowsSlider:SetMinMaxValues(1, 12)
+ForeverStockUIEditRowsLow:SetText("1")
+rowsSlider:Hide()
 
 local function number(value)
     return type(value) == "number" and math.abs(value) < math.huge
@@ -191,7 +208,86 @@ local function setScale(entry, value)
     end)
 end
 
+-- Action bar grids: rows and button count per bar, stored in the entry config (config.rows, config.count).
+local barSpecs = {
+    MainMenuBar = { prefix = "ActionButton", rows = 1 },
+    MultiBarBottomLeft = { prefix = "MultiBarBottomLeftButton", rows = 1 },
+    MultiBarBottomRight = { prefix = "MultiBarBottomRightButton", rows = 1 },
+    MultiBarLeft = { prefix = "MultiBarLeftButton", rows = 12, vertical = true },
+    MultiBarRight = { prefix = "MultiBarRightButton", rows = 12, vertical = true, leftward = true },
+}
+
+local function barCount(entry)
+    return math.max(1, math.min(12, math.floor(tonumber(entry.config.count) or 12)))
+end
+
+local function barRows(entry)
+    return math.max(1, math.min(barCount(entry), math.floor(tonumber(entry.config.rows) or entry.bar.rows)))
+end
+
+local function applyBar(entry)
+    local spec, config = entry.bar, entry.config
+    local first = _G[spec.prefix .. "1"]
+    if not first or not config then return end
+    local custom = config.count ~= nil or config.rows ~= nil
+    local signature = custom and (barCount(entry) .. ":" .. barRows(entry)) or "stock"
+    if entry.barSignature == signature or (signature == "stock" and not entry.barStock) then return end
+    if not entry.barStock then
+        entry.barStock = {}
+        for index = 1, 12 do
+            local button = _G[spec.prefix .. index]
+            if button then entry.barStock[index] = points(button) end
+        end
+    end
+    entry.barSignature = signature
+    local function restore(button, saved)
+        button:ClearAllPoints()
+        for _, point in ipairs(saved) do button:SetPoint(unpack(point, 1, 5)) end
+    end
+    if not custom then
+        for index, saved in pairs(entry.barStock) do restore(_G[spec.prefix .. index], saved) end
+        entry.bounds, entry.boundsOnly = nil, nil
+        if ui.ApplyGryphons and entry.frame == MainMenuBar then ui.ApplyGryphons() end
+        return
+    end
+    local _, offsets, count = ui.ComputeBarGrid(barCount(entry), barRows(entry), spec.vertical, spec.leftward,
+        first:GetWidth() + 6)
+    local corner = spec.vertical and (spec.leftward and "TOPRIGHT" or "TOPLEFT") or "BOTTOMLEFT"
+    local bounds = {}
+    for index = 1, 12 do
+        local button = _G[spec.prefix .. index]
+        if button then
+            if index == 1 then
+                restore(button, entry.barStock[1])
+            elseif offsets[index] then
+                button:ClearAllPoints()
+                button:SetPoint(corner, first, corner, offsets[index].x, offsets[index].y)
+            else
+                -- Parked off screen: a hidden protected button cannot be kept hidden by addon code.
+                button:ClearAllPoints()
+                button:SetPoint("RIGHT", UIParent, "LEFT", -500, 0)
+            end
+            if index <= count then bounds[#bounds + 1] = button:GetName() end
+        end
+    end
+    entry.bounds, entry.boundsOnly = bounds, true
+    if ui.ApplyGryphons and entry.frame == MainMenuBar then ui.ApplyGryphons() end
+end
+
+-- Union of the counted buttons of a bar, whatever their shown state (empty slots may be hidden by the stock UI).
+local function boundsRect(entry)
+    local left, bottom, right, top
+    groupMembers(entry.bounds, function(member)
+        local x, y, w, h = rect(member)
+        if not x then return end
+        left, bottom = math.min(left or x, x), math.min(bottom or y, y)
+        right, top = math.max(right or x + w, x + w), math.max(top or y + h, y + h)
+    end)
+    if left then return left, bottom, right - left, top - bottom end
+end
+
 local function apply(entry)
+    if entry.bar and not InCombatLockdown() then applyBar(entry) end
     if entry.removed or entry.docked or held(entry) then return end
     if entry.castOwner and entry.config.detached ~= true then return end
     local saved = entry.config.scale
@@ -238,7 +334,12 @@ local function refreshOverlay(entry)
         visible = visible or member:IsVisible()
     end
     groupMembers(entry.members, include)
-    groupMembers(entry.bounds, include)
+    if entry.boundsOnly then
+        local x, y, w, h = boundsRect(entry)
+        if x then left, bottom, right, top = x, y, x + w, y + h end
+    else
+        groupMembers(entry.bounds, include)
+    end
     overlay:SetFrameLevel((visible and 80 or 40) + ((right - left) * (top - bottom) < 6500 and 10 or 0))
     overlay:ClearAllPoints()
     overlay:SetSize(math.max(26, right - left), math.max(19, top - bottom))
@@ -283,6 +384,43 @@ local function configureScale(entry)
     selected = entry
 end
 
+local settingBar = false
+
+local function showBarValues(entry)
+    settingBar = true
+    local count, rows = barCount(entry), barRows(entry)
+    countSlider:SetValue(count)
+    rowsSlider:SetMinMaxValues(1, count)
+    rowsSlider:SetValue(rows)
+    ForeverStockUIEditRowsHigh:SetText(count)
+    ForeverStockUIEditCountText:SetText((ru and "Ячеек" or "Buttons") .. "  " .. count)
+    ForeverStockUIEditRowsText:SetText((ru and "Рядов" or "Rows") .. "  " .. rows)
+    settingBar = false
+end
+
+local function configureBar(entry)
+    if entry.bar and entry.config then
+        showBarValues(entry)
+        countSlider:Show()
+        rowsSlider:Show()
+    else
+        countSlider:Hide()
+        rowsSlider:Hide()
+    end
+end
+
+local function barChanged()
+    local entry = selected
+    if settingBar or not entry or not entry.bar or InCombatLockdown() then return end
+    entry.config.count = math.floor(countSlider:GetValue() + 0.5)
+    entry.config.rows = math.min(entry.config.count, math.floor(rowsSlider:GetValue() + 0.5))
+    applyBar(entry)
+    showBarValues(entry)
+    schedule()
+end
+countSlider:SetScript("OnValueChanged", barChanged)
+rowsSlider:SetScript("OnValueChanged", barChanged)
+
 scale:SetScript("OnValueChanged", function(_, value)
     if not selected or InCombatLockdown() or held(selected) then return end
     value = math.floor(value + 0.5)
@@ -302,6 +440,10 @@ local reset = button(options, 104, ru and "Сбросить" or "Reset", functio
     if not selected or InCombatLockdown() or held(selected) then return end
     local entry = selected
     entry.config.scale = nil
+    if entry.bar then
+        entry.config.count, entry.config.rows = nil, nil
+        applyBar(entry)
+    end
     resetPosition(entry)
     if entry.slider then
         entry.slider:SetValue(entry.slider.foreverDefault)
@@ -314,6 +456,7 @@ local reset = button(options, 104, ru and "Сбросить" or "Reset", functio
     if entry.native then windows.Apply(entry.frame) end
     if UIParent_ManageFramePositions then UIParent_ManageFramePositions() end
     configureScale(entry)
+    configureBar(entry)
     schedule()
 end)
 reset:SetPoint("BOTTOMLEFT", 12, 10)
@@ -396,6 +539,14 @@ local function stopDrag(commit)
     schedule()
 end
 
+local layoutLabel = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+layoutLabel:SetPoint("TOPLEFT", 16, -141)
+layoutLabel:SetText(ru and "Раскладка панелей:" or "Bar layout:")
+local layoutClassic = button(editor, 112, ru and "Классика" or "Classic", function() ui.ApplyEditLayout("classic") end)
+layoutClassic:SetPoint("LEFT", layoutLabel, "RIGHT", 10, 0)
+local layoutRetail = button(editor, 112, "Retail", function() ui.ApplyEditLayout("retail") end)
+layoutRetail:SetPoint("LEFT", layoutClassic, "RIGHT", 6, 0)
+
 local resetAll = button(editor, 172, ru and "Сбросить все позиции" or "Reset all positions", function()
     if InCombatLockdown() then return end
     stopDrag(true)
@@ -412,6 +563,128 @@ local resetAll = button(editor, 172, ru and "Сбросить все позиц�
     schedule()
 end)
 resetAll:SetPoint("BOTTOMLEFT", 16, 10)
+
+-- Layout presets ------------------------------------------------------------------------------------------------
+-- "classic" gives the stock positions back; "retail" stacks the bars in the bottom centre (see EditLayouts.lua).
+local layoutKeys = {
+    xp = "MainMenuExpBar", xpMax = "MainMenuBarMaxLevelBar", main = "MainMenuBar", bl = "MultiBarBottomLeft",
+    br = "MultiBarBottomRight", stance = "ShapeshiftBarFrame", pet = "PetActionBarFrame",
+    totem = "MultiCastActionBarFrame", micro = "CharacterMicroButton", bags = "MainMenuBarBackpackButton",
+}
+local layoutWait = CreateFrame("Frame")
+
+local function contentRect(entry, buttonPrefix)
+    local left, bottom, width, height = rect(entry.frame)
+    if not left then return end
+    local frameLeft, frameBottom = left, bottom
+    local right, top = left + width, bottom + height
+    local function include(frame, reset)
+        local x, y, w, h = rect(frame)
+        if not x then return end
+        if reset then
+            left, bottom, right, top = x, y, x + w, y + h
+            reset = false
+        else
+            left, bottom = math.min(left, x), math.min(bottom, y)
+            right, top = math.max(right, x + w), math.max(top, y + h)
+        end
+        return true
+    end
+    if entry.boundsOnly then
+        local x, y, w, h = boundsRect(entry)
+        if not x then return end
+        left, bottom, right, top = x, y, x + w, y + h
+    elseif buttonPrefix then
+        local found
+        for i = 1, 12 do
+            local button = _G[buttonPrefix .. i]
+            if button and include(button, not found) then found = true end
+        end
+        if not found then return end
+    else
+        groupMembers(entry.members, include)
+        groupMembers(entry.bounds, include)
+    end
+    return left, bottom, right - left, top - bottom, frameLeft, frameBottom, width, height
+end
+
+local function measureLayout()
+    local measures = {}
+    for key, name in pairs(layoutKeys) do
+        local entry = byName[name]
+        if entry and entry.config then
+            local left, bottom, width, height, frameLeft, frameBottom, frameWidth, frameHeight =
+                contentRect(entry, key == "main" and "ActionButton" or nil)
+            if left then
+                measures[key] = { shown = entry.frame:IsShown(), w = width, h = height, ox = left - frameLeft,
+                    oy = bottom - frameBottom, fw = frameWidth, fh = frameHeight, scale = entry.frame:GetScale() }
+                -- The Retail XP bar is a fixed 10 px high once restyled.
+                if key == "xp" or key == "xpMax" then measures[key].h = 10 end
+            end
+        end
+    end
+    return measures
+end
+
+-- The Retail look hides the stock bar art and the empty-slot backgrounds; the gryphons move to the button row.
+local function setBarArt(classic)
+    settings.barLayout = classic and "classic" or "retail"
+    settings.showGryphons = true
+    settings.barStockArt = classic
+    settings.barSlotBackgrounds = classic
+    if ui.ActionBars then ui.ActionBars.Apply() end
+    if ui.UnitFrames and ui.UnitFrames.ApplyLayout then ui.UnitFrames.ApplyLayout() end
+    if ui.Minimap and ui.Minimap.ApplyLayout then ui.Minimap.ApplyLayout() end
+    if ui.Chat and ui.Chat.ApplyLayout then ui.Chat.ApplyLayout() end
+end
+
+local function resetLayoutFrames()
+    for _, name in pairs(layoutKeys) do
+        local entry = byName[name]
+        if entry and entry.config then
+            entry.config.scale = nil
+            resetPosition(entry)
+            setScale(entry, entry.defaultScale)
+        end
+    end
+    if UIParent_ManageFramePositions then UIParent_ManageFramePositions() end
+end
+
+local function applyRetailLayout()
+    local result = ui.ComputeRetailLayout(measureLayout(), UIParent:GetWidth())
+    local right, top = UIParent:GetRight(), UIParent:GetTop()
+    for key, place in pairs(result) do
+        local entry = byName[layoutKeys[key]]
+        if entry then
+            if place.scale then entry.config.scale = place.scale end
+            if place.resizeWidth then settings.barXpWidth = place.resizeWidth end
+            entry.config.position = { place.left + place.width - right, place.bottom + place.height - top }
+        end
+    end
+    setBarArt(false)
+    schedule()
+end
+
+function ui.ApplyEditLayout(name)
+    if InCombatLockdown() or not settings then return false end
+    stopDrag(true)
+    resetLayoutFrames()
+    layoutWait:SetScript("OnUpdate", nil)
+    if name == "retail" then
+        -- Measure once the stock layout has settled after the reset.
+        local frames = 0
+        layoutWait:SetScript("OnUpdate", function(self)
+            frames = frames + 1
+            if frames < 2 then return end
+            self:SetScript("OnUpdate", nil)
+            if not InCombatLockdown() then applyRetailLayout() end
+        end)
+    else
+        setBarArt(true)
+        schedule()
+    end
+    return true
+end
 
 local function createOverlay(entry)
     local overlay = CreateFrame("Button", nil, editor)
@@ -438,7 +711,8 @@ local function createOverlay(entry)
         if InCombatLockdown() or held(entry) then return end
         configureScale(entry)
         title:SetText(entry.label)
-        options:SetHeight(entry.castBar and 156 or 128)
+        configureBar(entry)
+        options:SetHeight(entry.castBar and 156 or (entry.bar and 204 or 128))
         if entry.castBar then
             detach:Show()
             detach:SetChecked(entry.castBar.config.detached == true)
@@ -540,6 +814,10 @@ end
 add("WatchFrame", "Отслеживание заданий", "Quest tracker")
 add("DurabilityFrame", "Прочность", "Durability")
 
+for name, spec in pairs(barSpecs) do
+    if byName[name] then byName[name].bar = spec end
+end
+
 local function pinCastBar(bar)
     local entry = byName[bar:GetName()]
     if not entry or not entry.castOwner or not entry.config or entry.config.detached ~= true then return end
@@ -623,6 +901,7 @@ end
 
 ui.EditMode = {
     Open = openEditor,
+    ApplyLayout = function(name) return ui.ApplyEditLayout(name) end,
     Apply = function()
         redrawGrid()
         for _, entry in ipairs(entries) do

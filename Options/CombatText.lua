@@ -57,7 +57,7 @@ ui.RegisterOptions("combattext", {
             { "button", L("Показать пример", "Preview combat text"), func = function() ui.CombatText.Test() end },
         }),
         section(L("Что показывать", "What to show"), ct.switches,
-            { "showOutgoingDamage", "showOutgoingHeal", "showPetDamage", "showIncomingDamage", "showIncomingHeal", "showMisses" },
+            { "showOutgoingDamage", "showOutgoingHeal", "showPetDamage", "showIncomingDamage", "showIncomingHeal", "showMana", "showMisses" },
             "toggle"),
         section(L("Шрифт", "Font"), ct.sliders, { "fontSize", "critScale" }, "range", {
             { "media", "fontName", L("Шрифт текста боя", "Combat text font"), kind = "font", ignoreGlobal = true,
@@ -81,12 +81,19 @@ ui.RegisterOptions("combattext", {
                 { "DIAGONAL", L("По диагонали", "Diagonal") } } },
             { "toggle", "anchorToNameplates", L("Текст над неймплейтами", "Anchor text to nameplates"),
                 default = defaults.anchorToNameplates },
+            { "toggle", "onlyOnUnits", L("Только на юнитах", "On units only"), default = defaults.onlyOnUnits,
+                tooltip = L("Текст без юнита (в верхней части экрана) не показывается. Входящие цифры не затрагиваются.",
+                    "Text without a unit (the upper screen area) is not shown. Incoming numbers are unaffected.") },
+            { "button", L("Переместить зоны текста", "Move text zones"), func = function()
+                if ui.EditMode then ui.EditMode.Open() end
+            end },
         }),
         { title = L("Цвета", "Colours"), options = {
             { "color", "colorNormal", L("Обычный урон", "Normal damage"), default = defaults.colorNormal },
             { "color", "colorCrit", L("Критический урон", "Critical damage"), default = defaults.colorCrit },
             { "color", "colorHeal", L("Лечение", "Healing"), default = defaults.colorHeal },
             { "color", "colorHealCrit", L("Критическое лечение", "Critical healing"), default = defaults.colorHealCrit },
+            { "color", "colorMana", L("Мана", "Mana"), default = defaults.colorMana },
             { "color", "colorPet", L("Урон питомца", "Pet damage"), default = defaults.colorPet, depends = "!colorBySchool" },
             { "toggle", "colorBySchool", L("Цвет по школе магии", "Colour by spell school"), default = defaults.colorBySchool },
         } },

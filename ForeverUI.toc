@@ -25,6 +25,7 @@ ForeverUI_NameplateStyle.lua
 ForeverUI_NameplateOptions.lua
 ForeverUI_Nameplates.lua
 StockPanels.lua
+EditLayouts.lua
 EditMode.lua
 Performance.lua
 Chat.lua

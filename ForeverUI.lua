@@ -56,6 +56,49 @@ local dragons = {
 }
 dragons.rareelite = dragons.rare
 
+-- Retail look (DragonUI art, MIT): geometry from DragonUI modules/unitframes/uf_skins.lua. Offsets are +y up and
+-- relative to the named region ("frame", "portrait", "health", "bg"); the art is 512x256 shown at 256x128.
+local retailArt = art .. "UnitFrames\\Retail-"
+local retailKinds = {
+    PlayerFrame = "player", TargetFrame = "target", FocusFrame = "target",
+    TargetFrameToT = "small", FocusFrameToT = "small",
+}
+local retailSpecs = {
+    player = {
+        portrait = { "TOPLEFT", "frame", "TOPLEFT", 42, -15, 56 },
+        health = { "LEFT", "portrait", "RIGHT", 2, -1, 125, 20 },
+        power = { "LEFT", "portrait", "RIGHT", 2, -17, 125, 9 },
+        bg = { retailArt .. "Player-BACKGROUND", retailArt .. "Player-BORDER", 256, 128, "LEFT", "health", "LEFT", -67, -28 },
+        name = { "LEFT", "health", "TOPLEFT", 4, 7.5, 96 },
+        level = { 15.5, -59 },
+        glows = {
+            status = { retailArt .. "Player-Status", 196, 71, { 0, 392 / 512, 0, 142 / 256 }, "bg", 0, 0.5 },
+            combat = { retailArt .. "Player-InCombat", 192, 71, { 0, 384 / 512, 0, 142 / 256 }, "bg", 1.5, 1 },
+        },
+    },
+    target = {
+        portrait = { "TOPRIGHT", "frame", "TOPRIGHT", -48.75, -14.75, 54 },
+        health = { "RIGHT", "portrait", "LEFT", -1.25, -2.25, 126, 20 },
+        power = { "RIGHT", "portrait", "LEFT", 6.25, -18.75, 133, 9.5 },
+        bg = { retailArt .. "Target-BACKGROUND", retailArt .. "Target-BORDER", 256, 128, "TOPLEFT", "frame", "TOPLEFT", -0.5, -10.5 },
+        name = { "LEFT", "bg", "TOPLEFT", 4, -15.5, 117 },
+        level = { 177.83, -55.5 },
+        glows = {
+            combat = { retailArt .. "Target-InCombat", 188, 67, { 0, 376 / 512, 0, 134 / 256 }, "frame", 1, 24 },
+        },
+    },
+    small = {
+        -- Stock portrait position and size (captured before ForeverUI moves it).
+        health = { "LEFT", "portrait", "RIGHT", 2, 1, 70.5, 10 },
+        power = { "LEFT", "portrait", "RIGHT", -1.5, -9, 74, 7.5 },
+        bg = { retailArt .. "ToT-BACKGROUND", retailArt .. "ToT-BORDER", 128, 64, "LEFT", "portrait", "CENTER", -24.5, -9.5 },
+        name = { "LEFT", "portrait", "RIGHT", 3, 13, 65 },
+    },
+}
+retailSpecs.target.glows.status = retailSpecs.target.glows.combat
+retailSpecs.small.glows = {}
+local function retailActive() return ui.Settings().barLayout == "retail" end
+
 local skins = {}
 local healthBars = {}
 local powerBars = {}
@@ -166,6 +209,12 @@ local function applyPanelMedia(panel, scale)
     local border = ui.MediaPath("border", settings.unitBarBorder)
     -- The bronze chrome of the player, target and party frames already is their border.
     if panel.foreverChrome then border = "" end
+    -- The Retail art brings its own wells.
+    if panel.retailOn then
+        placePanel(panel, 0)
+        panel:SetBackdrop(nil)
+        return
+    end
     local edgeSize, inset = 0, 0
     if border ~= "" then
         if border == art .. "UnitFrame-Edge" then
@@ -223,6 +272,7 @@ local function addBarDivider(parent, bar, left, right, scale)
     dividers[line] = true
     line:SetPoint("BOTTOMLEFT", bar, "TOPLEFT", left * scale, 0)
     line:SetPoint("BOTTOMRIGHT", bar, "TOPRIGHT", right * scale, 0)
+    return line
 end
 
 local function apply(frame, style, originX, originY, scale, flip)
@@ -230,6 +280,9 @@ local function apply(frame, style, originX, originY, scale, flip)
 
     local prefix = frame:GetName()
     local isParty = prefix:match("^PartyMemberFrame%d+$")
+    local retailKind = retailKinds[prefix]
+    -- rt is the Retail layer of this frame (nil for frames that have none); rt.on says which look is shown.
+    local rt = retailKind and { kind = retailKind, spec = retailSpecs[retailKind], on = false }
     local pvpIcon = frame.pvpIcon or _G[prefix .. "PVPIcon"] or (frame == PlayerFrame and PlayerPVPIcon)
     if pvpIcon then
         pvpIcons[pvpIcon] = true
@@ -266,7 +319,13 @@ local function apply(frame, style, originX, originY, scale, flip)
         region:SetSize(width * scale, height * scale)
     end
 
+    if rt then
+        local point, relative, relativePoint, x, y = portrait:GetPoint(1)
+        rt.stockPortrait = { point, relative, relativePoint, x, y, portrait:GetWidth(), portrait:GetHeight() }
+    end
+
     local function positionPortrait()
+        if rt and rt.on then return rt.layoutPortrait() end
         local x, y, size = unpack(style.portrait)
         portrait:SetDrawLayer("BORDER")
         position(portrait, "CENTER", x, y, size, size)
@@ -311,12 +370,13 @@ local function apply(frame, style, originX, originY, scale, flip)
         local leftOffset = left + 1 - geometry[1]
         local rightOffset = right - 1 - geometry[1] - geometry[3]
         if flip then leftOffset, rightOffset = -rightOffset, -leftOffset end
-        addBarDivider(parent, bar, leftOffset, rightOffset, scale)
+        return addBarDivider(parent, bar, leftOffset, rightOffset, scale)
     end
-    if not style.nameBelow and not style.chrome then divide(panel, health, style.health) end
+    local dividerLines = {}
+    if not style.nameBelow and not style.chrome then dividerLines[1] = divide(panel, health, style.health) end
     skinHealth(health, frame)
     if power then
-        if not style.chrome then divide(power, power, style.power) end
+        if not style.chrome then dividerLines[2] = divide(power, power, style.power) end
         skinPower(power, frame)
     end
 
@@ -326,7 +386,21 @@ local function apply(frame, style, originX, originY, scale, flip)
         role:SetDrawLayer("OVERLAY", 3)
     end
 
+    -- Leader, loot master, guide and raid-mark icons live on the stock art frame, which is now below the
+    -- portrait layer (party frames are handled further down). Lift them so the ring cannot cover them.
+    if not isParty then
+        local stockPrefix = frame == PlayerFrame and "Player" or prefix
+        for _, suffix in ipairs({ "LeaderIcon", "GuideIcon", "MasterIcon", "RaidTargetIcon" }) do
+            local icon = _G[stockPrefix .. suffix] or _G[prefix .. suffix] or _G[prefix .. "TextureFrame" .. suffix]
+            if icon and icon.SetParent and icon.SetDrawLayer then
+                icon:SetParent(portraitLayer)
+                icon:SetDrawLayer("OVERLAY", 4)
+            end
+        end
+    end
+
     local name = frame.name or _G[prefix .. "TextureFrameName"] or _G[prefix .. "Name"]
+    if rt and name then rt.stockFont = { name:GetFont() } end
     if isParty and name then
         name:SetParent(portraitLayer)
         name:SetWordWrap(false)
@@ -337,6 +411,7 @@ local function apply(frame, style, originX, originY, scale, flip)
         end
     end
     local function positionBars()
+        if rt and rt.on then return rt.layoutBars() end
         position(health, "TOPLEFT", unpack(style.health))
         center(health.TextString, health)
         if power then
@@ -391,7 +466,7 @@ local function apply(frame, style, originX, originY, scale, flip)
                 accent:SetGradientAlpha("VERTICAL",
                     (23 + r * bottomTint) / 255, (12 + g * bottomTint) / 255, (7 + b * bottomTint) / 255, 1,
                     (15 + r * topTint) / 255, (8 + g * topTint) / 255, (7 + b * topTint) / 255, 1)
-                if setting("ufTargetAccent", true) then accent:Show() else accent:Hide() end
+                if setting("ufTargetAccent", true) and not (rt and rt.on) then accent:Show() else accent:Hide() end
             else
                 accent:Hide()
             end
@@ -411,7 +486,17 @@ local function apply(frame, style, originX, originY, scale, flip)
         local badge = portraitLayer:CreateTexture(nil, "OVERLAY", nil, -1)
         badge:SetTexture(art .. "Level-Badge")
         local badgeSize = isParty and 40 or 32
-        position(badge, "CENTER", x, y, badgeSize, badgeSize)
+        local function placeBadge()
+            if rt and rt.on and rt.spec.level then
+                badge:ClearAllPoints()
+                badge:SetPoint("CENTER", rt.bg, "TOPLEFT", rt.spec.level[1], rt.spec.level[2])
+                badge:SetSize(badgeSize * scale, badgeSize * scale)
+            else
+                position(badge, "CENTER", x, y, badgeSize, badgeSize)
+            end
+        end
+        if rt then rt.placeBadge = placeBadge end
+        placeBadge()
         level:SetParent(portraitLayer)
         center(level, badge)
         level:SetDrawLayer("OVERLAY")
@@ -450,10 +535,27 @@ local function apply(frame, style, originX, originY, scale, flip)
     end
     -- The stock status and threat glows keep their colours, pulsing and timing from the client;
     -- only their art is replaced by a halo cut to the WoW: Forever chrome.
-    local function chromeGlow(region, enabled)
+    local function chromeGlow(region, enabled, which)
         if not region then return end
         if not enabled then
             region:SetTexture(nil)
+            return
+        end
+        local retailGlow = rt and rt.on and rt.spec.glows[which or "combat"]
+        if retailGlow then
+            -- DragonUI's glows: the player's on the background art, the target's on the frame corner.
+            region:SetParent(portraitLayer)
+            region:SetDrawLayer("ARTWORK", -6)
+            region:SetTexture(retailGlow[1])
+            region:SetTexCoord(unpack(retailGlow[4]))
+            region:SetBlendMode("ADD")
+            region:ClearAllPoints()
+            region:SetSize(retailGlow[2], retailGlow[3])
+            if retailGlow[5] == "bg" then
+                region:SetPoint("TOPLEFT", rt.bg, "TOPLEFT", retailGlow[6], retailGlow[7])
+            else
+                region:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", retailGlow[6], retailGlow[7])
+            end
             return
         end
         local glow = style.chrome and chromeGlows[style == target and "target" or "player"]
@@ -471,8 +573,8 @@ local function apply(frame, style, originX, originY, scale, flip)
     end
     if frame == PlayerFrame then
         skin.reglow = function()
-            chromeGlow(PlayerFrameFlash, setting("ufThreatGlow", true))
-            chromeGlow(PlayerStatusTexture, setting("ufStatusGlow", true))
+            chromeGlow(PlayerFrameFlash, setting("ufThreatGlow", true), "combat")
+            chromeGlow(PlayerStatusTexture, setting("ufStatusGlow", true), "status")
         end
         skin.reglow()
         -- The client pulses the alpha of these every frame, so only an empty texture hides them.
@@ -551,6 +653,91 @@ local function apply(frame, style, originX, originY, scale, flip)
             dragon:Show()
         end
         skin.dragon(frame.showClassification and not frame.smallSize and UnitClassification(frame.unit))
+    end
+
+    if rt then
+        local spec = rt.spec
+        local piece = spec.bg
+        -- The background sits on the bar panel, below the bars; the border above everything but the portrait.
+        rt.bg = panel:CreateTexture(nil, "BACKGROUND", nil, -6)
+        rt.bg:SetTexture(piece[1])
+        rt.bg:SetSize(piece[3], piece[4])
+        rt.border = portraitLayer:CreateTexture(nil, "ARTWORK", nil, -4)
+        rt.border:SetTexture(piece[2])
+        rt.border:SetSize(piece[3], piece[4])
+        rt.bg:Hide()
+        rt.border:Hide()
+        local refs = { frame = frame, portrait = portrait, health = health, bg = rt.bg }
+        local function anchor(region, point, relative, relativePoint, x, y)
+            region:ClearAllPoints()
+            region:SetPoint(point, refs[relative], relativePoint, x, y)
+        end
+        function rt.layoutPortrait()
+            portrait:SetDrawLayer("BORDER")
+            local s = spec.portrait
+            if s then
+                portrait:ClearAllPoints()
+                portrait:SetPoint(s[1], frame, s[3], s[4], s[5])
+                portrait:SetSize(s[6], s[6])
+            else
+                local p = rt.stockPortrait
+                portrait:ClearAllPoints()
+                portrait:SetPoint(p[1], p[2], p[3], p[4], p[5])
+                portrait:SetSize(p[6], p[7])
+            end
+        end
+        function rt.layoutBars()
+            rt.layoutPortrait()
+            local h = spec.health
+            anchor(health, h[1], h[2], h[3], h[4], h[5])
+            health:SetSize(h[6], h[7])
+            center(health.TextString, health)
+            if power then
+                local m = spec.power
+                anchor(power, m[1], m[2], m[3], m[4], m[5])
+                power:SetSize(m[6], m[7])
+                center(power.TextString, power)
+            end
+            if name then
+                local n = spec.name
+                if rt.stockFont and rt.stockFont[1] then name:SetFont(unpack(rt.stockFont)) end
+                anchor(name, n[1], n[2], n[3], n[4], n[5])
+                name:SetSize(n[6], 12)
+                name:SetWordWrap(false)
+                name:SetJustifyH("LEFT")
+            end
+        end
+        function rt.set(on)
+            if rt.on == on then return end
+            rt.on = on
+            local a = spec.bg
+            if on then
+                anchor(rt.bg, a[5], a[6], a[7], a[8], a[9])
+                rt.border:ClearAllPoints()
+                rt.border:SetAllPoints(rt.bg)
+                rt.bg:Show()
+                rt.border:Show()
+                ring:Hide()
+                panel.retailOn = true
+            else
+                rt.bg:Hide()
+                rt.border:Hide()
+                ring:Show()
+                panel.retailOn = nil
+            end
+            for _, line in pairs(dividerLines) do
+                if on then line:Hide() else line:Show() end
+            end
+            applyPanelMedia(panel, scale)
+            positionPortrait()
+            positionBars()
+            if rt.placeBadge then rt.placeBadge() end
+            if skin.reglow then skin.reglow() end
+            if skin.updateTarget then skin.updateTarget() end
+            if skin.dragon then skin.dragon(nil, true) end
+        end
+        skin.retail = rt
+        if retailActive() then rt.set(true) end
     end
     return skin
 end
@@ -820,7 +1007,16 @@ local function applyVisibility()
     if TargetFrame_UpdateAuras and TargetFrame and UnitExists("target") then TargetFrame_UpdateAuras(TargetFrame) end
 end
 
+-- Switches the player, target, focus and target-of-target frames between the Classic and Retail looks.
+local function applyLayout()
+    local on = retailActive()
+    for _, skin in pairs(skins) do
+        if type(skin) == "table" and skin.retail then skin.retail.set(on) end
+    end
+end
+
 ui.UnitFrames = {
+    ApplyLayout = applyLayout,
     ApplyHealthColor = function() for bar in pairs(healthBars) do updateHealthColor(bar) end end,
     ApplyBarFill = applyBarFill,
     ApplyPanelMedia = applyBarPanelMedia,

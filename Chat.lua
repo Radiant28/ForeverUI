@@ -134,11 +134,69 @@ local function configureAll()
         end
     end)
 end
-ui.Chat = { Apply = configureAll }
+
+-- Retail look of the input box (DragonUI chatmods.lua): the stock border textures go, a flat dark box 22 px high
+-- sits 6 px under the chat frame. The stock textures, anchors and height are saved and restored for Classic.
+local editParts = { "Left", "Mid", "Right" }
+local editSaved = {}
+local flatEdit = {
+    bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\ChatFrame\\ChatFrameBackground",
+    tile = false, edgeSize = 1, insets = { left = 0, right = 0, top = 0, bottom = 0 },
+}
+local function applyEditLook()
+    local retail = ui.Settings().barLayout == "retail" and ui.Settings().chatManage ~= false
+    for id = 1, NUM_CHAT_WINDOWS do
+        local frame, box = _G["ChatFrame" .. id], _G["ChatFrame" .. id .. "EditBox"]
+        if frame and box then
+            local saved = editSaved[id]
+            if retail then
+                if not saved then
+                    saved = { textures = {}, focus = {}, points = {}, height = box:GetHeight() }
+                    for _, part in ipairs(editParts) do
+                        local tex, focus = _G["ChatFrame" .. id .. "EditBox" .. part], _G["ChatFrame" .. id .. "EditBoxFocus" .. part]
+                        if tex then saved.textures[part] = tex:GetTexture() end
+                        if focus then saved.focus[part] = { focus:GetTexture(), focus:GetHeight() } end
+                    end
+                    for i = 1, box:GetNumPoints() do saved.points[i] = { box:GetPoint(i) } end
+                    editSaved[id] = saved
+                end
+                for _, part in ipairs(editParts) do
+                    local tex, focus = _G["ChatFrame" .. id .. "EditBox" .. part], _G["ChatFrame" .. id .. "EditBoxFocus" .. part]
+                    if tex then tex:SetTexture(0, 0, 0, 0) end
+                    if focus then focus:SetTexture(0, 0, 0, 0) end
+                end
+                box:ClearAllPoints()
+                box:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", -3, -6)
+                box:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 2, -6)
+                box:SetHeight(22)
+                box:SetBackdrop(flatEdit)
+                box:SetBackdropColor(0.03, 0.03, 0.04, 0.8)
+                box:SetBackdropBorderColor(0, 0, 0, 0)
+            elseif saved then
+                for _, part in ipairs(editParts) do
+                    local tex, focus = _G["ChatFrame" .. id .. "EditBox" .. part], _G["ChatFrame" .. id .. "EditBoxFocus" .. part]
+                    if tex and saved.textures[part] then tex:SetTexture(saved.textures[part]) end
+                    if focus and saved.focus[part] then
+                        focus:SetTexture(saved.focus[part][1])
+                        focus:SetHeight(saved.focus[part][2])
+                    end
+                end
+                box:SetBackdrop(nil)
+                box:ClearAllPoints()
+                for _, point in ipairs(saved.points) do box:SetPoint(unpack(point, 1, 5)) end
+                box:SetHeight(saved.height)
+                editSaved[id] = nil
+            end
+        end
+    end
+end
+
+ui.Chat = { Apply = configureAll, ApplyLayout = applyEditLook }
 
 events:RegisterEvent("PLAYER_LOGIN")
 events:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" then self:RegisterEvent("UPDATE_CHAT_WINDOWS") end
     -- Chat settings can arrive from the server after login.
     configureAll()
+    if event == "PLAYER_LOGIN" then applyEditLook() end
 end)

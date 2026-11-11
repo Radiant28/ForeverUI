@@ -35,3 +35,11 @@ The action-bar slot borders and embossed empty slots are warm-toned crops of Bli
 `Nameplate-Chrome.tga` is an uncompressed 512 × 128 atlas with single-bevel steel trim for the health bar and level badge, an external threat halo mask and the aura trim. The elite icon uses Blizzard's built-in WotLK `Interface\Tooltips\elitenameplateicon`.
 
 `Art/Nameplates` contains the seven unmodified textures from the local WoW Forever Nameplates 1.66.00 donor (`Interface/WoWForeverNameplates/Media`). `PlateBoxes30300.tga` packs its three 64 × 48 box sprites into a power-of-two atlas for the 3.3.5a renderer. The backport uses the existing `Nameplate-Chrome.tga` aura trim.
+
+`ActionBar/Retail-EndCaps-Alliance.blp`, `ActionBar/Retail-EndCaps-Horde.blp` (Dragonflight-style gryphons and wyverns, cells 356 x 334 on a 512 x 1024 sheet) and `ActionBar/Retail-Bags.blp` (backpack picture and bag rings, 512 x 128) are copied unchanged from [DragonUI](https://github.com/NeticSoul/DragonUI) (`Textures/ActionBars/uiactionbar2x_new.blp`, `uiactionbar2x_new2.blp` and `Textures/Bags/bagslots2x.blp`), which is MIT licensed, Copyright (c) 2026 NeticSoul and DragonUI contributors. The texture cells are listed in DragonUI's `utils/atlas.lua`.
+
+`ActionBar/Retail-XP.blp` (experience bar background and border, 1024 x 256) and `ActionBar/Retail-Micro.blp` (flat micro menu icons, 256 x 512) are copied unchanged from DragonUI (`Textures/XP/uiexperiencebar.blp` and `Textures/Micromenu/Atlas/uimicromenu2x.blp`, MIT).
+
+`UnitFrames/Retail-*` (player, target and target-of-target background and border art, and the player status, player combat and target combat glows) are copied unchanged from DragonUI (`Textures/UnitFrames/HD/` (Player, Target and TargetofTarget BACKGROUND and BORDER), `Textures/UnitFrames/Forever/Player-Status.tga`, `Player-InCombat.tga` and `Textures/UnitFrames/Target/ui-hud-unitframe-target-portraiton-incombat-2x.blp`, MIT). They are used only by the Retail layout; their geometry is taken from DragonUI's `modules/unitframes/uf_skins.lua`.
+
+`Map/Retail-Border.tga` (silver minimap ring with gold compass marks, 256 x 256) is copied unchanged from DragonUI (`Textures/Minimap/uiminimapborder.tga`, MIT). The Retail chat input box follows DragonUI's `modules/chatmods.lua` (flat dark box, no art).

@@ -13,11 +13,19 @@ ui.RegisterOptions("actionbars", {
         { title = L("Оформление", "Styling"), options = {
             { "toggle", "showGryphons", L("Грифоны по краям", "Gryphons at the ends"), default = true },
             { "color", "barArtColor", L("Оттенок панели и грифонов", "Bar and gryphon tint"), default = { 1, 0.84, 0.65 } },
+            { "toggle", "barStockArt", L("Фон штатной панели", "Stock bar background"), default = true },
             { "toggle", "barSlotEdges", L("Оправа ячеек", "Slot frames"), default = true },
             { "toggle", "barSlotBackgrounds", L("Фон пустых ячеек", "Empty slot backgrounds"), default = true },
             { "toggle", "barProgressBorder", L("Рамка полосы репутации", "Reputation bar border"), default = true },
         } },
         { title = L("Расположение", "Layout"), options = {
+            { "button", L("Раскладка Retail", "Retail layout"), func = function()
+                if ui.EditMode then ui.EditMode.ApplyLayout("retail") end
+            end, tooltip = L("Панели по центру внизу в стопку, полоса опыта под ними, стойки, питомец и тотемы сверху.",
+                "Bars stacked bottom-centre, the XP bar below, stance, pet and totem bars on top.") },
+            { "button", L("Классическая раскладка", "Classic layout"), func = function()
+                if ui.EditMode then ui.EditMode.ApplyLayout("classic") end
+            end },
             { "button", L("Открыть режим редактирования", "Open Edit Mode"), func = function()
                 if ui.EditMode then ui.EditMode.Open() end
             end },

@@ -31,6 +31,8 @@ local DEFAULTS = {
     showIncomingHeal = false,
     showIncomingDamage = false,
     showMisses = true,
+    showMana = true,
+    onlyOnUnits = false,
 
     -- Анимация и позиция
     anchorToNameplates = true,
@@ -47,6 +49,7 @@ local DEFAULTS = {
     colorHeal = { 0.20, 0.92, 0.30 },
     colorHealCrit = { 0.25, 1.00, 0.35 },
     colorPet = { 1.00, 0.65, 0.20 },
+    colorMana = { 0.30, 0.69, 1.00 },
 }
 
 local SCHOOL_COLORS = {
@@ -168,14 +171,30 @@ end
 -- ============================================================================
 -- Пул фреймов и анимация всплывающего текста с иконкой
 -- ============================================================================
-local fallbackAnchor = CreateFrame("Frame", nil, UIParent)
-fallbackAnchor:SetWidth(1)
-fallbackAnchor:SetHeight(1)
-fallbackAnchor:SetPoint("CENTER", UIParent, "CENTER", 0, 140)
+-- Two screen zones for text that has no unit to sit on. Both can be moved in Edit Mode.
+local ZONE_POINT = "CENTER"
+local function CreateZone(name)
+    local zone = CreateFrame("Frame", name, UIParent)
+    zone:SetSize(150, 44)
+    zone.textPoint = ZONE_POINT
+    return zone
+end
+local fallbackAnchor = CreateZone("ForeverUICombatTextOutgoing")
+local playerAnchor = CreateZone("ForeverUICombatTextIncoming")
 
-local playerAnchor = CreateFrame("Frame", nil, UIParent)
-playerAnchor:SetWidth(1)
-playerAnchor:SetHeight(1)
+local function PlaceZone(zone, x, y)
+    local layout = ui.Settings().editLayout
+    local config = type(layout) == "table" and layout[zone:GetName()]
+    if type(config) == "table" and config.position then return end -- Edit Mode owns a moved zone
+    zone:ClearAllPoints()
+    zone:SetPoint("CENTER", UIParent, "CENTER", x, y)
+end
+
+local function PlaceZones()
+    PlaceZone(fallbackAnchor, db and db.fallbackOffsetX or 0, db and db.fallbackOffsetY or 140)
+    PlaceZone(playerAnchor, 0, -90)
+end
+fallbackAnchor:SetPoint("CENTER", UIParent, "CENTER", 0, 140)
 playerAnchor:SetPoint("CENTER", UIParent, "CENTER", 0, -90)
 
 local function AcquireSCTFrame()
@@ -211,6 +230,23 @@ local fountainDir = 1
 
 local function SpawnCombatText(textStr, iconTex, r, g, b, isCrit, destGUID, destName, isIncomingOnPlayer)
     if not db or not db.enabled then return end
+
+    -- Pick the anchor first: with "only on units" text without a unit is dropped.
+    local anchorFrame
+    local baseOffsetY = 0
+    if isIncomingOnPlayer then
+        anchorFrame = playerAnchor
+    else
+        local plate = db.anchorToNameplates and ui.wfn.FindCombatTextAnchor(destGUID, destName)
+        if plate then
+            anchorFrame = plate
+            baseOffsetY = db.nameplateOffsetY or 18
+        elseif db.onlyOnUnits then
+            return
+        else
+            anchorFrame = fallbackAnchor
+        end
+    end
 
     local f = AcquireSCTFrame()
     local fontPath = GetConfiguredFontPath()
@@ -262,26 +298,9 @@ local function SpawnCombatText(textStr, iconTex, r, g, b, isCrit, destGUID, dest
         f.text:SetPoint("CENTER", f, "CENTER", 0, 0)
     end
 
-    -- Выбираем точку привязки (неймплейт или экран)
-    local anchorFrame
-    local baseOffsetY = 0
-    if isIncomingOnPlayer then
-        anchorFrame = playerAnchor
-        baseOffsetY = 0
-    else
-        local plate = db.anchorToNameplates and ui.wfn.FindCombatTextAnchor(destGUID, destName)
-        if plate then
-            anchorFrame = plate
-            baseOffsetY = db.nameplateOffsetY or 18
-        else
-            fallbackAnchor:ClearAllPoints()
-            fallbackAnchor:SetPoint("CENTER", UIParent, "CENTER", db.fallbackOffsetX or 0, db.fallbackOffsetY or 140)
-            anchorFrame = fallbackAnchor
-            baseOffsetY = 0
-        end
-    end
-
     f.anchorFrame = anchorFrame
+    f.anchorPoint = anchorFrame.textPoint or "TOP"
+    f.zoneScale = anchorFrame.textPoint and anchorFrame:GetScale() or 1
     f.anchorName, f.anchorGUID = anchorFrame.identityName, anchorFrame.identityGUID
     f.elapsed = 0
     f.duration = isCrit and ((db.duration or 1.35) * 1.15) or (db.duration or 1.35)
@@ -294,8 +313,8 @@ local function SpawnCombatText(textStr, iconTex, r, g, b, isCrit, destGUID, dest
     f.spreadX = math.random(28, 56) * f.dir
 
     f:SetAlpha(1)
-    f:SetScale(isCrit and 1.35 or 1.0)
-    f:SetPoint("CENTER", anchorFrame, "TOP", f.baseX, f.baseY)
+    f:SetScale((isCrit and 1.35 or 1.0) * f.zoneScale)
+    f:SetPoint("CENTER", anchorFrame, f.anchorPoint, f.baseX, f.baseY)
 
     table.insert(activeFrames, f)
     CombatText:SetScript("OnUpdate", CombatText.OnUpdate)
@@ -324,12 +343,12 @@ function CombatText:OnUpdate(elapsed)
             if f.isCrit then
                 if progress < 0.12 then
                     local pop = 1.0 + 0.45 * (progress / 0.12)
-                    f:SetScale(pop)
+                    f:SetScale(pop * f.zoneScale)
                 elseif progress < 0.25 then
                     local pop = 1.45 - 0.45 * ((progress - 0.12) / 0.13)
-                    f:SetScale(math.max(1.0, pop))
+                    f:SetScale(math.max(1.0, pop) * f.zoneScale)
                 else
-                    f:SetScale(1.0)
+                    f:SetScale(f.zoneScale)
                 end
             end
 
@@ -354,12 +373,20 @@ function CombatText:OnUpdate(elapsed)
                 dy = f.baseY + (floatH * progress)
             end
 
-            local anchor = f.anchorFrame
+            local anchor, point = f.anchorFrame, f.anchorPoint
             if not anchor:IsVisible() or anchor.identityName ~= f.anchorName or anchor.identityGUID ~= f.anchorGUID then
-                anchor = fallbackAnchor
+                anchor, point = fallbackAnchor, ZONE_POINT
+                if db.onlyOnUnits then
+                    -- The unit's plate is gone and the user does not want text on the screen.
+                    table.remove(activeFrames, i)
+                    ReleaseSCTFrame(f)
+                    anchor = nil
+                end
             end
-            f:ClearAllPoints()
-            f:SetPoint("CENTER", anchor, "TOP", dx, dy)
+            if anchor then
+                f:ClearAllPoints()
+                f:SetPoint("CENTER", anchor, point, dx, dy)
+            end
         end
     end
 end
@@ -442,6 +469,17 @@ function CombatText:COMBAT_LOG_EVENT_UNFILTERED(timestamp, eventType, sourceGUID
         end
     end
 
+    -- Mana restored to the player (powerType 0 is mana).
+    if isPlayerDest and db.showMana and (eventType == "SPELL_ENERGIZE" or eventType == "SPELL_PERIODIC_ENERGIZE") then
+        local spellId, spellName, spellSchool, amount, powerType = ...
+        if powerType == 0 and amount and amount > 0 then
+            local r, g, b = Colour("colorMana")
+            SpawnCombatText("+" .. FormatAmount(amount), GetSkillIcon(spellId, false, false), r, g, b, false,
+                destGUID, destName, true)
+        end
+        return
+    end
+
     -- 3. ВХОДЯЩЕЕ ИСЦЕЛЕНИЕ / УРОН ПО ИГРОКУ (от других источников)
     if isPlayerDest and not isPlayerSource then
         if db.showIncomingHeal and (eventType == "SPELL_HEAL" or eventType == "SPELL_PERIODIC_HEAL") then
@@ -488,6 +526,11 @@ local function RunTestBurst()
         local txt = (sample.heal and "+" or "") .. FormatAmount(sample.amount) .. (sample.crit and "!" or "")
         SpawnCombatText(txt, icon or "Interface\\Icons\\Spell_Fire_FlameBolt", r, g, b, sample.crit, targetGUID, targetName, false)
     end
+    -- Samples for the incoming zone: damage taken and mana restored.
+    local r, g, b = Colour("colorMana")
+    SpawnCombatText("-1520", "Interface\\Icons\\Spell_Fire_FlameBolt", 1.0, 0.25, 0.25, false, nil, nil, true)
+    SpawnCombatText("+3200", select(3, GetSpellInfo(29166)) or "Interface\\Icons\\Spell_Nature_Lightning", r, g, b,
+        false, nil, nil, true)
 end
 
 
@@ -500,6 +543,8 @@ local switches = {
     {"showIncomingDamage", "Входящий урон", "Incoming damage"},
     {"showIncomingHeal", "Входящее лечение", "Incoming healing"},
     {"showMisses", "Промахи и уклонения", "Misses and dodges"},
+    {"showMana", "Восстановление маны", "Mana restored"},
+    {"onlyOnUnits", "Только на юнитах (без текста на экране)", "On units only (no screen text)"},
     {"showIcons", "Иконки заклинаний", "Spell icons"},
     {"showSwingIcon", "Иконки автоатак", "Auto-attack icons"},
     {"fontShadow", "Тень текста", "Text shadow"},
@@ -542,6 +587,11 @@ CombatText:SetScript("OnEvent", function(self, event, ...)
     end
     ApplySystemDamageFont()
     self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    PlaceZones()
+    if ui.RegisterEditFrame then
+        ui.RegisterEditFrame(fallbackAnchor, L("Текст боя: исходящий", "Combat text: outgoing"), "combattext")
+        ui.RegisterEditFrame(playerAnchor, L("Текст боя: входящий", "Combat text: incoming"), "combattext")
+    end
 
     ui.CombatText.active = true
     SLASH_FOREVERUICOMBAT1 = "/nd"
@@ -554,6 +604,6 @@ end)
 
 ui.CombatText = {
     defaults = DEFAULTS, switches = switches, sliders = sliders, schools = SCHOOL_COLORS,
-    Apply = function() if db then ApplySystemDamageFont() end end,
+    Apply = function() if db then ApplySystemDamageFont(); PlaceZones() end end,
     Test = function() if db then RunTestBurst() end end,
 }

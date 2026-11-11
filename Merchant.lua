@@ -46,6 +46,7 @@ local function placeButton()
     if not button or not MerchantFrame:IsShown() or MerchantFrame.selectedTab ~= 1 then return end
     local repair = MerchantRepairAllButton
     local size = repair:IsShown() and repair:GetWidth() or 36
+    if not size or size < 24 then size = 36 end
     button:SetSize(size, size)
     if not repair:IsShown() then return end
 
@@ -62,6 +63,7 @@ local function updateButton()
     if not MerchantFrame:IsShown() then return end
     if not button then
         button = CreateFrame("Button", "ForeverStockSellJunkButton", MerchantFrame)
+        button:SetFrameLevel(MerchantFrame:GetFrameLevel() + 5)
         button:SetPoint("RIGHT", MerchantBuyBackItem, "LEFT", -9, 0)
         local background = button:CreateTexture(nil, "BACKGROUND")
         background:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -89,6 +91,20 @@ local function updateButton()
     placeButton()
 end
 
+-- Repair, guild-bank and durability data reach the client after the window opens (most visibly right after a
+-- dungeon), and the stock code re-lays the repair buttons then; check the button again a little later.
+local recheck = CreateFrame("Frame")
+local function scheduleRecheck()
+    local waited, passes = 0, 0
+    recheck:SetScript("OnUpdate", function(self, elapsed)
+        waited = waited + elapsed
+        if waited < 0.25 then return end
+        waited, passes = 0, passes + 1
+        updateButton()
+        if passes >= 4 or not MerchantFrame:IsShown() then self:SetScript("OnUpdate", nil) end
+    end)
+end
+
 local function junkCommand(message)
     local command, arg = message:match("^%s*(%S+)%s*(.-)%s*$")
     if command == "sell" then
@@ -111,7 +127,12 @@ end
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
 events:SetScript("OnEvent", function(self, event)
-    if event == "MERCHANT_SHOW" then
+    if event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
+        if event == "MERCHANT_UPDATE" then
+            if MerchantFrame:IsShown() then updateButton() end
+            return
+        end
+        scheduleRecheck()
         self:SetScript("OnUpdate", function(self)
             self:SetScript("OnUpdate", nil)
             updateButton()
@@ -123,12 +144,16 @@ events:SetScript("OnEvent", function(self, event)
     end
     self:UnregisterEvent("PLAYER_LOGIN")
     self:RegisterEvent("MERCHANT_SHOW")
+    self:RegisterEvent("MERCHANT_UPDATE")
     settings = ui.Settings()
     if type(settings.junkExceptions) ~= "table" then settings.junkExceptions = {} end
     SLASH_FOREVERSTOCKJUNK1 = "/fujunk"
     SlashCmdList.FOREVERSTOCKJUNK = junkCommand
     hooksecurefunc("MerchantFrame_Update", updateButton)
-    hooksecurefunc("MerchantFrame_UpdateRepairButtons", placeButton)
+    hooksecurefunc("MerchantFrame_UpdateRepairButtons", function()
+        updateButton()
+    end)
+    MerchantFrame:HookScript("OnShow", updateButton)
     updateButton()
 end)
 

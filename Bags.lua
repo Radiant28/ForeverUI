@@ -5,6 +5,8 @@ local backpackChrome = art .. "Backpack-Chrome"
 local backpackIcon = "Interface\\Buttons\\Button-Backpack-Up"
 local questBadgeArt = art .. "Quest-Bang"
 local backpackEdgeSize = 9
+-- Set to false to return to the original bag window art (Backpack-Edge / Backpack-Chrome).
+local newBagSkin = true
 local backpackInset = {
     bgFile = white, edgeFile = art .. "UnitFrame-Edge", edgeSize = 3,
     insets = { left = 1, right = 1, top = 1, bottom = 1 },
@@ -574,25 +576,38 @@ local function createInventory(panel, isBank)
         window:Hide()
 
         local edgeTexture = art .. "Backpack-Edge"
-        window:SetBackdrop({
-            bgFile = white, edgeFile = edgeTexture, edgeSize = backpackEdgeSize,
-            insets = { left = 4, right = 4, top = 4, bottom = 4 },
-        })
-        window:SetBackdropColor(0.115, 0.109, 0.109, 0.90)
         local header = window:CreateTexture(nil, "BORDER")
-        header:SetTexture(backpackChrome)
-        header:SetTexCoord(0, 1, 72 / 128, 120 / 128)
+        if newBagSkin then
+            window:SetBackdrop({
+                bgFile = white,
+                edgeFile = art .. "BagWindow-Edge", edgeSize = backpackEdgeSize + 2,
+                insets = { left = 4, right = 4, top = 4, bottom = 4 },
+            })
+            window:SetBackdropColor(0.16, 0.15, 0.145, 0.97)
+            header:SetTexture(art .. "BagWindow-Header")
+        else
+            window:SetBackdrop({
+                bgFile = white, edgeFile = edgeTexture, edgeSize = backpackEdgeSize,
+                insets = { left = 4, right = 4, top = 4, bottom = 4 },
+            })
+            window:SetBackdropColor(0.115, 0.109, 0.109, 0.90)
+            header:SetTexture(backpackChrome)
+            header:SetTexCoord(0, 1, 72 / 128, 120 / 128)
+        end
         header:SetPoint("TOPLEFT", window, "TOPLEFT", 5, -5)
         header:SetPoint("TOPRIGHT", window, "TOPRIGHT", -5, -5)
         header:SetHeight(18)
 
         -- Stretch the middle of the rotated top strip so its highlight does not repeat across the header.
-        local topEdge = window:CreateTexture(nil, "ARTWORK")
-        topEdge:SetTexture(edgeTexture)
-        topEdge:SetTexCoord(0.25, 15 / 32, 0.375, 15 / 32, 0.25, 17 / 32, 0.375, 17 / 32)
-        topEdge:SetPoint("TOPLEFT", window, "TOPLEFT", backpackEdgeSize, 0)
-        topEdge:SetPoint("TOPRIGHT", window, "TOPRIGHT", -backpackEdgeSize, 0)
-        topEdge:SetHeight(backpackEdgeSize)
+        -- (Only for the original art; the new frame texture already has its own top edge.)
+        if not newBagSkin then
+            local topEdge = window:CreateTexture(nil, "ARTWORK")
+            topEdge:SetTexture(edgeTexture)
+            topEdge:SetTexCoord(0.25, 15 / 32, 0.375, 15 / 32, 0.25, 17 / 32, 0.375, 17 / 32)
+            topEdge:SetPoint("TOPLEFT", window, "TOPLEFT", backpackEdgeSize, 0)
+            topEdge:SetPoint("TOPRIGHT", window, "TOPRIGHT", -backpackEdgeSize, 0)
+            topEdge:SetHeight(backpackEdgeSize)
+        end
 
         local divider = window:CreateTexture(nil, "ARTWORK")
         divider:SetTexture(white)
@@ -635,8 +650,9 @@ local function createInventory(panel, isBank)
         footer:SetBackdrop(backpackInset)
         footer:SetBackdropColor(0.09, 0.087, 0.086, 0.98)
         footer:SetHeight(18)
-        footer:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", footerInset, footerInset)
-        footer:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -footerInset, footerInset)
+        local footerLift = newBagSkin and 2 or 0
+        footer:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", footerInset, footerInset + footerLift)
+        footer:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -footerInset, footerInset + footerLift)
         money = footer:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         money:SetPoint("RIGHT", footer, "RIGHT", -9, 0)
         if isBank then

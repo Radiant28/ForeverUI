@@ -4,7 +4,13 @@ local timeArt = art .. "Map\\Map-calendar"
 local headerTexture = art .. "Map\\Map-top"
 local headerIcons = art .. "Map\\Map-HeaderIcons"
 
-MinimapBorder:SetTexture(art .. "Map\\Map-Rim")
+-- The Retail layout swaps the bronze rim for DragonUI's silver ring with gold compass marks (same 200 px canvas and
+-- ring radius, so every button position stays valid).
+local function applyRim()
+    local retail = ui.Settings and ui.Settings().barLayout == "retail"
+    MinimapBorder:SetTexture(art .. (retail and "Map\\Retail-Border" or "Map\\Map-Rim"))
+end
+applyRim()
 MinimapBorder:SetTexCoord(0, 1, 0, 1)
 MinimapBorder:SetSize(200, 200)
 MinimapBorder:ClearAllPoints()
@@ -160,7 +166,9 @@ header:SetScript("OnUpdate", function(_, delta)
     if clock:IsShown() then clock:SetFormattedText("%02d:%02d", GetGameTime()) end
     if moon then
         -- The stock calendar still updates its hidden day/night texture.
-        if GameTimeTexture:GetTexCoord() >= 0.5 then moon:Show() else moon:Hide() end
+        -- The Retail layout has no day/night mark on the ring.
+        local retail = ui.Settings and ui.Settings().barLayout == "retail"
+        if not retail and GameTimeTexture:GetTexCoord() >= 0.5 then moon:Show() else moon:Hide() end
     end
     if WorldMapFrame and WorldMapFrame:IsShown() then
         refreshZone = true
@@ -574,4 +582,4 @@ events:SetScript("OnEvent", function(_, event, name)
     scheduleLayout()
 end)
 
-ui.Minimap = { Layout = function() scheduleLayout() end }
+ui.Minimap = { Layout = function() scheduleLayout() end, ApplyLayout = applyRim }

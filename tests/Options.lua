@@ -169,10 +169,10 @@ ui.Minimap = { Layout = recorder("minimap") }
 ui.Performance = { Apply = recorder("perf") }
 ui.Merchant = { Apply = recorder("merchant") }
 ui.ActionBars = { Apply = recorder("bars") }
-ui.MicroMenu = { ApplyColors = recorder("micro") }
+ui.MicroMenu = { ApplyColors = recorder("micro"), ApplyLayout = recorder("microLayout") }
 ui.Chat = { Apply = recorder("chat") }
 ui.Tooltip = { Apply = recorder("tooltip") }
-ui.EditMode = { Open = recorder("editOpen"), Apply = recorder("edit") }
+ui.EditMode = { Open = recorder("editOpen"), Apply = recorder("edit"), ApplyLayout = recorder("editLayout") }
 ui.CombatMeterLimits = { minWidth = 145, maxWidth = 600, minRows = 1, maxRows = 15 }
 ui.CombatMeter = { Apply = recorder("meter"), ResetWidth = recorder("meterWidth"), ResetDamageRows = recorder("rows"),
     ResetHealingRows = recorder("rows"), BuildPreview = function(parent) local f = CreateFrame("Frame", nil, parent); return 80 end }
@@ -189,8 +189,8 @@ ui.ItemLabels = {
 ui.CombatText = { defaults = { enabled = true, fontSize = 20, fontName = "Font", fontOutline = "OUTLINE", fontShadow = true,
     shortNumbers = false, showIcons = true, showSwingIcon = true, iconPosition = "LEFT", animStyle = "FOUNTAIN",
     anchorToNameplates = true, colorBySchool = true, colorNormal = { 1, 1, 1 }, colorCrit = { 1, 0.85, 0.15 },
-    colorHeal = { 0.2, 0.92, 0.3 }, colorHealCrit = { 0.25, 1, 0.35 }, colorPet = { 1, 0.65, 0.2 } },
-    switches = { { "enabled", "Вкл", "On" }, { "showMisses", "Промахи", "Misses" } },
+    colorMana = { 0.3, 0.69, 1 }, colorHeal = { 0.2, 0.92, 0.3 }, colorHealCrit = { 0.25, 1, 0.35 }, colorPet = { 1, 0.65, 0.2 } },
+    switches = { { "enabled", "Вкл", "On" }, { "showMisses", "Промахи", "Misses" }, { "showMana", "Мана", "Mana" } },
     sliders = { { "fontSize", "Размер", "Size", 12, 38, 1 } },
     schools = { [1] = { 1, 1, 0 }, [2] = { 1, 1, 0.5 }, [4] = { 1, 0.4, 0 }, [8] = { 0, 1, 0 }, [16] = { 0, 1, 1 },
         [32] = { 0.7, 0.4, 1 }, [64] = { 1, 0.5, 1 } },
