@@ -69,6 +69,51 @@ ChatFrame_AddMessageEventFilter("CHAT_MSG_LOOT", function(frame, _, message)
     return true
 end)
 
+-- Item icons in front of item links (port of ChatLootIcons). Registered after the
+-- loot-tab filter above, so it only runs for messages that survive it.
+local gsub, tostring, tonumber = string.gsub, tostring, tonumber
+local GetItemIcon, GetItemInfo = GetItemIcon, GetItemInfo
+local iconText = {}
+local iconSize
+
+local function itemIcon(link)
+    local id = tonumber(link:match("|Hitem:(%d+)"))
+    if not id then return end
+    local key = id * 100 + iconSize
+    local text = iconText[key]
+    if text then return text end
+    -- Both calls return nil for items the client has not cached yet; do not cache that.
+    local texture = GetItemIcon(id) or select(10, GetItemInfo(id))
+    if not texture then return end
+    text = "|T" .. texture .. ":" .. iconSize .. "|t"
+    iconText[key] = text
+    return text
+end
+
+local function addIcon(position, link, message)
+    -- Skip links that already follow an inline texture (another addon got there first).
+    if position > 2 and message:sub(position - 2, position - 1) == "|t" then return end
+    local icon = itemIcon(link)
+    if icon then return icon .. link end
+end
+
+local function addLootIcons(_, _, message, ...)
+    if type(message) ~= "string" then return end
+    local settings = ui.Settings()
+    if settings.chatLootIcons == false then return end
+    iconSize = tonumber(settings.chatLootIconSize) or 15
+    local result, count = gsub(message, "()(|c%x+|Hitem:.-|h|r)", function(position, link)
+        return addIcon(position, link, message)
+    end)
+    if count > 0 and result ~= message then return false, result, ... end
+end
+
+for _, event in ipairs({ "LOOT", "CHANNEL", "SAY", "YELL", "PARTY", "PARTY_LEADER", "RAID", "RAID_LEADER",
+    "RAID_WARNING", "GUILD", "OFFICER", "BATTLEGROUND", "BATTLEGROUND_LEADER", "WHISPER", "WHISPER_INFORM",
+    "SYSTEM" }) do
+    ChatFrame_AddMessageEventFilter("CHAT_MSG_" .. event, addLootIcons)
+end
+
 local events = CreateFrame("Frame")
 local function configureAll()
     events:SetScript("OnUpdate", function(self)

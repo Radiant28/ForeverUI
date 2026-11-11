@@ -38,3 +38,20 @@ ui.RegisterOptions("loot", {
         } },
     },
 })
+
+ui.RegisterOptions("chaticons", {
+    title = L("Иконки в чате", "Chat icons"),
+    description = L("Иконка предмета перед ссылкой в чате и в сообщениях о добыче.",
+        "Item icon in front of item links in chat and loot messages."),
+    icon = "Interface\\Icons\\INV_Misc_Gem_01",
+    group = "social", order = 20,
+    enable = "chatLootIcons",
+    sections = {
+        { options = {
+            { "toggle", "chatLootIcons", L("Иконки предметов в чате", "Item icons in chat"), default = true,
+                tooltip = L("Действует на новые сообщения.", "Applies to new messages.") },
+            { "range", "chatLootIconSize", L("Размер иконки", "Icon size"), min = 10, max = 32, step = 1,
+                default = 15, suffix = " px" },
+        } },
+    },
+})
