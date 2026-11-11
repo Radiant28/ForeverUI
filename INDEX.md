@@ -81,6 +81,7 @@ ui.RegisterOptions("id", { title=, description=, icon=, group="general|frames|co
 | Торговец (`merchant`) | `Merchant.lua` | `Options/Merchant.lua` | `ui.Merchant {Apply}`, `/fujunk` | Продажа хлама, раскладка окна торговца |
 | Чат и лут (`chat`, `loot`) | `Chat.lua`, `Loot.lua`, `LootRolls.lua` | `Options/Chat.lua` (обе схемы) | `ui.Chat {Apply}` | Окна чата (группа, гильдия, лут), скин окна добычи, анимация, роллы |
 | Иконки в чате (`chaticons`) | `Chat.lua` (`addLootIcons`, порт ChatLootIcons) | `Options/Chat.lua` | — | Иконка предмета перед ссылкой `|Hitem:` в лоте, say/yell, группе, рейде, гильдии, шёпоте, канале и системных. Ключи `chatLootIcons`, `chatLootIconSize`. Тест: `tests/ChatIcons.lua` |
+| Подсказки (`tooltip`) | `Tooltip.lua` (хук `GameTooltip_SetDefaultAnchor`, якорь `ForeverStockUITooltipAnchor` в Edit Mode) | `Options/Tooltip.lua` | `ui.Tooltip {Apply, anchor}` | Привязка к якорю или к курсору (`tooltipPosition`), масштаб (`tooltipScale`, он же слайдер Edit Mode), скрытие в бою (`tooltipCombat`: show/units/all) и клавиша-исключение (`tooltipCombatModifier`). Тест: `tests/Tooltip.lua` |
 | Общие (`general`) | — | `Options/General.lua` | — | Масштаб окна настроек, сброс всего |
 
 ## ForeverUI.lua (рамки юнитов): где что
