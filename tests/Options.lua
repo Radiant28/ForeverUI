@@ -171,6 +171,7 @@ ui.Merchant = { Apply = recorder("merchant") }
 ui.ActionBars = { Apply = recorder("bars") }
 ui.MicroMenu = { ApplyColors = recorder("micro") }
 ui.Chat = { Apply = recorder("chat") }
+ui.Tooltip = { Apply = recorder("tooltip") }
 ui.EditMode = { Open = recorder("editOpen"), Apply = recorder("edit") }
 ui.CombatMeterLimits = { minWidth = 145, maxWidth = 600, minRows = 1, maxRows = 15 }
 ui.CombatMeter = { Apply = recorder("meter"), ResetWidth = recorder("meterWidth"), ResetDamageRows = recorder("rows"),

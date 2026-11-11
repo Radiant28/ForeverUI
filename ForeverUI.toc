@@ -41,6 +41,7 @@ CombatMeter.lua
 CombatText.lua
 Cursor.lua
 CursorOptions.lua
+Tooltip.lua
 
 # Declarative option schemas, one file per module
 Options\General.lua
@@ -58,3 +59,4 @@ Options\Bags.lua
 Options\Equipment.lua
 Options\Merchant.lua
 Options\Chat.lua
+Options\Tooltip.lua
