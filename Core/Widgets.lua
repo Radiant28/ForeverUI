@@ -124,10 +124,12 @@ local function bindTooltip(frame, row)
             W.ShowTooltip(frame, row.opt.label, row.opt.tooltip, row.opt.module and row.opt)
         end
         if row.OnHover then row:OnHover(true) end
+        W.Redraw(frame)
     end)
     frame:HookScript("OnLeave", function()
         GameTooltip:Hide()
         if row.OnHover then row:OnHover(false) end
+        W.Redraw(frame)
     end)
 end
 W.BindTooltip = bindTooltip
@@ -191,6 +193,41 @@ function W.Scroll(parent)
     return scroll
 end
 
+-- The 3.3.5 client does not always repaint a ScrollFrame when something inside its scroll child changes
+-- (texts, colours, toggles stay stale until the frame scrolls or resizes, e.g. after switching pages).
+-- W.Redraw(frame) queues every scroll frame above `frame`: next frame the child rect is updated and the
+-- offset moves by half a pixel, the frame after it goes back. Nothing visible, but the content repaints.
+local redrawQueue = {}
+local redrawDriver = CreateFrame("Frame")
+local function redrawStep(self)
+    for scroll, phase in pairs(redrawQueue) do
+        if phase == 1 then
+            local offset = scroll:GetVerticalScroll() or 0
+            scroll.redrawOffset = offset
+            scroll:UpdateScrollChildRect()
+            scroll:SetVerticalScroll(offset >= 0.5 and offset - 0.5 or offset + 0.5)
+            redrawQueue[scroll] = 2
+        else
+            scroll:SetVerticalScroll(scroll.redrawOffset or 0)
+            if scroll.Update then scroll:Update() end
+            redrawQueue[scroll] = nil
+        end
+    end
+    if not next(redrawQueue) then self:SetScript("OnUpdate", nil) end
+end
+
+function W.Redraw(frame)
+    local node, any = frame, false
+    while node do
+        if node.ForeverScroll and not redrawQueue[node] then
+            redrawQueue[node] = 1
+            any = true
+        end
+        node = node.GetParent and node:GetParent()
+    end
+    if any then redrawDriver:SetScript("OnUpdate", redrawStep) end
+end
+
 local function forwardWheel(frame, delta)
     local parent = frame:GetParent()
     while parent do
@@ -227,8 +264,16 @@ function W.Button(parent, text, width, onClick, height)
         self:SetBackdropColor(rgba(S.surface))
         self:SetBackdropBorderColor(rgba(S.border))
     end)
-    button:SetScript("OnMouseDown", function(self) self:SetBackdropColor(rgba(S.surfaceActive)) end)
-    button:SetScript("OnMouseUp", function(self) self:SetBackdropColor(rgba(S.surfaceHover)) end)
+    button:SetScript("OnMouseDown", function(self)
+        self:SetBackdropColor(rgba(S.surfaceActive))
+        W.Redraw(self)
+    end)
+    button:SetScript("OnMouseUp", function(self)
+        self:SetBackdropColor(rgba(S.surfaceHover))
+        W.Redraw(self)
+    end)
+    button:HookScript("OnEnter", function(self) W.Redraw(self) end)
+    button:HookScript("OnLeave", function(self) W.Redraw(self) end)
     button:SetScript("OnDisable", function(self)
         self:SetAlpha(S.disabledAlpha)
         self:SetBackdropBorderColor(rgba(S.border))

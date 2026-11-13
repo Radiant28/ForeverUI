@@ -6,7 +6,13 @@ local rgba = W.rgba
 local max, min, floor = math.max, math.min, math.floor
 
 local WIDTH, HEIGHT = 860, 580
+-- Size limits for resizing with the right mouse button. No real minimum: only enough for the sidebar,
+-- the header and the footer so the window never collapses; narrow pages are laid out in what is left.
+local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 340, 1500, 160, 1100
 local SIDEBAR, HEADER, FOOTER = 208, 46, 34
+local function pageWidth(windowWidth)
+    return max(120, floor((windowWidth or WIDTH) + 0.5) - SIDEBAR - 48 - 8)
+end
 local PAGE_HEADER = 64
 
 local window, sidebar, pages, tabs, current, searchText = nil, nil, {}, {}, nil, ""
@@ -116,6 +122,7 @@ local function refreshPage(page)
         entry.frame:SetAlpha(enabled and 1 or S.disabledAlpha)
         if entry.opt.refresh then entry.opt.refresh(entry.frame, enabled) end
     end
+    W.Redraw(page.scroll)
     if page.resetButton then
         local any = false
         for _, opt in ipairs(spec.options) do
@@ -179,7 +186,8 @@ local function buildPage(spec)
     local scroll = W.Scroll(page)
     scroll:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 14)
     scroll:SetPoint("BOTTOMRIGHT", -24, 10)
-    local width = WIDTH - SIDEBAR - 48 - 8
+    local width = pageWidth(window:GetWidth())
+    page.builtWidth = width
     scroll.child:SetWidth(width)
     local y = 0
     for _, section in ipairs(spec.sections) do
@@ -214,6 +222,7 @@ local function selectModule(id)
     pages[id]:Show()
     pages[id]:Refresh()
     for _, tab in pairs(tabs) do paintTab(tab) end
+    W.Redraw(sidebar)
 end
 
 local function createTab(spec)
@@ -297,6 +306,7 @@ local function layoutSidebar()
         end
     end
     sidebar:SetContentHeight(-y + 8)
+    W.Redraw(sidebar)
     return first
 end
 
@@ -332,75 +342,113 @@ local function updateFooter()
             "Some changes take effect after a UI reload."))
         footer.status:SetTextColor(1, 0.62, 0.40)
     else
-        footer.status:SetText(L("Изменения применяются сразу · Shift + колесо — точная настройка · ПКМ по заголовку — масштаб",
-            "Changes apply instantly · Shift + wheel fine-tunes · right drag the header to scale"))
+        footer.status:SetText(L("Изменения применяются сразу · Shift + колесо — точная настройка · ПКМ по заголовку — размер окна",
+            "Changes apply instantly · Shift + wheel fine-tunes · right drag the header to resize"))
         footer.status:SetTextColor(rgba(S.muted))
     end
 end
 
 ---------------------------------------------------------------------------------------------------
--- Scaling with the right mouse button: hold it on the header (or the corner grip) and drag;
--- right/down grows, left/up shrinks. The top-left corner stays put; the value is saved snapped
--- to the "optionsScale" step on release.
+-- Resizing with the right mouse button: hold it on the header (or the corner grip) and drag;
+-- right makes the window wider, down makes it taller. The top-left corner stays put. On release the
+-- size is saved and, when the width changed, the pages are laid out again for the new width.
 ---------------------------------------------------------------------------------------------------
-local SCALE_MIN, SCALE_MAX = 50, 160
-local scaling
+local sizing
 
 local function cursor()
     local x, y = GetCursorPosition()
-    local s = UIParent:GetEffectiveScale()
+    local s = window:GetEffectiveScale()
     return x / s, y / s
 end
 
-local function pinTopLeft(scale, left, top)
+local function limits()
+    local scale = window:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    local screenW, screenH = UIParent:GetWidth() / scale, UIParent:GetHeight() / scale
+    return MIN_WIDTH, max(MIN_WIDTH, min(MAX_WIDTH, screenW - 20)), MIN_HEIGHT, max(MIN_HEIGHT, min(MAX_HEIGHT, screenH - 20))
+end
+
+local function applySavedSize()
+    local saved = ui.Settings().optionsSize
+    local width, height = WIDTH, HEIGHT
+    if type(saved) == "table" and ui.IsFinite(saved[1]) and ui.IsFinite(saved[2]) then
+        local minW, maxW, minH, maxH = limits()
+        width, height = max(minW, min(maxW, saved[1])), max(minH, min(maxH, saved[2]))
+    end
+    window:SetWidth(width)
+    window:SetHeight(height)
+end
+
+local function pinTopLeft(left, top)
     window:ClearAllPoints()
-    window:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left / scale, top / scale)
+    window:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
 end
 
-local function stopScaling()
-    if not scaling then return end
-    local state = scaling
-    scaling = nil
+-- Pages are laid out once for a width: after a width change they are built again.
+local function rebuildPages()
+    local width = pageWidth(window:GetWidth())
+    local stale = false
+    for _, page in pairs(pages) do
+        if page.builtWidth and page.builtWidth ~= width then stale = true end
+    end
+    if not stale then return end
+    W.CloseList()
+    for id, page in pairs(pages) do
+        page:Hide()
+        pages[id] = nil
+    end
+    if current then
+        local id = current
+        current = nil
+        selectModule(id)
+    end
+end
+
+local function stopSizing()
+    if not sizing then return end
+    sizing = nil
     window:SetScript("OnUpdate", nil)
-    window.scaleLabel:Hide()
-    local percent = floor(window:GetScale() * 100 / 5 + 0.5) * 5
-    percent = max(SCALE_MIN, min(SCALE_MAX, percent))
-    ui.SetOption("general", "optionsScale", percent)
-    pinTopLeft(window:GetScale(), state.left, state.top)
+    window.sizeLabel:Hide()
+    ui.Settings().optionsSize = { floor(window:GetWidth() + 0.5), floor(window:GetHeight() + 0.5) }
     savePosition()
+    rebuildPages()
 end
 
-local function startScaling()
-    if scaling or not window:GetLeft() then return end
-    local scale = window:GetScale()
+local function startSizing()
+    if sizing or not window:GetLeft() then return end
     local x, y = cursor()
-    scaling = { x = x, y = y, scale = scale, left = window:GetLeft() * scale, top = window:GetTop() * scale }
-    window.scaleLabel:Show()
+    sizing = { x = x, y = y, width = window:GetWidth(), height = window:GetHeight() }
+    pinTopLeft(window:GetLeft(), window:GetTop())
+    window.sizeLabel:Show()
     window:SetScript("OnUpdate", function()
         if not IsMouseButtonDown("RightButton") then
-            stopScaling()
+            stopSizing()
             return
         end
         local cx, cy = cursor()
-        local delta = (cx - scaling.x) - (cy - scaling.y)
-        local value = max(SCALE_MIN / 100, min(SCALE_MAX / 100, scaling.scale + delta / 500))
-        if math.abs(value - window:GetScale()) > 0.001 then
-            window:SetScale(value)
-            pinTopLeft(value, scaling.left, scaling.top)
+        local minW, maxW, minH, maxH = limits()
+        local width = max(minW, min(maxW, sizing.width + (cx - sizing.x)))
+        local height = max(minH, min(maxH, sizing.height - (cy - sizing.y)))
+        if math.abs(width - window:GetWidth()) > 0.5 or math.abs(height - window:GetHeight()) > 0.5 then
+            window:SetWidth(width)
+            window:SetHeight(height)
+            for _, page in pairs(pages) do
+                if page.scroll and page:IsShown() then page.scroll:Update() end
+            end
         end
-        window.scaleLabel:SetText(("%d%%"):format(floor(value * 100 + 0.5)))
+        window.sizeLabel:SetText(("%d × %d"):format(floor(width + 0.5), floor(height + 0.5)))
     end)
 end
 
-local function bindScaling(frame)
+local function bindSizing(frame)
     frame:EnableMouse(true)
-    frame:HookScript("OnMouseDown", function(_, button) if button == "RightButton" then startScaling() end end)
-    frame:HookScript("OnMouseUp", function(_, button) if button == "RightButton" then stopScaling() end end)
+    frame:HookScript("OnMouseDown", function(_, button) if button == "RightButton" then startSizing() end end)
+    frame:HookScript("OnMouseUp", function(_, button) if button == "RightButton" then stopSizing() end end)
 end
 
 local function createWindow()
     window = CreateFrame("Frame", "ForeverUIOptions", UIParent)
     window:SetSize(WIDTH, HEIGHT)
+    applySavedSize()
     window:SetFrameStrata("DIALOG")
     window:SetToplevel(true)
     window:SetClampedToScreen(true)
@@ -433,16 +481,16 @@ local function createWindow()
     version:SetPoint("LEFT", brand, "RIGHT", 10, -1)
     version:SetText("v" .. (GetAddOnMetadata(addonName, "Version") or "?"))
 
-    bindScaling(header)
+    bindSizing(header)
     header:HookScript("OnEnter", function(self)
         W.ShowTooltip(self, L("Окно настроек", "Settings window"),
-            L("ЛКМ — перетащить окно.\nПКМ (зажать и тянуть) — масштаб: вправо/вниз крупнее, влево/вверх мельче.",
-                "Left drag moves the window.\nRight drag scales it: right/down bigger, left/up smaller."))
+            L("ЛКМ — перетащить окно.\nПКМ (зажать и тянуть) — размер: вправо шире, вниз выше.\nМасштаб — во вкладке «Общие».",
+                "Left drag moves the window.\nRight drag resizes it: right is wider, down is taller.\nScale lives on the General page."))
     end)
     header:HookScript("OnLeave", GameTooltip_Hide)
-    window.scaleLabel = W.Text(header, W.fonts.heading)
-    window.scaleLabel:SetPoint("LEFT", version, "RIGHT", 14, 0)
-    window.scaleLabel:Hide()
+    window.sizeLabel = W.Text(header, W.fonts.heading)
+    window.sizeLabel:SetPoint("LEFT", version, "RIGHT", 14, 0)
+    window.sizeLabel:Hide()
 
     local close = W.CloseButton(header, function() window:Hide() end)
     close:SetPoint("RIGHT", -10, 0)
@@ -534,9 +582,10 @@ local function createWindow()
     grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
     grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
     grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-    bindScaling(grip)
+    bindSizing(grip)
     grip:SetScript("OnEnter", function(self)
-        W.ShowTooltip(self, L("Масштаб окна", "Window scale"), L("Зажмите ПКМ и тяните.", "Hold the right button and drag."))
+        W.ShowTooltip(self, L("Размер окна", "Window size"), L("Зажмите ПКМ и тяните: вправо шире, вниз выше.",
+            "Hold the right button and drag: right is wider, down is taller."))
     end)
     grip:SetScript("OnLeave", GameTooltip_Hide)
 
@@ -548,7 +597,7 @@ local function createWindow()
         for _, tab in pairs(tabs) do paintTab(tab) end
     end)
     window:SetScript("OnHide", function()
-        stopScaling()
+        stopSizing()
         W.CloseList()
         search:ClearFocus()
         PlaySound("igMainMenuClose")
@@ -588,6 +637,7 @@ ui.RegisterCallback("SettingChanged", function(id)
     if not window or not window:IsShown() then return end
     if current == id and pages[id] then pages[id]:Refresh() end
     if tabs[id] then paintTab(tabs[id]) end
+    W.Redraw(sidebar)
 end, "OptionsFrame")
 ui.RegisterCallback("ModuleReset", function(id)
     if pages[id] and window and window:IsShown() then pages[id]:Refresh() end

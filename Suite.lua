@@ -588,6 +588,26 @@ function Suite.ZoneType()
     return kind or "none"
 end
 
+-- Group role of a unit: "TANK", "HEALER", "DAMAGER" or nil. 3.3.5 UnitGroupRolesAssigned returns three
+-- booleans (later clients return a string); the raid main tank assignment counts as a tank.
+function Suite.UnitRole(unit)
+    if not unit or not UnitExists(unit) then return nil end
+    if UnitGroupRolesAssigned then
+        local a, b, c = UnitGroupRolesAssigned(unit)
+        if type(a) == "string" then
+            if a ~= "NONE" and a ~= "" then return a end
+        elseif a then
+            return "TANK"
+        elseif b then
+            return "HEALER"
+        elseif c then
+            return "DAMAGER"
+        end
+    end
+    if GetPartyAssignment and GetPartyAssignment("MAINTANK", unit) then return "TANK" end
+    return nil
+end
+
 function Suite.GroupType()
     if GetNumRaidMembers() > 0 then return "raid" end
     if GetNumPartyMembers() > 0 then return "party" end

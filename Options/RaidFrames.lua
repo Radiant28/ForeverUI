@@ -20,22 +20,52 @@ local grows = {
 local function buildPreview(parent, width)
     local rf = RF()
     if not rf or not ui.Suite then return ui.SuiteUI and ui.SuiteUI.Unavailable(parent, width) or 20 end
-    local box = CreateFrame("Frame", nil, parent)
-    box:SetWidth(width)
-    box:SetHeight(118)
-    W.Skin(box, { 0, 0, 0, 0.25 }, S.border)
-    box:SetPoint("TOPLEFT", 0, 0)
-    local preview = rf.BuildPreview(box, 120, 48)
-    preview:SetScale(1.6)
-    preview:SetPoint("LEFT", box, "LEFT", 14 / 1.6, 0)
-    local text = W.Description(box, L("Предпросмотр: здоровье 62%, входящее лечение, щит, баффы, проклятие (рассеивается) "
-        .. "и яд. Настройки сразу применяются и к настоящим фреймам. ПКМ по якорю рейда в режиме редактирования "
-        .. "открывает эту страницу. /fuiraid — диагностика.", "Preview: 62% health, incoming heals, a shield, buffs, a "
-        .. "dispellable curse and a poison. Settings apply to the real frames at once. Right click the raid anchor in "
-        .. "Edit Mode to open this page. /fuiraid prints diagnostics."), width - 230)
-    text:SetPoint("TOPLEFT", box, "TOPLEFT", 222, -10)
-    parent.preview = preview
-    return 124
+    -- The preview lives in a panel beside the options window (not in the scrolled page), so it stays
+    -- in view while the settings below are scrolled. It shows only while this page is open.
+    local host = ForeverUIOptions or parent
+    local SCALE, FRAME_W, FRAME_H = 1.7, 120, 48
+    local side = CreateFrame("Frame", nil, host)
+    side:SetWidth(FRAME_W * SCALE + 36)
+    side:SetPoint("TOPLEFT", host, "TOPRIGHT", 6, 0)
+    side:SetFrameStrata(host:GetFrameStrata() or "DIALOG")
+    side:SetClampedToScreen(true)
+    side:EnableMouse(true)
+    W.Skin(side, S.window, S.border)
+    local title = W.Text(side, W.fonts.heading)
+    title:SetPoint("TOPLEFT", 16, -14)
+    title:SetText(L("Предпросмотр", "Preview"))
+    local captions = {
+        tank = L("Щит без свечения, рамка угрозы", "Glow-free shield, threat border"),
+        healer = L("Входящее лечение, HoT в углах, яд", "Incoming heals, corner HoTs, a poison"),
+        dps = L("Проклятие, которое вы рассеиваете", "A curse you can dispel"),
+    }
+    local y, previews = -40, {}
+    for _, variant in ipairs(rf.previewOrder) do
+        local preview = rf.BuildPreview(side, FRAME_W, FRAME_H, variant)
+        preview:SetScale(SCALE)
+        preview:SetPoint("TOPLEFT", side, "TOPLEFT", 18 / SCALE, y / SCALE)
+        local caption = W.Text(side, W.fonts.small)
+        caption:SetPoint("TOPLEFT", side, "TOPLEFT", 18, y - FRAME_H * SCALE - 4)
+        caption:SetWidth(FRAME_W * SCALE)
+        caption:SetText(captions[variant] or "")
+        previews[#previews + 1] = preview
+        y = y - FRAME_H * SCALE - 30
+    end
+    local hint = W.Description(side, L("Настройки сразу применяются и к настоящим фреймам. /fuiraid — диагностика.",
+        "Settings apply to the real frames at once. /fuiraid prints diagnostics."), FRAME_W * SCALE)
+    hint:SetPoint("TOPLEFT", side, "TOPLEFT", 18, y + 4)
+    side:SetHeight(-y + 40)
+    side:Hide()
+    parent:SetScript("OnShow", function() side:Show() end)
+    parent:SetScript("OnHide", function() side:Hide() end)
+    if parent:IsVisible() then side:Show() end
+    parent.previews = previews
+
+    local note = W.Description(parent, L("Предпросмотр — справа от окна, он виден при прокрутке. ПКМ по якорю рейда в "
+        .. "режиме редактирования открывает эту страницу.", "The preview is to the right of the window and stays visible "
+        .. "while you scroll. Right click the raid anchor in Edit Mode to open this page."), width)
+    note:SetPoint("TOPLEFT", 0, 0)
+    return note:GetHeight() + 4
 end
 
 local function buildIndicators(parent, width)
@@ -169,7 +199,7 @@ ui.RegisterOptions("raidframes", {
         { options = {
             { "toggle", "rfEnabled", L("Включить доработку фреймов", "Enable the frame extension"), default = true },
             { "custom", build = buildPreview, refresh = function(holder)
-                if holder.preview and holder.preview.Refresh then holder.preview:Refresh() end
+                for _, preview in ipairs(holder.previews or {}) do preview:Refresh() end
             end },
         } },
         { title = L("Полосы", "Bars"), options = {
@@ -270,6 +300,31 @@ ui.RegisterOptions("raidframes", {
                     { "line", L("От левого края", "From the left edge") } } },
             { "select", "rfShieldAlign", L("Вертикально", "Vertical position"), default = "BOTTOM", depends = "rfShield",
                 values = { { "BOTTOM", L("Снизу", "Bottom") }, { "CENTER", L("По центру", "Centre") }, { "TOP", L("Сверху", "Top") } } },
+        } },
+        { title = L("Иконки ролей и сортировка", "Role icons and sorting"), options = {
+            { "toggle", "rfRoleIcon", L("Показывать иконку роли", "Show the role icon"), default = true },
+            { "select", "rfRoleSet", L("Набор иконок", "Icon set"), default = "blizzard2", depends = "rfRoleIcon",
+                values = function()
+                    local values = {}
+                    for _, set in ipairs(RF() and RF().roleSets or {}) do values[#values + 1] = { set[1], set[2] } end
+                    if #values == 0 then values[1] = { "blizzard2", "Blizzard" } end
+                    return values
+                end },
+            { "range", "rfRoleSize", L("Размер", "Size"), min = 6, max = 32, step = 1, default = 12, depends = "rfRoleIcon" },
+            { "select", "rfRoleAnchor", L("Позиция", "Position"), values = anchors, default = "TOPLEFT", depends = "rfRoleIcon" },
+            { "range", "rfRoleX", L("Смещение X", "Offset X"), min = -40, max = 40, step = 1, default = 2, depends = "rfRoleIcon" },
+            { "range", "rfRoleY", L("Смещение Y", "Offset Y"), min = -40, max = 40, step = 1, default = -2, depends = "rfRoleIcon" },
+            { "toggle", "rfRoleHideDamager", L("Не показывать иконку ДД", "Hide the damage dealer icon"), default = false,
+                depends = "rfRoleIcon" },
+            { "toggle", "rfRoleHideClient", L("Скрыть иконку роли клиента", "Hide the client's role icon"), default = true,
+                depends = "rfRoleIcon" },
+            { "toggle", "rfRoleSort", L("Сортировать ряд по ролям", "Sort the row by role"), default = false, protected = true,
+                tooltip = L("Работает, когда фреймы идут одним списком (без «держать группы вместе»). Применяется вне боя.",
+                    "Works when the frames form one list (not “keep groups together”). Applies out of combat.") },
+            { "select", "rfRoleOrder", L("Порядок ролей", "Role order"), default = "THD", depends = "rfRoleSort", protected = true,
+                values = { { "THD", L("Танки, хилы, ДД", "Tanks, healers, damage") },
+                    { "HTD", L("Хилы, танки, ДД", "Healers, tanks, damage") },
+                    { "TDH", L("Танки, ДД, хилы", "Tanks, damage, healers") } } },
         } },
         { title = L("Положение", "Position"), options = {
             { "toggle", "rfMoveContainer", L("Двигать контейнер якорем Edit Mode", "Move the container with the Edit Mode anchor"),

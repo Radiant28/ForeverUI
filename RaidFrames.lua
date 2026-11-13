@@ -38,6 +38,8 @@ local DEFAULTS = {
     rfShieldHeight = 0, rfShieldMode = "attached", rfShieldAlign = "BOTTOM", rfHideAbsorbGlow = true,
     rfIndicators = true, rfIndicatorTimer = true,
     rfMoveContainer = true,
+    rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
+    rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
 }
 RF.defaults = DEFAULTS
 
@@ -260,6 +262,9 @@ local function createDeco(frame)
     deco.border:EnableMouse(false)
     deco.border:Hide()
 
+    deco.role = layer:CreateTexture(nil, "OVERLAY")
+    deco.role:Hide()
+
     deco.text = layer:CreateFontString(nil, "OVERLAY")
     deco.text:SetPoint("BOTTOM", deco.health, "BOTTOM", 0, 2)
     deco.text:Hide()
@@ -352,6 +357,11 @@ applyStyle = function(deco)
     deco.shield:SetVertexColor(sc[1], sc[2], sc[3], (sc[4] or 1) * settings.rfShieldAlpha)
     hideClientAuras(deco, enabled and settings.rfHideClientAuras)
     hideGlows(deco)
+    local clientRole = deco.frame.roleIcon
+    if clientRole and clientRole.SetAlpha then
+        clientRole:SetAlpha(enabled and settings.rfRoleIcon and settings.rfRoleHideClient and 0 or 1)
+    end
+    deco.roleKey = nil
     -- Our shield replaces the client's one (no glow): keep theirs updating but invisible.
     local ownShield = enabled and settings.rfShield
     for _, region in ipairs({ deco.clientAbsorb, deco.clientAbsorbOverlay }) do
@@ -603,8 +613,10 @@ local function indicatorWidget(deco, index, entry)
         widget.text:SetPoint("CENTER", 0, 0)
         deco.indicators[index] = widget
     end
-    if widget.stamp ~= entry then
-        widget.stamp = entry
+    -- Restyle when the entry or any setting changed (RF.Apply bumps styleVersion): entries are edited in
+    -- place, so the table identity alone would keep the old size, colour or position (preview included).
+    if widget.stamp ~= entry or widget.styleVersion ~= RF.styleVersion then
+        widget.stamp, widget.styleVersion = entry, RF.styleVersion
         local size = entry.size or 8
         widget:SetWidth(size)
         widget:SetHeight(size)
@@ -899,6 +911,7 @@ local function refreshUnit(deco)
         byGUID[guid][deco] = true
     end
     deco.auraDirty, deco.healthDirty, deco.threatDirty = true, true, true
+    RF.UpdateRole(deco)
     updateRange(deco)
 end
 
@@ -981,7 +994,7 @@ end
 local events = CreateFrame("Frame")
 for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "UNIT_AURA", "UNIT_HEALTH", "UNIT_MAXHEALTH",
     "UNIT_THREAT_SITUATION_UPDATE", "UNIT_CONNECTION", "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE",
-    "UNIT_PET", "PLAYER_REGEN_ENABLED" }) do
+    "UNIT_PET", "PLAYER_REGEN_ENABLED", "PLAYER_ROLES_ASSIGNED" }) do
     events:RegisterEvent(event)
 end
 events:SetScript("OnEvent", function(_, event, unit)
@@ -998,6 +1011,7 @@ events:SetScript("OnEvent", function(_, event, unit)
         for _, deco in ipairs(ordered) do deco.unitDirty = true end
         anyDirty = true
         if event == "PLAYER_LOGIN" then RF.Init() end
+        if event ~= "PLAYER_REGEN_ENABLED" and event ~= "UNIT_PET" then RF.ApplySort(true) end
     end
 end)
 
@@ -1243,17 +1257,158 @@ if ForeverStockUIEditMode then
 end
 
 ---------------------------------------------------------------------------------------------------
+-- Role icons: several sets (Art/Roles, copied from Cell's third-party sets and MidUI), size, anchor,
+-- offsets, hide damage dealers, hide the client's own role icon.
+---------------------------------------------------------------------------------------------------
+local ROLE_PATH = "Interface\\AddOns\\ForeverUI\\Art\\Roles\\"
+-- Sheet layouts: the 256 px Blizzard 2 sheet and the 64 px small-circle sheet (Blizzard, MattUI, MidUI).
+local bigCoords = { TANK = { 0, 67 / 256, 67 / 256, 134 / 256 }, HEALER = { 67 / 256, 134 / 256, 0, 67 / 256 },
+    DAMAGER = { 67 / 256, 134 / 256, 67 / 256, 134 / 256 } }
+local smallCoords = { TANK = { 0, 19 / 64, 22 / 64, 41 / 64 }, HEALER = { 20 / 64, 39 / 64, 1 / 64, 20 / 64 },
+    DAMAGER = { 20 / 64, 39 / 64, 22 / 64, 41 / 64 } }
+RF.roleSets = {
+    { "blizzard2", "Blizzard", sheet = "Blizzard2_ROLES", coords = bigCoords },
+    { "blizzard", L("Blizzard (круглые)", "Blizzard (round)"), sheet = "Blizzard_ROLES", coords = smallCoords },
+    { "blizzard3", "Blizzard 3", prefix = "Blizzard3_" },
+    { "blizzard4", "Blizzard 4", prefix = "Blizzard4_" },
+    { "ffxiv", "FFXIV", prefix = "FFXIV_" },
+    { "miirgui", "MiirGui", prefix = "MiirGui_" },
+    { "mattui", "MattUI", sheet = "MattUI_ROLES", coords = smallCoords },
+    { "midui", "MidUI", sheet = "MidUI-Roles", coords = smallCoords },
+}
+local roleSetById = {}
+for _, set in ipairs(RF.roleSets) do roleSetById[set[1]] = set end
+
+-- Puts the icon of `role` from the chosen set on a texture; false when there is nothing to show.
+function RF.SetRoleTexture(texture, role, setId)
+    local set = roleSetById[setId] or RF.roleSets[1]
+    if role ~= "TANK" and role ~= "HEALER" and role ~= "DAMAGER" then return false end
+    if set.prefix then
+        texture:SetTexture(ROLE_PATH .. set.prefix .. role)
+        texture:SetTexCoord(0, 1, 0, 1)
+    else
+        local c = set.coords[role]
+        texture:SetTexture(ROLE_PATH .. set.sheet)
+        texture:SetTexCoord(c[1], c[2], c[3], c[4])
+    end
+    return true
+end
+
+function RF.UpdateRole(deco, forcedRole)
+    local settings = cfg()
+    local role = forcedRole or Suite.UnitRole(deco.unit)
+    if not (settings.rfEnabled and settings.rfRoleIcon) or not role
+        or (role == "DAMAGER" and settings.rfRoleHideDamager) then
+        deco.role:Hide()
+        deco.roleKey = nil
+        return
+    end
+    local key = role .. settings.rfRoleSet .. settings.rfRoleSize .. settings.rfRoleAnchor .. settings.rfRoleX .. settings.rfRoleY
+    if deco.roleKey ~= key then
+        deco.roleKey = key
+        RF.SetRoleTexture(deco.role, role, settings.rfRoleSet)
+        deco.role:SetWidth(settings.rfRoleSize)
+        deco.role:SetHeight(settings.rfRoleSize)
+        deco.role:ClearAllPoints()
+        local point = settings.rfRoleAnchor
+        deco.role:SetPoint(point, deco.health or deco.frame, point, settings.rfRoleX, settings.rfRoleY)
+    end
+    deco.role:Show()
+end
+
+---------------------------------------------------------------------------------------------------
+-- Sorting by role: the client's flow container sorts its unit tokens with container.flowSortFunc
+-- (Blizzard CompactRaidFrameContainer). Our function puts tanks, healers and damage dealers in the
+-- chosen order and keeps the client's own order inside each role. Protected layout: out of combat.
+---------------------------------------------------------------------------------------------------
+local orders = { THD = { TANK = 1, HEALER = 2, DAMAGER = 3 }, HTD = { HEALER = 1, TANK = 2, DAMAGER = 3 },
+    TDH = { TANK = 1, DAMAGER = 2, HEALER = 3 } }
+local sortOwners = {}   -- container -> its original flowSortFunc (false when it had none)
+
+local function unitIndex(unit)
+    if unit == "player" then return 0 end
+    return tonumber(tostring(unit):match("(%d+)$")) or 99
+end
+
+local function makeRoleSort(original)
+    return function(a, b)
+        local rank = orders[cfg().rfRoleOrder] or orders.THD
+        local ra, rb = rank[Suite.UnitRole(a) or ""] or 4, rank[Suite.UnitRole(b) or ""] or 4
+        if ra ~= rb then return ra < rb end
+        if original then return original(a, b) end
+        local ia, ib = unitIndex(a), unitIndex(b)
+        if ia ~= ib then return ia < ib end
+        return tostring(a) < tostring(b)
+    end
+end
+RF.MakeRoleSort = makeRoleSort
+
+local function relayout(container)
+    if type(_G.CompactRaidFrameContainer_TryUpdate) == "function" then
+        CompactRaidFrameContainer_TryUpdate(container)
+    elseif type(_G.CompactRaidFrameContainer_LayoutFrames) == "function" then
+        CompactRaidFrameContainer_LayoutFrames(container)
+    end
+end
+
+-- Returns true when the client supports a sort function on at least one container.
+function RF.ApplySort(onlyIfActive)
+    local settings = cfg()
+    local want = settings.rfEnabled and settings.rfRoleSort
+    if onlyIfActive and not want then return end
+    if InCombatLockdown() then
+        ui.RunOutOfCombat("rfRoleSort", function() RF.ApplySort() end)
+        return
+    end
+    local supported = false
+    for _, container in ipairs({ _G.CompactRaidFrameContainer, _G.CompactPartyFrame }) do
+        if container and (container.flowSortFunc ~= nil or sortOwners[container] ~= nil
+            or type(_G.CompactRaidFrameContainer_SetFlowSortFunction) == "function") then
+            supported = true
+            if want then
+                if sortOwners[container] == nil then
+                    local current = container.flowSortFunc
+                    sortOwners[container] = type(current) == "function" and current or false
+                end
+                local sorter = makeRoleSort(sortOwners[container] or nil)
+                if container == _G.CompactRaidFrameContainer and type(_G.CompactRaidFrameContainer_SetFlowSortFunction) == "function" then
+                    CompactRaidFrameContainer_SetFlowSortFunction(container, sorter)
+                else
+                    container.flowSortFunc = sorter
+                    relayout(container)
+                end
+            elseif sortOwners[container] ~= nil then
+                local original = sortOwners[container] or nil
+                sortOwners[container] = nil
+                if container == _G.CompactRaidFrameContainer and original
+                    and type(_G.CompactRaidFrameContainer_SetFlowSortFunction) == "function" then
+                    CompactRaidFrameContainer_SetFlowSortFunction(container, original)
+                else
+                    container.flowSortFunc = original
+                    relayout(container)
+                end
+            end
+        end
+    end
+    RF.sortSupported = supported
+    return supported
+end
+
+---------------------------------------------------------------------------------------------------
 -- Live apply from the options
 ---------------------------------------------------------------------------------------------------
+RF.styleVersion = 0
 function RF.Apply()
+    RF.styleVersion = RF.styleVersion + 1
     rebuildIndicatorLookup()
+    RF.ApplySort()
     for _, deco in ipairs(ordered) do
         for _, widget in pairs(deco.indicators) do widget.stamp = nil end
         applyStyle(deco)
         deco.unitDirty = true
     end
     anyDirty = true
-    if RF.preview and RF.preview.Refresh then RF.preview:Refresh() end
+    for _, preview in ipairs(RF.previews or {}) do preview:Refresh() end
 end
 
 function RF.ApplyLayout()
@@ -1273,72 +1428,106 @@ end, "RaidFramesSpells")
 ---------------------------------------------------------------------------------------------------
 -- Live preview for the options page: a mock unit button decorated by the same code
 ---------------------------------------------------------------------------------------------------
-function RF.BuildPreview(parent, width, height)
+-- Each variant shows one state clearly instead of everything on one frame.
+local previewVariants = {
+    tank = { name = L("Танк", "Tank"), class = "WARRIOR", health = 0.92, heal = 0, absorb = 0.3, role = "TANK",
+        threat = 3, deficit = "-1.2k",
+        buffs = { { name = "Power Word: Shield", icon = "Interface\\Icons\\Spell_Holy_PowerWordShield", duration = 30, left = 20, id = 17 } },
+        debuffs = {} },
+    healer = { name = L("Лекарь", "Healer"), class = "PRIEST", health = 0.62, heal = 0.15, absorb = 0, role = "HEALER",
+        deficit = "-9.5k",
+        buffs = {
+            { name = "Renew", icon = "Interface\\Icons\\Spell_Holy_Renew", duration = 15, left = 9, mine = true, id = 139 },
+            { name = "Rejuvenation", icon = "Interface\\Icons\\Spell_Nature_Rejuvenation", duration = 12, left = 6, mine = true, id = 774 },
+            { name = "Earth Shield", icon = "Interface\\Icons\\Spell_Nature_SkinofEarth", count = 6, duration = 600, left = 500, mine = true, id = 974 },
+        },
+        debuffs = { { name = "Poison", icon = "Interface\\Icons\\Ability_Creature_Poison_06", count = 3, type = "Poison", duration = 12, left = 4 } } },
+    dps = { name = L("Боец", "Damage"), class = "MAGE", health = 0.34, heal = 0.1, absorb = 0.08, role = "DAMAGER",
+        deficit = "-16.8k", dispel = "Curse",
+        buffs = {},
+        debuffs = { { name = "Curse", icon = "Interface\\Icons\\Spell_Shadow_CurseOfTounges", type = "Curse", duration = 20, left = 14 } } },
+}
+RF.previewOrder = { "tank", "healer", "dps" }
+RF.previews = {}
+
+local function demoAuras(list, now)
+    local result = {}
+    for i, aura in ipairs(list) do
+        result[i] = { name = aura.name, icon = aura.icon, count = aura.count or 0, type = aura.type, id = aura.id,
+            duration = aura.duration, expiration = now + (aura.left or 0), mine = aura.mine ~= false, caster = "player" }
+    end
+    return result
+end
+
+-- Live preview for the options page: a mock unit button decorated by the same code.
+function RF.BuildPreview(parent, width, height, variant)
+    width, height = width or 120, height or 48
+    local data = previewVariants[variant or "healer"] or previewVariants.healer
     local frame = CreateFrame("Frame", nil, parent)
-    frame:SetWidth(width or 110)
-    frame:SetHeight(height or 46)
+    frame:SetWidth(width)
+    frame:SetHeight(height)
     frame.healthBar = CreateFrame("StatusBar", nil, frame)
     frame.healthBar:SetPoint("TOPLEFT", 1, -1)
-    frame.healthBar:SetWidth((width or 110) - 2)
-    frame.healthBar:SetHeight((height or 46) - 9)
+    frame.healthBar:SetWidth(width - 2)
+    frame.healthBar:SetHeight(height - 9)
     frame.healthBar:SetMinMaxValues(0, 1)
-    frame.healthBar:SetValue(0.62)
+    frame.healthBar:SetValue(data.health)
     frame.powerBar = CreateFrame("StatusBar", nil, frame)
     frame.powerBar:SetPoint("TOPLEFT", frame.healthBar, "BOTTOMLEFT", 0, -1)
     frame.powerBar:SetPoint("BOTTOMRIGHT", -1, 1)
     frame.powerBar:SetMinMaxValues(0, 1)
     frame.powerBar:SetValue(0.8)
     frame.powerBar:SetStatusBarColor(0, 0.45, 1)
-    local name = frame.healthBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    name:SetPoint("TOPLEFT", 4, -3)
-    name:SetText(UnitName("player") or "Player")
     local deco = createDeco(frame)
     deco.preview = true
+    -- The name sits in the middle of the bar, clear of the corner indicators and icons.
+    local name = deco.layer:CreateFontString(nil, "OVERLAY")
+    name:SetFont(Suite.art.font, 11, "OUTLINE")
+    name:SetPoint("LEFT", frame.healthBar, "LEFT", 6, 1)
+    name:SetText(data.name)
+    local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[data.class]
+    if color then name:SetTextColor(color.r, color.g, color.b) end
     applyStyle(deco)
-    local now = GetTime()
-    local demoBuffs = {
-        { name = "Renew", icon = "Interface\\Icons\\Spell_Holy_Renew", count = 0, duration = 15, expiration = now + 9, mine = true, id = 139 },
-        { name = "Rejuvenation", icon = "Interface\\Icons\\Spell_Nature_Rejuvenation", count = 0, duration = 12, expiration = now + 6, mine = true, id = 774 },
-        { name = "Power Word: Shield", icon = "Interface\\Icons\\Spell_Holy_PowerWordShield", count = 0, duration = 30, expiration = now + 20, mine = true, id = 17 },
-        { name = "Earth Shield", icon = "Interface\\Icons\\Spell_Nature_SkinofEarth", count = 6, duration = 600, expiration = now + 500, mine = true, id = 974 },
-    }
-    local demoDebuffs = {
-        { name = "Curse", icon = "Interface\\Icons\\Spell_Shadow_CurseOfTounges", count = 0, type = "Curse", duration = 20, expiration = now + 14 },
-        { name = "Poison", icon = "Interface\\Icons\\Ability_Creature_Poison_06", count = 3, type = "Poison", duration = 12, expiration = now + 4 },
-        { name = "Wound", icon = "Interface\\Icons\\Ability_Gouge", count = 0, duration = 8, expiration = now + 6 },
-    }
     function frame:Refresh()
         applyStyle(deco)
         local settings = cfg()
         local mode = settings.rfHealthColorMode
-        if mode == "class" then
-            frame.healthBar:SetStatusBarColor(classColor("player"))
+        local bar = frame.healthBar
+        if mode == "class" and color then
+            bar:SetStatusBarColor(color.r, color.g, color.b)
         elseif mode == "custom" then
             local c = settings.rfHealthColor
-            frame.healthBar:SetStatusBarColor(c[1], c[2], c[3])
+            bar:SetStatusBarColor(c[1], c[2], c[3])
         elseif mode == "gradient" then
-            frame.healthBar:SetStatusBarColor(1, 1, 0)
+            local f = data.health
+            if f > 0.5 then bar:SetStatusBarColor((1 - f) * 2, 1, 0) else bar:SetStatusBarColor(1, f * 2, 0) end
         else
-            frame.healthBar:SetStatusBarColor(0, 0.8, 0)
+            bar:SetStatusBarColor(0.1, 0.75, 0.2)
         end
-        RF.DrawBars(deco, 0.62, 0.14, 0.18)
-        local buffs, debuffs = {}, {}
-        for i, aura in ipairs(demoBuffs) do buffs[i] = Suite.Copy(aura) end
-        for i, aura in ipairs(demoDebuffs) do debuffs[i] = Suite.Copy(aura) end
+        RF.DrawBars(deco, data.health, data.heal, data.absorb)
+        local now = GetTime()
+        local buffs, debuffs = demoAuras(data.buffs, now), demoAuras(data.debuffs, now)
         deco.unit = "player"
-        drawIndicators(deco, buffs, debuffs, GetTime())
-        -- the preview pretends the player can dispel the curse whatever the class
+        drawIndicators(deco, buffs, debuffs, now)
+        -- only the "damage" variant shows a debuff the player can remove, whatever the real class
         local canDispel = Suite.CanDispel
-        Suite.CanDispel = function(kind) return kind == "Curse" end
-        RF.DrawAuras(deco, buffs, debuffs, GetTime())
+        Suite.CanDispel = function(kind) return data.dispel ~= nil and kind == data.dispel end
+        RF.DrawAuras(deco, buffs, debuffs, now)
         Suite.CanDispel = canDispel
-        deco.border:SetBackdropBorderColor(1, 0.6, 0, 1)
-        Suite.Shown(deco.border, settings.rfEnabled and settings.rfThreat)
-        deco.text:SetText(settings.rfDeficitText == "percent" and "62%" or settings.rfDeficitText == "current" and "15.4k"
-            or "-9.5k")
-        Suite.Shown(deco.text, settings.rfEnabled and settings.rfDeficitText ~= "none")
+        if data.threat and settings.rfEnabled and settings.rfThreat then
+            deco.border:SetBackdropBorderColor(1, 0.15, 0.1, 1)
+            deco.border:Show()
+        else
+            deco.border:Hide()
+        end
+        RF.UpdateRole(deco, data.role)
+        local text = settings.rfDeficitText
+        deco.text:SetText(text == "percent" and (math.floor(data.health * 100) .. "%")
+            or text == "current" and Suite.ShortNumber(data.health * 25000) or data.deficit)
+        Suite.Shown(deco.text, settings.rfEnabled and text ~= "none")
     end
     frame:Refresh()
+    RF.previews[#RF.previews + 1] = frame
     RF.preview = frame
     return frame
 end
@@ -1383,6 +1572,10 @@ SlashCmdList.FOREVERUIRAID = function(input)
         if type(_G[name]) == "function" then hooks[#hooks + 1] = name end
     end
     ui.Print(L("Хуки: ", "Hooks: ") .. (#hooks > 0 and table.concat(hooks, ", ") or "-"))
+    local container = _G.CompactRaidFrameContainer
+    ui.Print(L("Сортировка по ролям: ", "Role sorting: ") .. ((container and (container.flowSortFunc ~= nil
+        or type(_G.CompactRaidFrameContainer_SetFlowSortFunction) == "function")) and L("поддерживается", "supported")
+        or L("клиент не даёт функцию сортировки", "the client exposes no sort function")))
     ui.Print(L("Источник поглощений: ", "Absorb source: ") .. (UnitGetTotalAbsorbs and "API" or (deco and deco.clientAbsorb and "client bar") or "-")
         .. L(", входящее лечение: ", ", incoming heals: ") .. (RF.healSource or "-"))
 end
