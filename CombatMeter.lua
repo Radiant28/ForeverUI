@@ -3,7 +3,8 @@ local ru = ui.russian
 local data = ui.CombatMeterData
 local art = "Interface\\AddOns\\ForeverUI\\Art\\DamageMeter"
 local sprites = {
-    header = { 0, 560, 0, 56 },
+    -- rows 47-55 of the sheet are a fading shadow: cut off so the bars start right under the header
+    header = { 0, 560, 0, 47 },
     row = { 272, 536, 64, 102 },
     mode = { 272, 326, 150, 204 },
     modePressed = { 328, 382, 150, 204 },
@@ -54,7 +55,8 @@ local demo = { demoDamage, {
     { name = demoDamage[1].name, class = "SHAMAN", total = 15110, percent = 82 },
     { name = demoDamage[3].name, class = "MAGE", total = 9870, percent = 54 },
 } }
-local headerHeight, rowGap = 29, 3
+local headerHeight = 29
+local function rowGap() return settings and settings.meterRowGap or 1 end
 local rowInset, fillInset = 2, 1
 local rowPadding = rowInset * 2
 local headerButtonLift = 2
@@ -113,16 +115,49 @@ local function button(parent, width, height, texture, action, hint)
     return control
 end
 
-local function numberText(amount, rate)
-    if not rate then return ("%.0f"):format(amount) end
-    local value = ("%.1f"):format(amount):gsub("%.0$", "")
-    if ru then value = value:gsub("%.", ",") end
-    return value
+-- Number style (settings): meterNumberFormat = full | tens | hundreds | short, meterDecimals 0-2 for
+-- rates and short values, meterTrimZeros drops ",0", meterSeparator groups thousands ("12 345").
+local suffixes = ru and { "к", "м", "млрд" } or { "k", "m", "b" }
+
+local function fixed(value, decimals)
+    local text = ("%." .. decimals .. "f"):format(value)
+    local options = settings or {}
+    if decimals > 0 and options.meterTrimZeros ~= false then text = text:gsub("%.?0+$", "") end
+    local sign, int, fraction = text:match("^(%-?)(%d+)(.*)$")
+    if not int then return text end
+    if options.meterSeparator then
+        int = int:reverse():gsub("(%d%d%d)", "%1 "):reverse():gsub("^ ", "")
+    end
+    if ru then fraction = fraction:gsub("%.", ",") end
+    return sign .. int .. fraction
 end
+
+local function numberText(amount, rate)
+    amount = amount or 0
+    local style = settings and settings.meterNumberFormat or "full"
+    local decimals = math.max(0, math.min(2, settings and settings.meterDecimals or 1))
+    if style == "short" then
+        local magnitude, value, suffix = math.abs(amount), amount, ""
+        if magnitude >= 1e9 then
+            value, suffix = amount / 1e9, suffixes[3]
+        elseif magnitude >= 1e6 then
+            value, suffix = amount / 1e6, suffixes[2]
+        elseif magnitude >= 1e3 then
+            value, suffix = amount / 1e3, suffixes[1]
+        end
+        return fixed(value, (suffix ~= "" or rate) and decimals or 0) .. suffix
+    end
+    local step = style == "tens" and 10 or style == "hundreds" and 100 or 1
+    if step > 1 then return fixed(math.floor(amount / step + 0.5) * step, 0) end
+    return fixed(amount, rate and decimals or 0)
+end
+ui.CombatMeterNumber = numberText
 
 local function formatValues(total, duration, rateFirst)
     local amount = numberText(total)
     local rate = numberText(total / math.max(1, duration), true)
+    local second = settings and settings.meterSecondary
+    if second == "none" then return rateFirst and rate or amount end
     if rateFirst then return rate .. " (" .. amount .. ")" end
     return amount .. " (" .. rate .. ")"
 end
@@ -155,9 +190,10 @@ local function makeRow(parent)
     row.icon = row:CreateTexture(nil, "OVERLAY")
     row.icon:SetWidth(26)
     row.icon:SetPoint("LEFT")
-    local track = row:CreateTexture(nil, "BACKGROUND")
-    sprite(track, "row")
-    track:SetAllPoints(row)
+    -- Solid track (the old sprite had a translucent gradient and a transparent strip below it).
+    row.track = row:CreateTexture(nil, "BACKGROUND")
+    row.track:SetTexture("Interface\\Buttons\\WHITE8X8")
+    row.track:SetAllPoints(row)
     row.fill = row:CreateTexture(nil, "ARTWORK")
     row.fill:SetPoint("TOPLEFT", row, "TOPLEFT", fillInset, -fillInset)
     row.value = row:CreateFontString(nil, "OVERLAY")
@@ -344,7 +380,7 @@ local function refresh(window)
 end
 
 local function rowStep()
-    return math.max(settings.meterRowHeight, settings.meterTextSize) + rowGap
+    return math.max(settings.meterRowHeight, settings.meterTextSize) + rowGap()
 end
 
 local function heightForRows(rows)
@@ -364,14 +400,18 @@ local function updateRows(window, previewRows)
     local font = type(NUMBERFONT) == "string" and NUMBERFONT or STANDARD_TEXT_FONT
     local fill = ui.MediaPath("meterbar", settings.meterBarTexture, true) or ui.MediaPath("meterbar", 1, true)
     for index, row in ipairs(window.rows) do
-        local y = -rowInset - (index - 1) * step - (step - rowGap - height) / 2
+        local y = -rowInset - (index - 1) * step - (step - rowGap() - height) / 2
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", window.content, "TOPLEFT", rowInset, y)
         row:SetPoint("TOPRIGHT", window.content, "TOPRIGHT", -rowInset, y)
         row:SetHeight(height)
-        row.icon:SetHeight(math.min(26, height))
+        -- Class sprites are square: the icon follows the row height in both directions.
+        local iconSize = math.min(26, height)
+        row.icon:SetSize(iconSize, iconSize)
         row.fill:SetHeight(height - 2 * fillInset)
         row.fill:SetTexture(fill)
+        local track = settings.meterRowColor or { 0.06, 0.06, 0.07, 1 }
+        row.track:SetVertexColor(track[1], track[2], track[3], track[4] or 1)
         row.name:SetFont(font, settings.meterTextSize, "OUTLINE")
         row.value:SetFont(font, settings.meterTextSize, "OUTLINE")
     end

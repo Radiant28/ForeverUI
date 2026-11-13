@@ -13,6 +13,70 @@ local function color(key, fallback)
     return type(value) == "table" and value or fallback
 end
 local function chromeColor() return color("ufChromeColor", { 0.93, 0.89, 0.82 }) end
+
+-- WoW Forever badges (Art/Forever/UnitBadges.tga, 256 x 64): left, right, top, bottom pixels.
+local badgeArt = art .. "Forever\\UnitBadges"
+local badgeCells = {
+    level = { 1, 38, 1, 41 }, alliance = { 40, 62, 1, 28 }, horde = { 64, 85, 1, 26 },
+    master = { 87, 103, 1, 17 }, leader = { 105, 119, 1, 11 },
+    tank = { 121, 137, 1, 17 }, healer = { 139, 155, 1, 17 }, damager = { 157, 173, 1, 17 },
+}
+local function setBadge(texture, key)
+    local cell = badgeCells[key]
+    texture:SetTexture(badgeArt)
+    texture:SetTexCoord(cell[1] / 256, cell[2] / 256, cell[3] / 64, cell[4] / 64)
+end
+-- Fits a badge into a box of `size` keeping its own proportions.
+local function badgeSize(key, size)
+    local cell = badgeCells[key]
+    local w, h = cell[2] - cell[1], cell[4] - cell[3]
+    local k = size / math.max(w, h)
+    return w * k, h * k
+end
+
+-- The stock code sets these icons itself (faction on PvP flag changes, role from the LFG assignment):
+-- the hook swaps in the Forever art each time and leaves anything else (FFA flag) to the client.
+local swapping = {}
+local function hookFaction(icon, size)
+    if not icon or swapping[icon] ~= nil then return end
+    swapping[icon] = false
+    local stockW, stockH = icon:GetSize()
+    hooksecurefunc(icon, "SetTexture", function(self, path)
+        if swapping[self] then return end
+        local key = type(path) == "string" and (path:find("PVP%-Alliance") and "alliance" or path:find("PVP%-Horde") and "horde")
+        swapping[self] = true
+        if key then
+            setBadge(self, key)
+            self:SetSize(badgeSize(key, size))
+        else
+            self:SetTexCoord(0, 1, 0, 1)
+            self:SetSize(stockW, stockH)
+        end
+        swapping[self] = false
+    end)
+    local current = icon:GetTexture()
+    if current then icon:SetTexture(current) end
+end
+-- GetTexCoordsForRoleSmallCircle: tank starts at the left edge, healer at the top.
+local function hookRole(icon, size)
+    if not icon or swapping[icon] ~= nil then return end
+    swapping[icon] = false
+    local function swap(self, left, right, top)
+        if swapping[self] or type(left) ~= "number" or type(top) ~= "number" then return end
+        local key = left < 0.1 and "tank" or (top < 0.1 and "healer" or "damager")
+        swapping[self] = true
+        setBadge(self, key)
+        self:SetSize(size, size)
+        swapping[self] = false
+    end
+    hooksecurefunc(icon, "SetTexCoord", swap)
+    -- A role assigned before the skin: GetTexCoord gives the corners, upper-left first.
+    local texture = icon:GetTexture()
+    if type(texture) == "string" and texture:lower():find("portraitroles") then
+        local left, top = icon:GetTexCoord()
+        swap(icon, left, nil, top)
+    end
+end
 local function aggroColor() return color("ufAggroColor", { 1, 0.18, 0.08 }) end
 local function rgb(value) return value[1], value[2], value[3] end
 
@@ -21,20 +85,21 @@ local large = {
     portrait = { 157, 35, 53 }, health = { 12, 29, 119, 15 },
     power = { 12, 45, 119, 10 }, name = { 12, 16, 119 }, level = { 176, 56 },
 }
--- Chrome slot interiors measured on CharacterFrames.tga (texture px × 0.4) so the fills sit inside the borders.
--- Fills reach 2 px under the opaque chrome so its anti-aliased inner edge leaves no gap; neighbouring
--- slots meet in the middle of the 4 px border between them.
+-- Chrome: the WoW Forever player and target frames (uiunitframec60, 195 px wide) scaled to 480 px in
+-- CharacterFrames.tga and shown 192 px wide, so one source pixel is 192 / 195 display units. Slot interiors
+-- were measured on the source and are transparent in the atlas. Fills reach 1.5 px under the opaque chrome
+-- so its anti-aliased inner edge leaves no gap.
 local player = {
-    chrome = { 0, 178, 71 }, portrait = { 35.5, 35.5, 57 },
-    name = { 71.2, 15.6, 116 }, nameSlot = { 14.4, 14.4 }, health = { 69.2, 30.7, 120, 14.8 },
-    power = { 69.2, 45.5, 120, 12.4 }, level = { 13, 62 },
+    chrome = { 0, 170, 67.9 }, portrait = { 34, 34, 55.5 },
+    name = { 69.9, 14.2, 116.2 }, nameSlot = { 12.8, 14.8 }, health = { 67.4, 29, 122.1, 15.8 },
+    power = { 67.4, 44.8, 122.1, 10.9 }, level = { 12, 60.5 },
     aggro = true,
 }
 local target = {
-    chrome = { 192, 187, 75 }, portrait = { 157, 37.3, 57 },
-    name = { 6, 15.6, 114 }, nameSlot = { 14.1, 15.2 }, nameFill = { 3.2, 12.1, 119.6, 19.2 },
-    health = { 3.2, 31.3, 119.6, 16 }, power = { 3.2, 47.7, 119.6, 15.2 },
-    level = { 179, 63.5 }, aggro = true,
+    chrome = { 192, 172, 68.9 }, portrait = { 158.5, 34, 55 },
+    name = { 7.9, 13.2, 116.2 }, nameSlot = { 11.8, 14.8 }, nameFill = { 5.4, 10.3, 121.2, 17.8 },
+    health = { 4.4, 28, 122.1, 15.8 }, power = { 4.4, 43.8, 122.1, 10.9 },
+    level = { 180.5, 60 }, aggro = true,
 }
 local arena = {
     portrait = { 24, 23, 34 }, health = { 43, 17, 70, 10 },
@@ -106,8 +171,8 @@ local barPanels = {}
 local chromeRings, portraitRings, dividers, pvpIcons, restIcons = {}, {}, {}, {}, {}
 -- Halo textures generated from the chrome silhouette: canvas size and margin in CharacterFrames px.
 local chromeGlows = {
-    player = { file = "Player-ChromeGlow", margin = 28, width = 536, height = 234 },
-    target = { file = "Target-ChromeGlow", margin = 28, width = 536, height = 243 },
+    player = { file = "Player-ChromeGlow", margin = 28, width = 536, height = 226 },
+    target = { file = "Target-ChromeGlow", margin = 28, width = 536, height = 228 },
 }
 
 local function updateHealthColor(bar)
@@ -287,6 +352,7 @@ local function apply(frame, style, originX, originY, scale, flip)
     if pvpIcon then
         pvpIcons[pvpIcon] = true
         pvpIcon:SetAlpha(setting("ufShowPvP", false) and 1 or 0)
+        hookFaction(pvpIcon, 26)
     end
     if frame == PlayerFrame and PlayerPVPIconHitArea then PlayerPVPIconHitArea:EnableMouse(false) end
 
@@ -384,6 +450,19 @@ local function apply(frame, style, originX, originY, scale, flip)
     if role then
         role:SetParent(portraitLayer)
         role:SetDrawLayer("OVERLAY", 3)
+        hookRole(role, isParty and 11 or 14)
+    end
+
+    -- Leader crown and loot-master flag: the stock code only shows and hides these, so the art is set once.
+    local function foreverIcon(icon, suffix)
+        if not (icon and icon.SetTexture) then return end
+        if suffix == "LeaderIcon" then
+            setBadge(icon, "leader")
+            icon:SetSize(badgeSize("leader", 16))
+        elseif suffix == "MasterIcon" then
+            setBadge(icon, "master")
+            icon:SetSize(badgeSize("master", 14))
+        end
     end
 
     -- Leader, loot master, guide and raid-mark icons live on the stock art frame, which is now below the
@@ -395,6 +474,7 @@ local function apply(frame, style, originX, originY, scale, flip)
             if icon and icon.SetParent and icon.SetDrawLayer then
                 icon:SetParent(portraitLayer)
                 icon:SetDrawLayer("OVERLAY", 4)
+                foreverIcon(icon, suffix)
             end
         end
     end
@@ -484,15 +564,15 @@ local function apply(frame, style, originX, originY, scale, flip)
     if level and style.level then
         local x, y = unpack(style.level)
         local badge = portraitLayer:CreateTexture(nil, "OVERLAY", nil, -1)
-        badge:SetTexture(art .. "Level-Badge")
-        local badgeSize = isParty and 40 or 32
+        setBadge(badge, "level")
+        local badgeW, badgeH = badgeSize("level", isParty and 40 or 32)
         local function placeBadge()
             if rt and rt.on and rt.spec.level then
                 badge:ClearAllPoints()
                 badge:SetPoint("CENTER", rt.bg, "TOPLEFT", rt.spec.level[1], rt.spec.level[2])
-                badge:SetSize(badgeSize * scale, badgeSize * scale)
+                badge:SetSize(badgeW * scale, badgeH * scale)
             else
-                position(badge, "CENTER", x, y, badgeSize, badgeSize)
+                position(badge, "CENTER", x, y, badgeW, badgeH)
             end
         end
         if rt then rt.placeBadge = placeBadge end
@@ -605,13 +685,32 @@ local function apply(frame, style, originX, originY, scale, flip)
         skin.updateBadge()
         if PlayerRestIcon then
             PlayerRestIcon:SetAlpha(0)
+            -- WoW Forever resting animation: 42 frames of 60 x 60 px, 6 per row (360 x 420 of the 512 px sheet).
+            local CELL = 60 / 512
             local rest = portraitLayer:CreateTexture(nil, "OVERLAY", nil, 2)
-            rest:SetTexture(frameArt)
-            rest:SetTexCoord(0, 64 / 512, 384 / 512, 448 / 512)
-            rest:SetSize(24 * scale, 24 * scale)
-            rest:SetPoint("BOTTOMLEFT", portrait, "TOPRIGHT", -18 * scale, -4 * scale)
+            rest:SetTexture(art .. "Forever\\Rest-Flipbook")
+            rest:SetTexCoord(0, CELL, 0, CELL)
+            rest:SetSize(30 * scale, 30 * scale)
+            rest:SetPoint("BOTTOMLEFT", portrait, "TOPRIGHT", -20 * scale, -6 * scale)
+            local restAnim = CreateFrame("Frame", nil, portraitLayer)
+            restAnim:Hide()
+            local frameIndex, waited = 0, 0
+            restAnim:SetScript("OnUpdate", function(self, elapsed)
+                waited = waited + elapsed
+                if waited < 0.05 then return end
+                waited = 0
+                frameIndex = (frameIndex + 1) % 42
+                local col, row = frameIndex % 6, math.floor(frameIndex / 6)
+                rest:SetTexCoord(col * CELL, (col + 1) * CELL, row * CELL, (row + 1) * CELL)
+            end)
             local function updateRest()
-                if PlayerRestIcon:IsShown() and setting("ufRestIcon", true) then rest:Show() else rest:Hide() end
+                if PlayerRestIcon:IsShown() and setting("ufRestIcon", true) then
+                    rest:Show()
+                    restAnim:Show()
+                else
+                    rest:Hide()
+                    restAnim:Hide()
+                end
             end
             restIcons[rest] = updateRest
             hooksecurefunc("PlayerFrame_UpdateStatus", updateRest)
@@ -624,7 +723,10 @@ local function apply(frame, style, originX, originY, scale, flip)
         end
         for _, suffix in ipairs({ "Status", "LeaderIcon", "GuideIcon", "MasterIcon", "Disconnect" }) do
             local icon = _G[prefix .. suffix]
-            if icon then icon:SetParent(portraitLayer) end
+            if icon then
+                icon:SetParent(portraitLayer)
+                foreverIcon(icon, suffix)
+            end
         end
         local ready = _G[prefix .. "ReadyCheck"]
         if ready then ready:SetFrameLevel(portraitLayer:GetFrameLevel() + 1) end
@@ -1014,6 +1116,71 @@ local function applyLayout()
         if type(skin) == "table" and skin.retail then skin.retail.set(on) end
     end
 end
+
+-- Rogue and druid combo points on the target frame: WoW Forever socket and red gem (Art/Forever/Combo-Points.tga,
+-- 64 x 32: socket at 1..25 x 1..25, gem at 32..48 x 1..18). The stock code only shows and hides the highlight.
+local comboArt = art .. "Forever\\Combo-Points"
+local function skinComboPoints()
+    for index = 1, 5 do
+        local point = _G["ComboPoint" .. index]
+        local gem = _G["ComboPoint" .. index .. "Highlight"]
+        if point and gem then
+            for _, region in ipairs({ point:GetRegions() }) do
+                if region:GetObjectType() == "Texture" and region:GetDrawLayer() == "BACKGROUND" then
+                    region:SetTexture(comboArt)
+                    region:SetTexCoord(1 / 64, 25 / 64, 1 / 32, 25 / 32)
+                    region:ClearAllPoints()
+                    region:SetPoint("CENTER", point, "CENTER", 0, 0)
+                    region:SetSize(13, 13)
+                end
+            end
+            gem:SetTexture(comboArt)
+            gem:SetTexCoord(32 / 64, 48 / 64, 1 / 32, 18 / 32)
+            gem:ClearAllPoints()
+            gem:SetPoint("CENTER", point, "CENTER", 0, 0.5)
+            gem:SetSize(9, 9.5)
+            local shine = _G["ComboPoint" .. index .. "Shine"]
+            if shine then shine:SetAlpha(0) end
+        end
+    end
+end
+-- Death knight runes: the stock code sets "UI-PlayerFrame-Deathknight-<Type>" on each rune icon; the WoW Forever
+-- skull of that type is swapped in (Art/Forever/Runes.tga, 128 x 32, from uideathknightrunes).
+local runeArt = art .. "Forever\\Runes"
+local runeCells = {
+    blood = { 1, 18, 1, 27 }, death = { 33, 50, 1, 28 }, frost = { 65, 82, 1, 27 }, unholy = { 97, 114, 1, 27 },
+}
+local runeSwapping = {}
+local function skinRunes()
+    for index = 1, 6 do
+        local icon = _G["RuneButtonIndividual" .. index .. "Rune"]
+        if icon and runeSwapping[icon] == nil then
+            runeSwapping[icon] = false
+            local stockW, stockH = icon:GetSize()
+            local function swap(self, path)
+                if runeSwapping[self] or type(path) ~= "string" then return end
+                local kind = path:lower():match("deathknight%-(%a+)$")
+                local cell = kind and runeCells[kind]
+                if not cell then return end
+                runeSwapping[self] = true
+                self:SetTexture(runeArt)
+                self:SetTexCoord(cell[1] / 128, cell[2] / 128, cell[3] / 32, cell[4] / 32)
+                local h = math.max(stockH or 0, 18)
+                self:SetSize(h * (cell[2] - cell[1]) / (cell[4] - cell[3]), h)
+                runeSwapping[self] = false
+            end
+            hooksecurefunc(icon, "SetTexture", swap)
+            swap(icon, icon:GetTexture())
+        end
+    end
+end
+
+local comboDriver = CreateFrame("Frame")
+comboDriver:RegisterEvent("PLAYER_LOGIN")
+comboDriver:SetScript("OnEvent", function()
+    skinComboPoints()
+    skinRunes()
+end)
 
 ui.UnitFrames = {
     ApplyLayout = applyLayout,

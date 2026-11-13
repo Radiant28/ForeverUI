@@ -332,10 +332,70 @@ local function updateFooter()
             "Some changes take effect after a UI reload."))
         footer.status:SetTextColor(1, 0.62, 0.40)
     else
-        footer.status:SetText(L("Изменения применяются сразу · Shift + колесо — точная настройка ползунка",
-            "Changes apply instantly · Shift + wheel fine-tunes a slider"))
+        footer.status:SetText(L("Изменения применяются сразу · Shift + колесо — точная настройка · ПКМ по заголовку — масштаб",
+            "Changes apply instantly · Shift + wheel fine-tunes · right drag the header to scale"))
         footer.status:SetTextColor(rgba(S.muted))
     end
+end
+
+---------------------------------------------------------------------------------------------------
+-- Scaling with the right mouse button: hold it on the header (or the corner grip) and drag;
+-- right/down grows, left/up shrinks. The top-left corner stays put; the value is saved snapped
+-- to the "optionsScale" step on release.
+---------------------------------------------------------------------------------------------------
+local SCALE_MIN, SCALE_MAX = 50, 160
+local scaling
+
+local function cursor()
+    local x, y = GetCursorPosition()
+    local s = UIParent:GetEffectiveScale()
+    return x / s, y / s
+end
+
+local function pinTopLeft(scale, left, top)
+    window:ClearAllPoints()
+    window:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left / scale, top / scale)
+end
+
+local function stopScaling()
+    if not scaling then return end
+    local state = scaling
+    scaling = nil
+    window:SetScript("OnUpdate", nil)
+    window.scaleLabel:Hide()
+    local percent = floor(window:GetScale() * 100 / 5 + 0.5) * 5
+    percent = max(SCALE_MIN, min(SCALE_MAX, percent))
+    ui.SetOption("general", "optionsScale", percent)
+    pinTopLeft(window:GetScale(), state.left, state.top)
+    savePosition()
+end
+
+local function startScaling()
+    if scaling or not window:GetLeft() then return end
+    local scale = window:GetScale()
+    local x, y = cursor()
+    scaling = { x = x, y = y, scale = scale, left = window:GetLeft() * scale, top = window:GetTop() * scale }
+    window.scaleLabel:Show()
+    window:SetScript("OnUpdate", function()
+        if not IsMouseButtonDown("RightButton") then
+            stopScaling()
+            return
+        end
+        local cx, cy = cursor()
+        local delta = (cx - scaling.x) - (cy - scaling.y)
+        local value = max(SCALE_MIN / 100, min(SCALE_MAX / 100, scaling.scale + delta / 500))
+        if math.abs(value - window:GetScale()) > 0.001 then
+            window:SetScale(value)
+            pinTopLeft(value, scaling.left, scaling.top)
+        end
+        window.scaleLabel:SetText(("%d%%"):format(floor(value * 100 + 0.5)))
+    end)
+end
+
+local function bindScaling(frame)
+    frame:EnableMouse(true)
+    frame:HookScript("OnMouseDown", function(_, button) if button == "RightButton" then startScaling() end end)
+    frame:HookScript("OnMouseUp", function(_, button) if button == "RightButton" then stopScaling() end end)
 end
 
 local function createWindow()
@@ -372,6 +432,17 @@ local function createWindow()
     local version = W.Text(header, W.fonts.small)
     version:SetPoint("LEFT", brand, "RIGHT", 10, -1)
     version:SetText("v" .. (GetAddOnMetadata(addonName, "Version") or "?"))
+
+    bindScaling(header)
+    header:HookScript("OnEnter", function(self)
+        W.ShowTooltip(self, L("Окно настроек", "Settings window"),
+            L("ЛКМ — перетащить окно.\nПКМ (зажать и тянуть) — масштаб: вправо/вниз крупнее, влево/вверх мельче.",
+                "Left drag moves the window.\nRight drag scales it: right/down bigger, left/up smaller."))
+    end)
+    header:HookScript("OnLeave", GameTooltip_Hide)
+    window.scaleLabel = W.Text(header, W.fonts.heading)
+    window.scaleLabel:SetPoint("LEFT", version, "RIGHT", 14, 0)
+    window.scaleLabel:Hide()
 
     local close = W.CloseButton(header, function() window:Hide() end)
     close:SetPoint("RIGHT", -10, 0)
@@ -456,6 +527,19 @@ local function createWindow()
     footer.edit:SetPoint("RIGHT", footer.reload, "LEFT", -8, 0)
     window.footer = footer
 
+    local grip = CreateFrame("Button", nil, window)
+    grip:SetSize(14, 14)
+    grip:SetPoint("BOTTOMRIGHT", -2, 2)
+    grip:SetFrameLevel(footer:GetFrameLevel() + 5)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    bindScaling(grip)
+    grip:SetScript("OnEnter", function(self)
+        W.ShowTooltip(self, L("Масштаб окна", "Window scale"), L("Зажмите ПКМ и тяните.", "Hold the right button and drag."))
+    end)
+    grip:SetScript("OnLeave", GameTooltip_Hide)
+
     window:SetScript("OnShow", function(self)
         self:SetScale((ui.Settings().optionsScale or 100) / 100)
         updateFooter()
@@ -464,6 +548,7 @@ local function createWindow()
         for _, tab in pairs(tabs) do paintTab(tab) end
     end)
     window:SetScript("OnHide", function()
+        stopScaling()
         W.CloseList()
         search:ClearFocus()
         PlaySound("igMainMenuClose")

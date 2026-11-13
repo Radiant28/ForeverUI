@@ -520,6 +520,14 @@ local function RegisterSchema(applyCVars, defaults)
         default = defaults.stackForever, apply = stackApply,
         tooltip = L("Плашки в одной точке выстраиваются столбиком снизу вверх и не перекрывают друг друга. Штатное раздвигание клиента при этом выключается, чтобы плашки не двигались дважды.",
             "Plates gathered at one spot line up in a column from the bottom and never cover each other. The client's own spreading is turned off so plates do not move twice.") }
+    visibility[#visibility + 1] = { "toggle", "stackNearestFirst", L("Ближайший остаётся на месте", "Nearest stays in place"),
+        default = defaults.stackNearestFirst, apply = stackApply, depends = "stackForever",
+        tooltip = L("В ряду не поднимается плашка ближайшего юнита: поднимаются те, кто стоит позади него.",
+            "In the column the nearest unit's plate does not move; the plates of units behind it are lifted instead.") }
+    visibility[#visibility + 1] = { "range", "stackBehindAlpha", L("Непрозрачность плашек позади", "Opacity of plates behind"),
+        min = 0.1, max = 1, step = 0.05, default = defaults.stackBehindAlpha, apply = stackApply, depends = "stackForever",
+        tooltip = L("Плашки, поднятые над более близкой в ряду, рисуются прозрачнее. Цель не затрагивается. 1 — без изменений.",
+            "Plates lifted over a nearer one in the column are drawn fainter. The target is never affected. 1 keeps them as they are.") }
     visibility[#visibility + 1] = { "toggle", "stacking", L("Нативное размещение в стек", "Native stacking"),
         default = defaults.stacking, apply = applyCVars, protected = true,
         depends = function(get) return not get("stackForever") end }

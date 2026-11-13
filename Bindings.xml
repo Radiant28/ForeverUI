@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="FOREVERUI_TOGGLE_KEYHINTS" header="FOREVERUI">
+		ForeverStockUI_ToggleKeyHints()
+	</Binding>
+</Bindings>
