@@ -29,6 +29,16 @@ ui.RegisterOptions("actionbars", {
             { "button", L("Открыть режим редактирования", "Open Edit Mode"), func = function()
                 if ui.EditMode then ui.EditMode.Open() end
             end },
+            { "button", L("Назначить клавиши ячейкам", "Bind keys to slots"), func = function()
+                if not ui.KeyBinder then
+                    ui.Print(L("Модуль назначения клавиш не загружен: полностью перезапустите игру.",
+                        "The key binding module is not loaded: restart the game completely."))
+                    return
+                end
+                if ForeverUIOptions then ForeverUIOptions:Hide() end
+                ui.KeyBinder.Start()
+            end, tooltip = L("Наведите курсор на ячейку и нажмите клавишу. То же: кнопка «Назначение клавиш» в игровом меню или /fuibind.",
+                "Hover a slot and press a key. Same as the “Key bindings” game menu button or /fuibind.") },
             { "button", L("Штатные настройки панелей", "Stock action bar settings"), func = function()
                 if ForeverUIOptions then ForeverUIOptions:Hide() end
                 ui.OpenOptions(InterfaceOptionsActionBarsPanel)

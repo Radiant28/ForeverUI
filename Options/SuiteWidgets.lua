@@ -111,6 +111,7 @@ function SU.Grid(parent, x, y, width, columns)
             end
             if row.Refresh then row:Refresh() end
         end
+        W.Redraw(parent)
     end
     return grid
 end
@@ -211,6 +212,7 @@ function SU.List(parent, width, visible, rowHeight, onSelect)
         else
             thumb:Hide()
         end
+        W.Redraw(self)
     end
     return list
 end

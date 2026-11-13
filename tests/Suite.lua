@@ -508,6 +508,65 @@ tick(0.6)
 tick(0.05)
 assert(not shieldShown(others[2]), "the recycled frame drops the old shield")
 
+-- Role icons and sorting by role
+local roles = { raid1 = "TANK", raid2 = "HEALER", raid3 = "DAMAGER" }
+function UnitGroupRolesAssigned(unit)
+    local role = roles[unit]
+    return role == "TANK", role == "HEALER", role == "DAMAGER"
+end
+others[2].attributes.unit, others[2].unit, others[2].displayedUnit = "raid2", nil, nil
+others[3].attributes.unit = "raid3"
+button.roleIcon = CreateFrame("Frame", nil, button)
+RF.Apply()
+fire("PLAYER_ROLES_ASSIGNED")
+tick(0.05)
+local function decoOf(frame)
+    local found
+    RF.EachFrame(function(f, d) if f == frame then found = d end end)
+    return found
+end
+local tankRole = decoOf(button).role
+assert(tankRole.shown and tankRole.texture:find("Roles\\Blizzard2_ROLES", 1, true) and tankRole.width == 12, "tank icon")
+assert(button.roleIcon.alpha == 0, "the client's role icon is hidden")
+assert(decoOf(others[3]).role.shown, "damage dealers have an icon by default")
+settings.rfRoleHideDamager = true
+RF.Apply()
+tick(0.05)
+assert(not decoOf(others[3]).role.shown and decoOf(others[2]).role.shown, "the damage dealer icon can be hidden")
+settings.rfRoleSet, settings.rfRoleSize, settings.rfRoleAnchor, settings.rfRoleX = "ffxiv", 20, "CENTER", 5
+RF.Apply()
+tick(0.05)
+local healerRole = decoOf(others[2]).role
+assert(healerRole.texture:find("FFXIV_HEALER", 1, true) and healerRole.width == 20 and healerRole.points[1][1] == "CENTER"
+    and healerRole.points[1][4] == 5, "set, size and position")
+settings.rfRoleHideDamager = false
+-- sorting: the client's flow container gets a role-aware sort function
+local originalSort = function(a, b) return a > b end
+CompactRaidFrameContainer = CreateFrame("Frame", "CompactRaidFrameContainer", UIParent)
+CompactRaidFrameContainer.flowSortFunc = originalSort
+local relaid = 0
+function CompactRaidFrameContainer_TryUpdate() relaid = relaid + 1 end
+local function sorted(list)
+    table.sort(list, CompactRaidFrameContainer.flowSortFunc)
+    return table.concat(list, ",")
+end
+settings.rfRoleSort = true
+combat = true
+RF.ApplySort()
+assert(CompactRaidFrameContainer.flowSortFunc == originalSort, "nothing changes in combat")
+combat = false
+fire("PLAYER_REGEN_ENABLED")
+assert(sorted({ "raid3", "raid2", "raid1" }) == "raid1,raid2,raid3" and relaid >= 1, "tanks, healers, damage")
+settings.rfRoleOrder = "HTD"
+assert(sorted({ "raid3", "raid1", "raid2" }) == "raid2,raid1,raid3", "healers first")
+roles.raid4, roles.raid5 = "DAMAGER", "DAMAGER"
+local unitExists = UnitExists
+function UnitExists(unit) return unit == "raid4" or unit == "raid5" or unitExists(unit) end
+assert(sorted({ "raid4", "raid5", "raid3" }) == "raid5,raid4,raid3", "the client's order inside a role")
+settings.rfRoleSort, settings.rfRoleOrder = false, "THD"
+RF.ApplySort()
+assert(CompactRaidFrameContainer.flowSortFunc == originalSort, "turning it off restores the client's sort")
+
 ---------------------------------------------------------------------------------------------------
 -- Profiles: copy, switch, spec binding, import/export
 ---------------------------------------------------------------------------------------------------
@@ -538,6 +597,55 @@ for _, module in ipairs({ "cooldowns", "raidframes", "clickcast", "profiles" }) 
     ui.OpenOptions(module)
     assert(ForeverUIOptions:IsShown(), module)
 end
+local side = RF.previews[#RF.previews]:GetParent()
+assert(#RF.previews >= 3 and side:GetParent() == ForeverUIOptions, "three previews beside the options window")
+-- the page holder drives the panel (the real client sends OnHide/OnShow to children; the mock does not)
+local holder
+local function findHolder(frame)
+    for _, child in ipairs(frame.children or {}) do
+        if child.previews and child.previews[1] == RF.previews[#RF.previews - 2] then return child end
+        local found = findHolder(child)
+        if found then return found end
+    end
+end
+holder = findHolder(ForeverUIOptions)
+assert(holder, "the raid page keeps its previews")
+holder.scripts.OnHide(holder)
+assert(not side:IsShown(), "the side preview hides with the page")
+holder.scripts.OnShow(holder)
+assert(side:IsShown(), "and shows with it")
+-- Edited indicators restyle in the preview too (entries change in place).
+local renewEntry = Suite.Part("raid").indicators[1]
+local oldSize = renewEntry.size
+renewEntry.size = 20
+RF.Apply()
+local resized
+for _, preview in ipairs(RF.previews) do
+    for _, child in ipairs(preview.children) do
+        for _, w in ipairs(child.children or {}) do
+            if w.stamp == renewEntry and w.shown then resized = w.width end
+        end
+    end
+end
+assert(resized == 20, "the preview indicator follows its new size")
+renewEntry.size = oldSize
+RF.Apply()
+-- Scroll frames repaint after a change and keep their offset.
+local pageScroll
+local function findScroll(frame)
+    for _, child in ipairs(frame.children or {}) do
+        if child.ForeverScroll and child.shown and child.contentHeight and child.contentHeight > 500 then return child end
+        local found = findScroll(child)
+        if found then return found end
+    end
+end
+pageScroll = findScroll(ForeverUIOptions)
+pageScroll:SetVerticalScroll(120)
+ui.Widgets.Redraw(pageScroll)
+tick(0.02)
+assert(math.abs(pageScroll:GetVerticalScroll() - 119.5) < 0.01, "the redraw nudges the scroll frame")
+tick(0.02)
+assert(pageScroll:GetVerticalScroll() == 120, "and puts it back")
 ui.SetOption("raidframes", "rfShieldAlpha", 0.5)
 assert(Suite.Part("raid").rfShieldAlpha == 0.5, "the raid page writes into the active profile")
 CDM.OpenGroup(CDM.Groups()[2].id)
@@ -607,6 +715,46 @@ ActionButton1.scripts.OnEnter(ActionButton1)
 binder.scripts.OnKeyDown(binder, "ESCAPE")
 assert(not KB.IsActive() and not ForeverStockUIKeyBinder:IsShown(), "Esc leaves the mode")
 
+---------------------------------------------------------------------------------------------------
+-- Options window: right drag resizes width and height, pages follow the new width
+---------------------------------------------------------------------------------------------------
+UIParent.width, UIParent.height = 1920, 1080
+local cursorX, cursorY, rightDown = 500, 500, false
+function GetCursorPosition() return cursorX, cursorY end
+function IsMouseButtonDown(button) return button == "RightButton" and rightDown end
+ui.OpenOptions("cooldowns")
+local window = ForeverUIOptions
+local grip
+for _, child in ipairs(window.children) do
+    if child.kind == "Button" and child.width == 14 and child.scripts.OnMouseDown then grip = child end
+end
+assert(grip, "the resize grip exists")
+local function findPage()
+    for _, child in ipairs(window.children) do
+        for _, page in ipairs(child.children or {}) do
+            if page.builtWidth and page.shown then return page end
+        end
+    end
+end
+local before = findPage().builtWidth
+rightDown = true
+grip.scripts.OnMouseDown(grip, "RightButton")
+cursorX, cursorY = 700, 400
+window.scripts.OnUpdate(window, 0.02)
+assert(window.width == 1060 and window.height == 680, "right is wider, down is taller")
+rightDown = false
+window.scripts.OnUpdate(window, 0.02)
+assert(ui.Settings().optionsSize[1] == 1060 and ui.Settings().optionsSize[2] == 680, "the size is saved")
+assert(findPage().builtWidth == before + 200, "the page is laid out again for the new width")
+assert(window.scale == 1 or window.scale == (ui.Settings().optionsScale or 100) / 100, "the scale is not touched")
+rightDown = true
+grip.scripts.OnMouseDown(grip, "RightButton")
+cursorX, cursorY = -2000, 3000
+window.scripts.OnUpdate(window, 0.02)
+assert(window.width == 340 and window.height == 160, "only a technical minimum remains")
+rightDown = false
+window.scripts.OnUpdate(window, 0.02)
+
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
     .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators), "
-    .. "option pages, action bar key binding; %d frames"):format(#objects))
+    .. "option pages, action bar key binding, options window resizing; %d frames"):format(#objects))

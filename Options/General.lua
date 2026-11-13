@@ -11,7 +11,8 @@ ui.RegisterOptions("general", {
         { title = L("Окно настроек", "Settings window"), options = {
             { "range", "optionsScale", L("Масштаб окна", "Window scale"), min = 50, max = 160, step = 5, default = 100,
                 suffix = "%", apply = function() ui.ApplyOptionsWindowScale() end,
-                tooltip = L("Также: зажмите ПКМ на заголовке окна и тяните.", "Also: hold the right button on the window header and drag.") },
+                tooltip = L("Размер окна (ширина и высота) меняется ПКМ: зажмите на заголовке окна и тяните.",
+                    "The window size (width and height) changes with a right drag on the window header.") },
         } },
         { title = L("Обслуживание", "Maintenance"), options = {
             { "button", L("Перезагрузить интерфейс", "Reload UI"), func = ReloadUI },
