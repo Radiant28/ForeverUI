@@ -533,7 +533,9 @@ assert(native:IsShown() and native:GetAlpha() == 0)
 assert(second.threatGlow:IsShown() and second.threatGlow.vertex[2] == 0.8)
 assert(second.scale > 0.8 and second.scale < 1)
 for _ = 1, 25 do tick() end
-assert(math.abs(second.scale - 0.8) < 0.0001 and math.abs(second:GetEffectiveAlpha() - 0.65) < 0.0001)
+-- The second plate is behind the first one in the column, so its distance fade is also scaled by stackBehindAlpha.
+local behind = second.stackBehind and cfg.stackBehindAlpha or 1
+assert(math.abs(second.scale - 0.8) < 0.0001 and math.abs(second:GetEffectiveAlpha() - 0.65 * behind) < 0.0001)
 assertChromePixels(768 / 1080, second)
 assertThreatAnchor(second)
 native:SetVertexColor(1, 0.6, 0)
@@ -757,7 +759,8 @@ assert(not ui.wfn.profile)
 for _ = 1, 40 do tick() end
 assert(cfg.stackForever and (view.stackOffset or 0) == 0, "lowest plate stays " .. tostring(view.stackOffset))
 local lift = second.stackOffset
-assert(lift and lift > 0 and math.abs(second.stackY - view.stackY - view.stackHeight) < 0.001, "second plate stacked")
+-- The second unit is the farthest (depth 75), so it rises above every nearer plate of the column.
+assert(lift and lift > 0 and second.stackY >= view.stackY + view.stackHeight - 0.001, "second plate stacked")
 assert(math.abs(second.points[1][5] - (cfg.plateOffsetY * second.nativeHealth:GetEffectiveScale()
     / second:GetEffectiveScale() + lift)) <= 1, "stack offset reaches the anchor")
 cfg.stackForever = false
@@ -768,6 +771,20 @@ assert(second.stackOffset == nil and cvars.nameplateAllowOverlap == "0", "native
 cfg.stackForever = true
 options.stacking.apply()
 assert(cvars.nameplateAllowOverlap == "1")
+
+-- Nearest first: when the second unit is nearer it keeps its spot, the first one is lifted and drawn fainter.
+local depthB = b.depth
+b.depth = 5
+for _ = 1, 40 do tick() end
+assert((second.stackOffset or 0) == 0 and (view.stackOffset or 0) > 0, "nearest plate stays, the one behind rises")
+assert(view.stackBehind and not second.stackBehind, "only the lifted plate is marked as behind")
+assert(cfg.stackNearestFirst == true and cfg.stackBehindAlpha == 0.7, "stack defaults")
+cfg.stackNearestFirst = false
+for _ = 1, 40 do tick() end
+assert((view.stackOffset or 0) == 0 and (second.stackOffset or 0) > 0, "screen order when nearest-first is off")
+cfg.stackNearestFirst = true
+b.depth = depthB
+for _ = 1, 40 do tick() end
 
 -- Clickbox mode (after RefinedBlizzPlates): the native frame is resized to the drawn plate, the drawn
 -- plate sits on its bottom, and offsets lift the real frame through clamp insets.
@@ -1046,7 +1063,7 @@ end
 assert(customs == 2 and keys.plateOffsetY.default == cfg.plateOffsetY and keys.auraTimerAnimation.values[2][1] == "forever")
 for _, key in ipairs({ "auraDebuffs", "auraBuffs", "auraMine", "auraOthers", "auraOthersClass", "auraTimerText", "auraTimerFont",
     "auraTimerSize", "auraTimerOutline", "auraTimerColour", "classColourEnemy", "classColourFriend", "friendlyNameOnly", "friendlyNPCNameOnly", "crowdSaver", "crowdThreshold", "edgeFade", "edgeFadeInner", "edgeFadeOuter", "npcTitles", "playerGuilds", "subtitleSize",
-    "nameMaxLetters", "nameTextColour" }) do
+    "nameMaxLetters", "nameTextColour", "stackNearestFirst", "stackBehindAlpha" }) do
     assert(keys[key], "schema option " .. key)
 end
 assert(keys.clickFollowsPlate == nil and keys.verticalSpacing.default == 0.9 and cfg.spacingDefault090)

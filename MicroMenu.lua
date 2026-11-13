@@ -2,7 +2,9 @@ local _, ui = ...
 local art = "Interface\\AddOns\\ForeverUI\\Art\\"
 local atlas = art .. "Micro-Color"
 
--- Cells are column-major, with six rows of four-state icons in the source atlas.
+-- Cells are column-major, with six rows of four-state icons in the source atlas. Micro-Color.blp holds the
+-- WoW Forever bronze icons (uimicromenuc602x) in these cells; the Store cart (60-62) has no Forever version
+-- and keeps its own icon on the Forever plate.
 local icons = {
     Character = { 8, 9, 8 },
     Spellbook = { 48, 46, 45 },
@@ -14,6 +16,7 @@ local icons = {
     LFD = { 21, 19, 18 },
     EncounterJournal = { 7, 5, 4 },
     Store = { 60, 61, 62 },
+    Collections = { 12, 11, 10 },
     MainMenu = { 40, 39, 37 },
     Help = { 17, 15, 14 },
 }
@@ -37,7 +40,8 @@ local retailCells = {
     talent = { up = {161, 199, 1, 53}, down = {81, 119, 271, 323}, mouseover = {81, 119, 1, 53}, disabled = {81, 119, 55, 107} },
 }
 local retailNames = { Character = "character", Spellbook = "spellbook", Talent = "talent", Achievement = "achievement",
-    QuestLog = "questlog", Socials = "socials", PVP = "pvp", LFD = "lfd", MainMenu = "mainmenu", Help = "help" }
+    QuestLog = "questlog", Socials = "socials", PVP = "pvp", LFD = "lfd", MainMenu = "mainmenu", Help = "help",
+    Collections = "collections" }
 local skins, stockSizes, stockInsets, stockPoints = {}, {}, {}, {}
 
 ui.MicroMenu = {
@@ -90,9 +94,15 @@ events:SetScript("OnEvent", function(self)
     local settings = ui.Settings()
     if settings.microEnabled == false then return end
     local hoverColor = type(settings.microHoverColor) == "table" and settings.microHoverColor or { 1, 0.84, 0.65 }
-    for name, cells in pairs(icons) do
-        local button = _G[name .. "MicroButton"]
-        if button then
+    -- Buttons the client patch adds (Store, Collections) may appear after login and get their textures
+    -- re-set by the client later: they are skinned when found and their texture setters are hooked.
+    local late = { Store = true, Collections = true }
+    local function findButton(name)
+        return _G[name .. "MicroButton"] or (name == "Collections" and _G.CollectionMicroButton)
+    end
+    local function skinButton(name, cells)
+        local button = findButton(name)
+        if button and not skins[name] then
             local plate = button:CreateTexture(nil, "BACKGROUND")
             setCell(plate, button, 8)
             local edge = button:CreateTexture(nil, "OVERLAY")
@@ -112,7 +122,7 @@ events:SetScript("OnEvent", function(self)
                 button[setter](button, atlas)
                 local texture = button[getter](button)
                 setCell(texture, button, cell)
-                if name == "Store" then
+                if late[name] then
                     -- Nozdor assigns the stock store textures on a delayed client update.
                     hooksecurefunc(button, setter, function(self)
                         local current = self[getter](self)
@@ -125,7 +135,69 @@ events:SetScript("OnEvent", function(self)
                     end)
                 end
             end
+            return true
         end
+    end
+    for name, cells in pairs(icons) do skinButton(name, cells) end
+    -- Late buttons: looked for once a second during the first 30 s after login.
+    local watch, waited, total = CreateFrame("Frame"), 0, 0
+    watch:SetScript("OnUpdate", function(self, elapsed)
+        waited, total = waited + elapsed, total + elapsed
+        if waited < 1 then return end
+        waited = 0
+        local added, missing = false, false
+        for name in pairs(late) do
+            if not skins[name] then
+                if skinButton(name, icons[name]) then added = true else missing = true end
+            end
+        end
+        if added and ui.MicroMenu.layout then ui.MicroMenu.layout() end
+        if not missing or total > 30 then self:SetScript("OnUpdate", nil) end
+    end)
+    -- /fuimicro lists every micro button the client has: name, shown, alpha and the normal texture.
+    SLASH_FUIMICRO1 = "/fuimicro"
+    SlashCmdList.FUIMICRO = function()
+        for key, value in pairs(_G) do
+            if type(key) == "string" and key:find("MicroButton$") and type(value) == "table" and value.GetObjectType then
+                local normal = value.GetNormalTexture and value:GetNormalTexture()
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("ForeverUI: %s shown=%s alpha=%.2f size=%dx%d tex=%s",
+                    key, tostring(value:IsShown()), value:GetAlpha(), value:GetWidth(), value:GetHeight(),
+                    tostring(normal and normal:GetTexture())))
+            end
+        end
+    end
+    -- Classic, with no position saved in Edit Mode: the row (with the client's extra buttons it is wider than the
+    -- stock point allows for) is centred between the page number of the main bar and the bag buttons. Only the
+    -- horizontal offset of the first button changes; the stock point itself is kept for Edit Mode's reset.
+    local function centreRow()
+        local first = CharacterMicroButton
+        local layout = ui.Settings().editLayout
+        local saved = type(layout) == "table" and layout.CharacterMicroButton
+        if not first or (type(saved) == "table" and saved.position) then return end
+        local leftEdge = MainMenuBarPageNumber or ActionBarUpButton
+        local rightEdge = CharacterBag3Slot or MainMenuBarBackpackButton
+        if not (leftEdge and rightEdge and leftEdge:GetRight() and rightEdge:GetLeft()) then return end
+        local function px(frame, value) return value * frame:GetEffectiveScale() end
+        local rowLeft, rowRight
+        for _, skin in pairs(skins) do
+            local b = skin.button
+            if b:IsShown() and b:GetLeft() then
+                rowLeft = math.min(rowLeft or math.huge, px(b, b:GetLeft()))
+                rowRight = math.max(rowRight or -math.huge, px(b, b:GetRight()))
+            end
+        end
+        if not rowLeft then return end
+        local space = (px(leftEdge, leftEdge:GetRight()) + px(rightEdge, rightEdge:GetLeft())) / 2
+        local shift = (space - (rowLeft + rowRight) / 2) / first:GetEffectiveScale()
+        if math.abs(shift) < 0.5 then return end
+        local point, relative, relativePoint, x, y = first:GetPoint(1)
+        if not point then return end
+        first:ClearAllPoints()
+        first:SetPoint(point, relative, relativePoint, (x or 0) + shift, y or 0)
+    end
+    ui.MicroMenu.Centre = function()
+        if InCombatLockdown() or ui.Settings().barLayout == "retail" then return end
+        centreRow()
     end
     ui.MicroMenu.layout = function()
         if InCombatLockdown() then return end
@@ -137,8 +209,9 @@ events:SetScript("OnEvent", function(self)
             local desaturated = retail and not cells
             skin.flat = desaturated
             -- Flat icons carry their own plate; the colour-only buttons get the bronze plate, desaturated.
+            -- The WoW Forever plate (cell 8) has its own bronze rim, so the action-slot edge stays hidden.
             skin.plate:SetAlpha(flat and 0 or 1)
-            skin.edge:SetAlpha((flat or desaturated) and 0 or 1)
+            skin.edge:SetAlpha(0)
             if not stockSizes[button] then stockSizes[button] = { button:GetSize() } end
             -- The stock buttons are 58 px tall with the top 18 px outside the hit area; a resized button
             -- must be clickable over its whole face.
@@ -150,8 +223,16 @@ events:SetScript("OnEvent", function(self)
                 for point = 1, button:GetNumPoints() do stockPoints[button][point] = { button:GetPoint(point) } end
             end
             local spacing = retail and (tonumber(ui.Settings().microSpacing) or 4) or 0
-            button:ClearAllPoints()
+            -- Only buttons chained to another micro button are re-anchored: the first one belongs to Edit Mode,
+            -- and putting back the point seen at login would undo a reset or a move made there.
+            local chained = false
             for _, saved in ipairs(stockPoints[button]) do
+                local relative = saved[2]
+                local relativeName = relative and relative.GetName and relative:GetName()
+                if relativeName and relativeName:find("MicroButton$") then chained = true end
+            end
+            if chained then button:ClearAllPoints() end
+            for _, saved in ipairs(chained and stockPoints[button] or {}) do
                 local point, relative, relativePoint, x, y = unpack(saved, 1, 5)
                 local name = relative and relative.GetName and relative:GetName()
                 if spacing ~= 0 and name and name:find("MicroButton$") and point and relativePoint then
@@ -212,6 +293,7 @@ events:SetScript("OnEvent", function(self)
         end
         if MicroButtonPortrait then MicroButtonPortrait:SetAlpha(retail and 0 or 1) end
         if ui.MicroMenu.emblem then ui.MicroMenu.emblem:SetAlpha(retail and 0 or 1) end
+        if not retail then centreRow() end
     end
     if MicroButtonPortrait then
         MicroButtonPortrait:ClearAllPoints()
@@ -220,7 +302,8 @@ events:SetScript("OnEvent", function(self)
     end
     if PVPMicroButtonTexture then
         PVPMicroButtonTexture:SetAlpha(0)
-        local emblem = PVPMicroButton:CreateTexture(nil, "ARTWORK")
+        -- Above the button faces: the Forever plate is opaque and shares the ARTWORK layer with them.
+        local emblem = PVPMicroButton:CreateTexture(nil, "OVERLAY")
         local left = UnitFactionGroup("player") == "Horde" and 118 or 0
         emblem:SetTexture(art .. "Micro-PvP")
         emblem:SetTexCoord(left / 256, (left + 118) / 256, 0, 151 / 256)

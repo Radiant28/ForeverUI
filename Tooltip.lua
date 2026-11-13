@@ -157,4 +157,50 @@ if ui.RegisterEditFrame then
     ui.RegisterEditFrame(anchor, ru and "Подсказка" or "Tooltip", "tooltip", ui.OptionBinding("tooltip", "tooltipScale"))
 end
 
-ui.Tooltip = { Apply = applyScale, anchor = anchor }
+-- WoW Forever tooltip frame: Art/Forever/Tooltip-Border.tga (64 x 64) holds uiframetooltipc60 at x 0..15
+-- (top edge rows 0..8, bottom edge rows 9..17, corners 9 x 9: bottom-left 18, bottom-right 27, top-left 36,
+-- top-right 45) and uiframetooltipverticalc60 at x 16..47 (right edge 16..24, left edge 25..33). The pieces
+-- carry 3 px of outer shadow, so the frame reaches 3 px past the tooltip.
+local borderArt = "Interface\\AddOns\\ForeverUI\\Art\\Forever\\Tooltip-Border"
+local backgroundArt = "Interface\\AddOns\\ForeverUI\\Art\\Forever\\Tooltip-Background"
+local EDGE, OUT = 9, 3
+local pieces = {
+    topleft = { 0, 9, 36, 45 }, topright = { 0, 9, 45, 54 }, bottomleft = { 0, 9, 18, 27 }, bottomright = { 0, 9, 27, 36 },
+    top = { 4, 12, 0, 9 }, bottom = { 4, 12, 9, 18 }, left = { 25, 34, 4, 12 }, right = { 16, 25, 4, 12 },
+}
+local function piece(tooltip, key)
+    local texture = tooltip:CreateTexture(nil, "BORDER")
+    local cell = pieces[key]
+    texture:SetTexture(borderArt)
+    texture:SetTexCoord(cell[1] / 64, cell[2] / 64, cell[3] / 64, cell[4] / 64)
+    return texture
+end
+local skinnedTooltips = {}
+local function skinTooltip(tooltip)
+    if not tooltip or skinnedTooltips[tooltip] or not tooltip.SetBackdrop then return end
+    skinnedTooltips[tooltip] = true
+    tooltip:SetBackdrop({ bgFile = backgroundArt, tile = true, tileSize = 64, insets = { left = 2, right = 2, top = 2, bottom = 2 } })
+    local function color() tooltip:SetBackdropColor(0.4, 0.4, 0.4, 1) end
+    color()
+    tooltip:HookScript("OnShow", color)
+    local p = {}
+    for key in pairs(pieces) do p[key] = piece(tooltip, key) end
+    p.topleft:SetSize(EDGE, EDGE); p.topleft:SetPoint("TOPLEFT", tooltip, "TOPLEFT", -OUT, OUT)
+    p.topright:SetSize(EDGE, EDGE); p.topright:SetPoint("TOPRIGHT", tooltip, "TOPRIGHT", OUT, OUT)
+    p.bottomleft:SetSize(EDGE, EDGE); p.bottomleft:SetPoint("BOTTOMLEFT", tooltip, "BOTTOMLEFT", -OUT, -OUT)
+    p.bottomright:SetSize(EDGE, EDGE); p.bottomright:SetPoint("BOTTOMRIGHT", tooltip, "BOTTOMRIGHT", OUT, -OUT)
+    p.top:SetPoint("TOPLEFT", p.topleft, "TOPRIGHT"); p.top:SetPoint("BOTTOMRIGHT", p.topright, "BOTTOMLEFT")
+    p.bottom:SetPoint("TOPLEFT", p.bottomleft, "TOPRIGHT"); p.bottom:SetPoint("BOTTOMRIGHT", p.bottomright, "BOTTOMLEFT")
+    p.left:SetPoint("TOPLEFT", p.topleft, "BOTTOMLEFT"); p.left:SetPoint("BOTTOMRIGHT", p.bottomleft, "TOPRIGHT")
+    p.right:SetPoint("TOPLEFT", p.topright, "BOTTOMLEFT"); p.right:SetPoint("BOTTOMRIGHT", p.bottomright, "TOPRIGHT")
+end
+local skinDriver = CreateFrame("Frame")
+skinDriver:RegisterEvent("PLAYER_LOGIN")
+skinDriver:SetScript("OnEvent", function()
+    for _, name in ipairs({ "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1", "ShoppingTooltip2", "ShoppingTooltip3",
+        "WorldMapTooltip", "WorldMapCompareTooltip1", "WorldMapCompareTooltip2", "FriendsTooltip" }) do
+        skinTooltip(_G[name])
+    end
+end)
+
+ui.Tooltip = { Apply = applyScale, anchor = anchor, Skin = skinTooltip }

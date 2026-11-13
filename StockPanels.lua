@@ -1,14 +1,43 @@
 local _, ui = ...
 local art = "Interface\\AddOns\\ForeverUI\\Art\\"
-local gryphons = art .. "ActionBar-EndCaps"
-
-MainMenuBarLeftEndCap:SetTexture(gryphons)
-MainMenuBarLeftEndCap:SetTexCoord(0, 482 / 1024, 0, 282 / 1024)
-MainMenuBarLeftEndCap:SetSize(104, 61)
+-- Classic caps, chosen in Edit Mode (`barGryphonStyle`): the WoW Forever gryphon or wyvern from uiactionbarc60
+-- (512 x 512, cells as left, right, top, bottom pixels of the left-hand cap; the right cap is the same cell
+-- mirrored), by faction or fixed, or the earlier ForeverUI lions (ActionBar-EndCaps, 1024 px sheet).
+local foreverCaps = art .. "Forever\\ActionBar-Caps"
+-- The wyvern cell stops above the faint ground line under its feet (rows 284..290), and the cap is lowered a
+-- little more (`drop`, UI px) so its feet sit on the bar like the gryphon's.
+local classicCaps = {
+    gryphon = { 7, 241, 3, 142 },
+    wyvern = { 4, 220, 145, 284, drop = 2 },
+}
+local CAP_SCALE = 0.44
+ui.GryphonStyles = { "faction", "gryphon", "wyvern", "lion" }
+local function gryphonStyle()
+    local style = ui.Settings().barGryphonStyle
+    if style == "gryphon" or style == "wyvern" or style == "lion" then return style end
+    return UnitFactionGroup("player") == "Horde" and "wyvern" or "gryphon"
+end
+local function setClassicCap(cap, mirrored)
+    local style = gryphonStyle()
+    if style == "lion" then
+        cap:SetTexture(art .. "ActionBar-EndCaps")
+        if mirrored then
+            cap:SetTexCoord(482 / 1024, 960 / 1024, 0, 282 / 1024)
+        else
+            cap:SetTexCoord(0, 482 / 1024, 0, 282 / 1024)
+        end
+        cap:SetSize(104, 61)
+        return
+    end
+    local cell = classicCaps[style]
+    local left, right = cell[1] / 512, cell[2] / 512
+    if mirrored then left, right = right, left end
+    cap:SetTexture(foreverCaps)
+    cap:SetTexCoord(left, right, cell[3] / 512, cell[4] / 512)
+    cap:SetSize((cell[2] - cell[1]) * CAP_SCALE, (cell[4] - cell[3]) * CAP_SCALE)
+end
+-- The caps get their art at login (ui.ApplyGryphons): the saved style is not loaded while this file runs.
 MainMenuBarLeftEndCap:SetVertexColor(1, 0.84, 0.65)
-MainMenuBarRightEndCap:SetTexture(gryphons)
-MainMenuBarRightEndCap:SetTexCoord(482 / 1024, 960 / 1024, 0, 282 / 1024)
-MainMenuBarRightEndCap:SetSize(104, 61)
 MainMenuBarRightEndCap:SetVertexColor(1, 0.84, 0.65)
 
 local events = CreateFrame("Frame")
@@ -51,7 +80,9 @@ local function placeGryphons()
         count = math.max(1, math.min(12, math.floor(count)))
         rows = math.max(1, math.min(count, math.floor(rows)))
         local last = _G["ActionButton" .. math.ceil(count / rows)] or ActionButton12
-        local retail = retailCaps[UnitFactionGroup("player")] or retailCaps.Horde
+        local style = gryphonStyle()
+        local retail = style == "gryphon" and retailCaps.Alliance or style == "wyvern" and retailCaps.Horde
+            or retailCaps[UnitFactionGroup("player")] or retailCaps.Horde
         for index, cap in ipairs(caps) do
             local cell = retail[index + 1]
             cap:SetTexture(retail[1])
@@ -65,12 +96,15 @@ local function placeGryphons()
         MainMenuBarRightEndCap:SetPoint("BOTTOMLEFT", last, "BOTTOMRIGHT", -6, -24)
     else
         for index, cap in ipairs(caps) do
-            local look = stockCapLook[index]
-            if look[1] then cap:SetTexture(look[1]) end
-            cap:SetTexCoord(unpack(look[2], 1, 8))
-            cap:SetSize(look[3], look[4])
+            -- The faction is known by now (it may not be when the file loads).
+            setClassicCap(cap, index == 2)
             cap:ClearAllPoints()
-            for _, point in ipairs(stockCapPoints[index]) do cap:SetPoint(unpack(point, 1, 5)) end
+            local cell = classicCaps[gryphonStyle()]
+            local drop = cell and cell.drop or 0
+            for _, point in ipairs(stockCapPoints[index]) do
+                local p, relative, relativePoint, x, y = unpack(point, 1, 5)
+                cap:SetPoint(p, relative, relativePoint, x, (y or 0) - drop)
+            end
         end
     end
 end
@@ -245,6 +279,18 @@ end
 local xpSheet = art .. "ActionBar\\Retail-XP"
 local XP_HEIGHT = 10
 local stockXp
+-- WoW Forever bar strip (uiexperiencebarcamelot rows 0..31): dark ground at rows 2..12, frame at rows 15..30 with
+-- its hollow middle at rows 20..24. The frame reaches 3 px past the bar on each side.
+local foreverXp = art .. "Forever\\XP-Frame"
+local function foreverFrame(border, bar)
+    border:ClearAllPoints()
+    border:SetPoint("TOPLEFT", bar, "TOPLEFT", -3, 3)
+    border:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", 3, -3)
+    border:SetDrawLayer("OVERLAY", 1)
+    border:SetTexture(foreverXp)
+    border:SetTexCoord(0, 1022 / 1024, 15 / 32, 30 / 32)
+    border:SetAlpha(1)
+end
 
 local function applyXpBar()
     local bar = MainMenuExpBar
@@ -299,6 +345,27 @@ local function applyXpBar()
         for _, entry in ipairs(stockXp.backgrounds) do restoreRegion(entry[1], entry[2]) end
         for _, entry in pairs(stockXp.borders) do restoreRegion(entry[1], entry[2]) end
         if ExhaustionLevelFillBar and stockXp.fill then ExhaustionLevelFillBar:SetHeight(stockXp.fill) end
+        -- WoW Forever look on the Classic bar: its dark ground and its rounded frame (Art/Forever/XP-Frame.tga).
+        for index, entry in ipairs(stockXp.backgrounds) do
+            local region = entry[1]
+            if index == 1 then
+                region:ClearAllPoints()
+                region:SetAllPoints(bar)
+                region:SetTexture(foreverXp)
+                region:SetTexCoord(0, 1, 2 / 32, 13 / 32)
+                region:SetAlpha(1)
+            else
+                region:SetAlpha(0)
+            end
+        end
+        for index, entry in pairs(stockXp.borders) do
+            local border = entry[1]
+            if index == 0 then
+                foreverFrame(border, bar)
+            else
+                border:SetAlpha(0)
+            end
+        end
     end
 end
 
@@ -335,6 +402,13 @@ if ReputationWatchBar then hooksecurefunc(ReputationWatchBar, "SetScale", fitTex
 
 local function applyArt()
     local settings = ui.Settings()
+    -- The stock strip under the main bar was briefly hidden by default (12.11.2026); it is switched back on once,
+    -- and stays as the player sets it afterwards.
+    if not settings.barStripBack then
+        settings.barStockArt = true
+        settings.barStripBack = true
+    end
+    settings.barStripOff = nil
     ui.ApplyGryphons()
     for _, texture in ipairs(tinted) do texture:SetVertexColor(artColor()) end
     -- The Retail caps keep their own colours; reapply their state after the tint.
@@ -345,15 +419,19 @@ local function applyArt()
     if ui.MicroMenu and ui.MicroMenu.ApplyLayout then ui.MicroMenu.ApplyLayout() end
     fitTexts()
     local stockArt = settings.barStockArt ~= false and 1 or 0
+    -- Retail has no strip at all: the max-level bar (shown instead of the XP bar at the level cap) goes too.
+    local retail = retailLayout()
     for i = 0, 3 do
         local texture = _G["MainMenuBarTexture" .. i]
         if texture then texture:SetAlpha(stockArt) end
+        local maxLevel = _G["MainMenuMaxLevelBar" .. i]
+        if maxLevel then maxLevel:SetAlpha(retail and 0 or 1) end
     end
     local edges = settings.barSlotEdges ~= false and 1 or 0
     for edge in pairs(slotEdges) do edge:SetAlpha(edges) end
     local backgrounds = settings.barSlotBackgrounds ~= false and 1 or 0
     for background in pairs(slotBackgrounds) do background:SetAlpha(backgrounds) end
-    local borders = settings.barProgressBorder ~= false and 1 or 0
+    local borders = (settings.barProgressBorder ~= false and not retail) and 1 or 0
     for border in pairs(progressBorders) do border:SetAlpha(borders) end
 end
 ui.ActionBars = { Apply = applyArt }
@@ -379,10 +457,11 @@ for _, texture in ipairs(tinted) do texture:SetVertexColor(1, 0.84, 0.65) end
 -- The stock XP border ends above the bottom of the status bar.
 ExhaustionLevelFillBar:SetHeight(MainMenuXPBarTexture0:GetHeight())
 
-local slotArt = art .. "ActionBar\\Slots"
+-- WoW Forever slot rim (uiactionbarframe2xc60 with its dark centre cleared, 128 x 128; the rim spans 4..108 x 4..110).
+local slotArt = art .. "Forever\\Slot-Frame"
 function ui.ApplySlotEdge(texture)
     texture:SetTexture(slotArt)
-    texture:SetTexCoord(132 / 256, 224 / 256, 0, 90 / 128)
+    texture:SetTexCoord(4 / 128, 108 / 128, 4 / 128, 110 / 128)
 end
 
 local slots = {}
@@ -408,11 +487,13 @@ for _, prefix in ipairs({
 
             slots[button] = true
             if prefix == "ActionButton" or prefix == "BonusActionButton" then
-                -- The artwork stays visible when the stock grid hides an empty button.
+                -- Main bar only. The artwork stays visible when the stock grid hides an empty button.
                 local background = button:GetParent():CreateTexture(nil, "OVERLAY")
-                background:SetTexture(slotArt)
-                background:SetTexCoord(0, 128 / 256, 0, 124 / 128)
-                background:SetAllPoints(icon)
+                -- WoW: Forever empty cell (ui-hud-actionbar-iconframe-slot, 64 x 62 on the 512 px sheet).
+                background:SetTexture(art .. "ActionBar/Forever-Slots")
+                background:SetTexCoord(0.001953, 0.126953, 0.556641, 0.677734)
+                background:SetPoint("TOPLEFT", icon, "TOPLEFT", -5, 5)
+                background:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 5, -5)
                 slotBackgrounds[background] = true
             end
             updateSlot(button)
@@ -431,9 +512,7 @@ end
 local function skinProgress(bar)
     if not bar then return end
     local border = bar:CreateTexture(nil, "ARTWORK")
-    border:SetTexture(art .. "ActionBar\\StatusBarTexture")
-    border:SetTexCoord(0, 1, 0, 27 / 128)
-    border:SetAllPoints(bar)
+    foreverFrame(border, bar)
     progressBorders[border] = true
 end
 skinProgress(ReputationWatchStatusBar)

@@ -8,7 +8,8 @@ local headerIcons = art .. "Map\\Map-HeaderIcons"
 -- ring radius, so every button position stays valid).
 local function applyRim()
     local retail = ui.Settings and ui.Settings().barLayout == "retail"
-    MinimapBorder:SetTexture(art .. (retail and "Map\\Retail-Border" or "Map\\Map-Rim"))
+    -- Classic: the WoW Forever ring (uiminimapc60, band middle scaled to the same 85.5 px radius as Map-Rim).
+    MinimapBorder:SetTexture(art .. (retail and "Map\\Retail-Border" or "Forever\\Minimap-Ring"))
 end
 applyRim()
 MinimapBorder:SetTexCoord(0, 1, 0, 1)
@@ -29,6 +30,19 @@ local headerArt = header:CreateTexture(nil, "BACKGROUND")
 headerArt:SetTexture(headerTexture)
 headerArt:SetTexCoord(0, 388 / 512, 0, 44 / 64)
 headerArt:SetAllPoints(header)
+-- Classic layout: WoW Forever header from uiminimapc60 (Art/Forever/Minimap-Header.tga, 256x64):
+-- zone bar 149x23 at 0,0; calendar 152,0 and tracking 178,0 (23x23); date square 204,0 (18x18);
+-- mail envelope 0,26 (29x20). Retail keeps the Map-top art.
+local foreverHeader = art .. "Forever\\Minimap-Header"
+local function cut(texture, x, y, w, h)
+    texture:SetTexture(foreverHeader)
+    texture:SetTexCoord(x / 256, (x + w) / 256, y / 64, (y + h) / 64)
+end
+local foreverBar = header:CreateTexture(nil, "BACKGROUND")
+cut(foreverBar, 0, 0, 149, 23)
+foreverBar:SetPoint("TOPLEFT", header, "TOPLEFT", 20, 1.5)
+foreverBar:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", -20, -1.5)
+local headerParts = {}
 local buffAnchor = CreateFrame("Frame", nil, header)
 buffAnchor:SetSize(1, 1)
 
@@ -82,6 +96,11 @@ if MiniMapTracking then
     filter:SetTexCoord(0, 0.5, 0, 1)
     filter:SetSize(15, 15)
     filter:SetPoint("CENTER", MiniMapTrackingButton, "CENTER")
+    local forever = MiniMapTrackingButton:CreateTexture(nil, "ARTWORK")
+    cut(forever, 178, 0, 23, 23)
+    forever:SetSize(21, 21)
+    forever:SetPoint("CENTER", MiniMapTrackingButton, "CENTER")
+    headerParts.tracking = { classic = forever, retail = filter }
 end
 if GameTimeFrame then
     GameTimeFrame:SetSize(18, 18)
@@ -100,20 +119,69 @@ if GameTimeFrame then
     dateBadge:SetTexCoord(344 / 512, 387 / 512, 1 / 64, 43 / 64)
     dateBadge:SetSize(16, 16)
     dateBadge:SetPoint("TOP", header, "BOTTOMRIGHT", -9.4, -2)
+    local foreverCalendar = GameTimeFrame:CreateTexture(nil, "ARTWORK")
+    cut(foreverCalendar, 152, 0, 23, 23)
+    foreverCalendar:SetSize(21, 21)
+    foreverCalendar:SetPoint("CENTER", GameTimeFrame, "CENTER")
+    headerParts.calendar = { classic = foreverCalendar, retail = calendar }
+    local foreverBadge = header:CreateTexture(nil, "BACKGROUND")
+    cut(foreverBadge, 204, 0, 18, 18)
+    foreverBadge:SetSize(16, 16)
+    foreverBadge:SetPoint("TOP", header, "BOTTOMRIGHT", -9.4, -2)
+    headerParts.badge = { classic = foreverBadge, retail = dateBadge }
     local dateText = GameTimeFrame:GetFontString()
     dateText:SetFont(STANDARD_TEXT_FONT, 9, "OUTLINE")
     anchor(dateText, "CENTER", dateBadge, "CENTER", 0, 0)
 end
-local moon
-if GameTimeTexture then
-    GameTimeTexture:Hide()
-    moon = MinimapBorder:GetParent():CreateTexture(nil, "OVERLAY")
-    moon:SetTexture(timeArt)
-    moon:SetTexCoord(188 / 256, 1, 0, 68 / 128)
-    moon:SetSize(28, 28)
-    moon:SetPoint("CENTER", Minimap, "CENTER", moonX, moonY)
-    moon:Hide()
+-- Day/night badge of the Classic layout: WoW Forever bronze ring with a sun or moon disc
+-- (uiminimapc60 cut into Art/Forever/Minimap-DayNight.tga, 128x64: ring 0..40, sun 44..79, moon 84..119).
+if GameTimeTexture then GameTimeTexture:Hide() end
+local dayNightArt = art .. "Forever\\Minimap-DayNight"
+local dayNight = CreateFrame("Frame", nil, Minimap)
+dayNight:SetSize(26, 26)
+dayNight:SetPoint("CENTER", Minimap, "CENTER", moonX, moonY)
+dayNight:SetFrameLevel(Minimap:GetFrameLevel() + 6)
+dayNight:EnableMouse(true)
+dayNight.disc = dayNight:CreateTexture(nil, "ARTWORK")
+dayNight.disc:SetTexture(dayNightArt)
+dayNight.disc:SetSize(26 * 0.8, 26 * 0.8)
+dayNight.disc:SetPoint("CENTER")
+dayNight.ring = dayNight:CreateTexture(nil, "OVERLAY")
+dayNight.ring:SetTexture(dayNightArt)
+dayNight.ring:SetTexCoord(0, 40 / 128, 0, 40 / 64)
+dayNight.ring:SetAllPoints(dayNight)
+
+-- Same day bounds as the stock calendar button (minutes since midnight, server time).
+local function isDay()
+    local hour, minute = GetGameTime()
+    local now = hour * 60 + minute
+    local dawn, dusk = GAMETIME_DAWN or 330, GAMETIME_DUSK or 1260
+    return now >= dawn and now < dusk
 end
+
+local function updateDayNight()
+    local retail = ui.Settings and ui.Settings().barLayout == "retail"
+    if retail then
+        dayNight:Hide()
+        return
+    end
+    local day = isDay()
+    if dayNight.day ~= day then
+        dayNight.day = day
+        local left = day and 44 or 84
+        dayNight.disc:SetTexCoord(left / 128, (left + 35) / 128, 2 / 64, 37 / 64)
+    end
+    dayNight:Show()
+end
+dayNight:SetScript("OnEnter", function(self)
+    local hour, minute = GetGameTime()
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:SetText(("%02d:%02d"):format(hour, minute), 1, 0.82, 0)
+    GameTooltip:AddLine(isDay() and (ui.russian and "День" or "Day") or (ui.russian and "Ночь" or "Night"), 1, 1, 1)
+    GameTooltip:Show()
+end)
+dayNight:SetScript("OnLeave", GameTooltip_Hide)
+updateDayNight()
 if MiniMapMailFrame then
     MiniMapMailFrame:SetScale(0.65)
     anchor(MiniMapMailFrame, "TOPLEFT", header, "BOTTOMLEFT", 10, 0)
@@ -125,6 +193,34 @@ if MiniMapMailFrame then
     end
     if MiniMapMailBorder then MiniMapMailBorder:SetAlpha(0) end
 end
+
+-- Switches the header pieces between the WoW Forever art (Classic) and the Map-top art (Retail).
+local function applyHeader()
+    local classic = not (ui.Settings and ui.Settings().barLayout == "retail")
+    if classic then headerArt:Hide() else headerArt:Show() end
+    if classic then foreverBar:Show() else foreverBar:Hide() end
+    for _, part in pairs(headerParts) do
+        if classic then
+            part.classic:Show()
+            part.retail:Hide()
+        else
+            part.classic:Hide()
+            part.retail:Show()
+        end
+    end
+    if MiniMapMailIcon then
+        if classic then
+            cut(MiniMapMailIcon, 0, 26, 29, 20)
+            MiniMapMailIcon:SetSize(30, 21)
+        else
+            MiniMapMailIcon:SetTexture(art .. "Map\\Mail-Envelope")
+            MiniMapMailIcon:SetTexCoord(0, 1, 0, 1)
+            MiniMapMailIcon:SetSize(30, 30)
+        end
+    end
+    if dayNight then updateDayNight() end
+end
+applyHeader()
 
 if MinimapNorthTag then MinimapNorthTag:SetAlpha(0) end
 if MinimapCompassTexture then MinimapCompassTexture:SetAlpha(0) end
@@ -164,12 +260,8 @@ header:SetScript("OnUpdate", function(_, delta)
     if elapsed < 0.25 then return end
     elapsed = 0
     if clock:IsShown() then clock:SetFormattedText("%02d:%02d", GetGameTime()) end
-    if moon then
-        -- The stock calendar still updates its hidden day/night texture.
-        -- The Retail layout has no day/night mark on the ring.
-        local retail = ui.Settings and ui.Settings().barLayout == "retail"
-        if not retail and GameTimeTexture:GetTexCoord() >= 0.5 then moon:Show() else moon:Hide() end
-    end
+    -- Sun by day, moon by night; the Retail layout has no day/night mark on the ring.
+    updateDayNight()
     if WorldMapFrame and WorldMapFrame:IsShown() then
         refreshZone = true
         return
@@ -579,7 +671,23 @@ events:SetScript("OnEvent", function(_, event, name)
     if event == "PLAYER_LOGIN" and ui.RegisterEditFrame then
         ui.RegisterEditFrame(MinimapCluster, nil, "minimap", ui.OptionBinding("minimap", "mapScale"))
     end
+    if event == "PLAYER_LOGIN" then
+        applyHeader()
+        -- WoW Forever arrows for the quest/guide and corpse pointers. Each setter is used only if the client has
+        -- it; the player's own arrow is a model in 3.3.5 and stays as it is.
+        local arrows = {
+            SetPOIArrowTexture = "Forever\\Minimap-GuideArrow",
+            SetStaticPOIArrowTexture = "Forever\\Minimap-GuideArrow",
+            SetCorpsePOIArrowTexture = "Forever\\Minimap-CorpseArrow",
+        }
+        for method, file in pairs(arrows) do
+            if type(Minimap[method]) == "function" then pcall(Minimap[method], Minimap, art .. file) end
+        end
+    end
     scheduleLayout()
 end)
 
-ui.Minimap = { Layout = function() scheduleLayout() end, ApplyLayout = applyRim }
+ui.Minimap = { Layout = function() scheduleLayout() end, ApplyLayout = function()
+    applyRim()
+    applyHeader()
+end }

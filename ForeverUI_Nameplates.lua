@@ -47,8 +47,8 @@ local defaults = {
     headlineOutOfCombat = false, hideFullHealthOutOfCombat = false, combatOnlyEngaged = true, combatKeepFriends = false,
     crowdSaver = true, crowdThreshold = 15,
     hideFriendlyInDungeons = true, hideTotems = false, hideMinions = true,
-    stacking = true, stackForever = true, verticalSpacing = 0.90, maxDistance = 41,
-    edgeFade = true, edgeFadeInner = 60, edgeFadeOuter = 120,
+    stacking = true, stackForever = true, stackNearestFirst = true, stackBehindAlpha = 0.7, verticalSpacing = 0.90, maxDistance = 41,
+    edgeFade = true, edgeFadeInner = 100, edgeFadeOuter = 160,
     plateOffsetX = 0, plateOffsetY = 8,
     widthEnemy = WIDTH, widthFriend = WIDTH, heightEnemy = HEIGHT, heightFriend = HEIGHT,
     outerLine = 0.25, frameThickness = 1, targetGlow = true, targetGlowStrength = 0.85,
@@ -99,6 +99,7 @@ local function LoadConfig()
     cfg.nonTargetScale = Clamp(cfg.nonTargetScale, 0.75, 1, defaults.nonTargetScale)
     cfg.targetAlpha = defaults.targetAlpha
     cfg.nonTargetAlpha = Clamp(cfg.nonTargetAlpha, 0.1, 1, defaults.nonTargetAlpha)
+    cfg.stackBehindAlpha = Clamp(cfg.stackBehindAlpha, 0.1, 1, defaults.stackBehindAlpha)
     cfg.outOfCombatAlpha = Clamp(cfg.outOfCombatAlpha, 0.1, 1, defaults.outOfCombatAlpha)
     cfg.nearDepth = Clamp(cfg.nearDepth, 0, 500, defaults.nearDepth)
     cfg.farDepth = Clamp(cfg.farDepth, cfg.nearDepth + 1, 501, max(defaults.farDepth, cfg.nearDepth + 1))
@@ -110,6 +111,13 @@ local function LoadConfig()
     cfg.subtitleSize = Clamp(cfg.subtitleSize, 6, 18, defaults.subtitleSize)
     cfg.edgeFadeInner = Clamp(cfg.edgeFadeInner, 10, 190, defaults.edgeFadeInner)
     cfg.edgeFadeOuter = Clamp(cfg.edgeFadeOuter, 20, 200, defaults.edgeFadeOuter)
+    -- The edge-fade defaults moved from 60/120 to 100/160; profiles still on the old defaults follow them once.
+    if not cfg.edgeFadeDefault100 then
+        if cfg.edgeFadeInner == 60 and cfg.edgeFadeOuter == 120 then
+            cfg.edgeFadeInner, cfg.edgeFadeOuter = defaults.edgeFadeInner, defaults.edgeFadeOuter
+        end
+        cfg.edgeFadeDefault100 = true
+    end
     -- The default spacing moved from 1.10 to 0.90; profiles still on the old default follow it once.
     if not cfg.spacingDefault090 then
         if abs(cfg.verticalSpacing - 1.10) < 0.001 then cfg.verticalSpacing = defaults.verticalSpacing end
@@ -1243,6 +1251,8 @@ local function UpdatePerspective(view, plate, target, engaged, blend)
     local alpha = target and cfg.targetAlpha or (cfg.fadeDistance and 1 + (cfg.nonTargetAlpha - 1) * t or 1)
     if not target and not engaged then alpha = min(alpha, cfg.outOfCombatAlpha) end
     if cfg.edgeFade and not target then alpha = alpha * EdgeFade(view) end
+    -- Plates lifted over a nearer one in the column (see StackPlates) are drawn fainter.
+    if view.stackBehind and not target then alpha = alpha * cfg.stackBehindAlpha end
     if not target and view.drawScale then
         scale = view.drawScale + (scale - view.drawScale) * blend
         alpha = view.drawAlpha + (alpha - view.drawAlpha) * blend
@@ -1476,7 +1486,11 @@ end
 ---------------------------------------------------------------------------------------------------
 local stackList, stackPlaced, stacked = {}, {}, false
 
+-- With `stackNearestFirst` the nearest unit (smallest depth) is placed first and keeps its spot; plates behind
+-- it that overlap are lifted above it. Without a usable depth the order falls back to the screen height.
 local function StackOrder(a, b)
+    local da, db = a.stackDepth, b.stackDepth
+    if da and db and abs(da - db) > 0.01 then return da < db end
     if a.stackBase ~= b.stackBase then return a.stackBase < b.stackBase end
     if a.stackX ~= b.stackX then return a.stackX < b.stackX end
     return a.stackId < b.stackId
@@ -1500,12 +1514,14 @@ local function StackPlates(blend)
             stackList[count] = view
             view.stackX = x * nativeScale
             view.stackBase = (top + cfg.plateOffsetY) * nativeScale
+            local depth = cfg.stackNearestFirst and view.GetEffectiveDepth and view:GetEffectiveDepth()
+            view.stackDepth = depth and depth > 0 and depth or nil
             view.stackWidth = (view.chromeWidth or WIDTH) * scale
             -- The bar plus the name above it; a name-only plate keeps the same footprint.
             view.stackHeight = ((view.chromeHeight or HEIGHT) + cfg.nameLift + (view.nameSize or 14) + 4)
                 * scale * cfg.verticalSpacing
         else
-            view.stackOffset, view.stackY, view.stackRaise = nil, nil, nil
+            view.stackOffset, view.stackY, view.stackRaise, view.stackBehind = nil, nil, nil, nil
         end
     end
     for i = #stackList, count + 1, -1 do stackList[i] = nil end
@@ -1524,6 +1540,7 @@ local function StackPlates(blend)
             end
         end
         view.stackY = y
+        view.stackBehind = y > view.stackBase + 0.5 or nil
         local k = placedCount
         while k > 0 and placed[k].stackY > y do placed[k + 1] = placed[k]; k = k - 1 end
         placed[k + 1], placedCount = view, placedCount + 1
@@ -1541,7 +1558,7 @@ end
 local function ClearStack()
     if not stacked then return end
     stacked = false
-    for _, view in pairs(visible) do view.stackOffset, view.stackY, view.stackRaise = nil, nil, nil end
+    for _, view in pairs(visible) do view.stackOffset, view.stackY, view.stackRaise, view.stackBehind = nil, nil, nil, nil end
 end
 
 local learnTokens = { "target", "mouseover", "focus", "targettarget", "focustarget", "mouseovertarget" }

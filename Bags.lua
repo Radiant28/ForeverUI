@@ -6,7 +6,12 @@ local backpackIcon = "Interface\\Buttons\\Button-Backpack-Up"
 local questBadgeArt = art .. "Quest-Bang"
 local backpackEdgeSize = 9
 -- Set to false to return to the original bag window art (Backpack-Edge / Backpack-Chrome).
-local newBagSkin = true
+-- Bag window look: "forever" (bronze diamond frame from the WoW Forever backport),
+-- "gold" (the previous gold frame) or "classic" (the original ForeverUI art).
+local bagSkin = "forever"
+local newBagSkin = bagSkin ~= "classic"
+-- Extra header height (px) of the "forever" look; the search row and the item grid move down by the same amount.
+local headerExtra = bagSkin == "forever" and 7 or 0
 local backpackInset = {
     bgFile = white, edgeFile = art .. "UnitFrame-Edge", edgeSize = 3,
     insets = { left = 1, right = 1, top = 1, bottom = 1 },
@@ -153,9 +158,10 @@ local function refreshBag(bag, query)
 end
 
 local function skinBackpackSlot(button)
+    -- Empty slot: the WoW Forever bag cell (bagsitemslot2xc60, dark with a wing; its rounded corners are clear).
     local fill = button:CreateTexture(nil, "BACKGROUND", nil, -2)
-    fill:SetTexture(white)
-    fill:SetVertexColor(0.075, 0.073, 0.073)
+    fill:SetTexture(art .. "Forever\\Bag-Slot")
+    fill:SetTexCoord(1 / 64, 63 / 64, 1 / 64, 63 / 64)
     fill:SetPoint("TOPLEFT", button, "TOPLEFT", 2, -2)
     fill:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -2, 2)
     local edge = button:CreateTexture(nil, "ARTWORK", nil, 2)
@@ -276,7 +282,7 @@ local function createInventory(panel, isBank)
     local keyring = not isBank and KEYRING_CONTAINER
     local showKeys
     local groupGap = 12
-    local toolbarTop, footerHeight = 34, 34
+    local toolbarTop, footerHeight = 34 + headerExtra, 34
     local name = isBank and "ForeverStockBank" or "ForeverStockInventory"
     local titleText = ui.russian and "Объединённый рюкзак" or "Combined backpack"
     if isBank then
@@ -577,7 +583,15 @@ local function createInventory(panel, isBank)
 
         local edgeTexture = art .. "Backpack-Edge"
         local header = window:CreateTexture(nil, "BORDER")
-        if newBagSkin then
+        if bagSkin == "forever" then
+            window:SetBackdrop({
+                bgFile = white,
+                edgeFile = art .. "BagForever-Edge", edgeSize = 14,
+                insets = { left = 4, right = 4, top = 4, bottom = 4 },
+            })
+            window:SetBackdropColor(0.108, 0.098, 0.088, 0.97)
+            header:SetTexture(art .. "BagForever-Header")
+        elseif newBagSkin then
             window:SetBackdrop({
                 bgFile = white,
                 edgeFile = art .. "BagWindow-Edge", edgeSize = backpackEdgeSize + 2,
@@ -596,7 +610,7 @@ local function createInventory(panel, isBank)
         end
         header:SetPoint("TOPLEFT", window, "TOPLEFT", 5, -5)
         header:SetPoint("TOPRIGHT", window, "TOPRIGHT", -5, -5)
-        header:SetHeight(18)
+        header:SetHeight(18 + headerExtra)
 
         -- Stretch the middle of the rotated top strip so its highlight does not repeat across the header.
         -- (Only for the original art; the new frame texture already has its own top edge.)
@@ -619,7 +633,7 @@ local function createInventory(panel, isBank)
         local portraitFrame = CreateFrame("Frame", nil, window)
         portraitFrame:SetFrameLevel(window:GetFrameLevel() + 1)
         portraitFrame:SetSize(55, 55)
-        portraitFrame:SetPoint("CENTER", window, "TOPLEFT", 17, -20)
+        portraitFrame:SetPoint("CENTER", window, "TOPLEFT", 17, -20 - headerExtra / 2)
         local ring = portraitFrame:CreateTexture(nil, "BACKGROUND")
         ring:SetTexture(art .. "Level")
         ring:SetTexCoord(0, 78 / 128, 0, 78 / 128)

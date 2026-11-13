@@ -42,6 +42,24 @@ ui.RegisterOptions("meter", {
                 ignoreGlobal = true, default = 1 },
             { "media", "meterBarTexture", L("Текстура полосы", "Bar texture"), kind = "meterbar", ignoreGlobal = true,
                 default = 1 },
+            { "color", "meterRowColor", L("Фон полос (сплошной)", "Bar background (solid)"), alpha = true,
+                default = { 0.06, 0.06, 0.07, 1 } },
+            { "range", "meterRowGap", L("Промежуток между полосами", "Gap between bars"), min = 0, max = 8, step = 1,
+                default = 1, suffix = " px" },
+        } },
+        { title = L("Числа", "Numbers"), description = L("Пример: 1 234 567 урона и 4 321,5 в секунду.",
+            "Example: 1,234,567 damage and 4,321.5 per second."), options = {
+            { "select", "meterNumberFormat", L("Вид чисел", "Number style"), default = "full", values = {
+                { "full", L("Полностью (1234567)", "Full (1234567)") },
+                { "tens", L("Без единиц (1234570)", "No ones (1234570)") },
+                { "hundreds", L("Без десятков (1234600)", "No tens (1234600)") },
+                { "short", L("Сокращённо (1,2м · 4,3к)", "Short (1.2m · 4.3k)") } } },
+            { "range", "meterDecimals", L("Цифр после запятой", "Decimal places"), min = 0, max = 2, step = 1, default = 1,
+                tooltip = L("Для «в секунду» и сокращённых чисел.", "For per-second and short values.") },
+            { "toggle", "meterTrimZeros", L("Убирать нули после запятой", "Drop trailing zeros"), default = true },
+            { "toggle", "meterSeparator", L("Разделять разряды (1 234 567)", "Group digits (1 234 567)"), default = false },
+            { "select", "meterSecondary", L("Второе число в скобках", "Second value in brackets"), default = "show",
+                values = { { "show", L("Показывать", "Show") }, { "none", L("Скрыть", "Hide") } } },
         } },
         -- Kept last: the list grows with every added window and pushes nothing else down.
         { title = L("Окна", "Windows"), description = L("Добавляйте сколько угодно окон (до 10) или удалите все. "

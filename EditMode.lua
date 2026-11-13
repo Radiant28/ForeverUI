@@ -709,6 +709,12 @@ local function createOverlay(entry)
     overlay:SetScript("OnLeave", function() paint(false) end)
     overlay:SetScript("OnClick", function()
         if InCombatLockdown() or held(entry) then return end
+        -- Frames with their own settings page (tracker groups, raid frames) open it at once.
+        if entry.onRightClick then
+            options:Hide()
+            entry.onRightClick()
+            return
+        end
         configureScale(entry)
         title:SetText(entry.label)
         configureBar(entry)
@@ -791,10 +797,16 @@ add("ReputationWatchBar", "Репутация", "Reputation")
 add("VehicleMenuBar", "Панель транспорта", "Vehicle bar")
 add("VehicleMenuBarLeaveButton", "Выход из транспорта", "Leave vehicle")
 add("MainMenuBarVehicleLeaveButton", "Покинуть транспорт", "Exit vehicle")
-add("CharacterMicroButton", "Микроменю", "Micro menu", {
+local micro = add("CharacterMicroButton", "Микроменю", "Micro menu", {
     "SpellbookMicroButton", "TalentMicroButton", "AchievementMicroButton", "QuestLogMicroButton",
     "SocialsMicroButton", "PVPMicroButton", "LFDMicroButton", "MainMenuMicroButton", "HelpMicroButton",
 })
+-- After a reset the stock point is back; the micro menu centres its (wider) row again.
+if micro then
+    micro.resetPosition = function()
+        if ui.MicroMenu and ui.MicroMenu.Centre then ui.MicroMenu.Centre() end
+    end
+end
 add("MainMenuBarBackpackButton", "Кнопки сумок", "Bag buttons", {
     "CharacterBag0Slot", "CharacterBag1Slot", "CharacterBag2Slot", "CharacterBag3Slot",
 })
@@ -951,6 +963,28 @@ driver:SetScript("OnEvent", function(self, event)
             { 8, 64, 4, 24 }, redrawGrid)
         ui.Checkbox(editor, "showGryphons", ru and "Показывать грифонов" or "Show gryphons", -105,
             true, ui.ApplyGryphons)
+        -- Gryphon look: each click moves to the next style (by faction, gryphon, wyvern, the earlier lions).
+        local styleNames = {
+            faction = ru and "по фракции" or "by faction", gryphon = ru and "грифон" or "gryphon",
+            wyvern = ru and "виверна" or "wyvern", lion = ru and "львы" or "lions",
+        }
+        local styles = ui.GryphonStyles or { "faction", "gryphon", "wyvern", "lion" }
+        local styleButton
+        local function styleText()
+            local current = settings.barGryphonStyle or "faction"
+            styleButton:SetText((ru and "Вид: " or "Look: ") .. (styleNames[current] or styleNames.faction))
+        end
+        styleButton = button(editor, 180, "", function()
+            local current, nextIndex = settings.barGryphonStyle or "faction", 1
+            for index, style in ipairs(styles) do
+                if style == current then nextIndex = index % #styles + 1 end
+            end
+            settings.barGryphonStyle = styles[nextIndex]
+            styleText()
+            if ui.ApplyGryphons then ui.ApplyGryphons() end
+        end)
+        styleButton:SetPoint("TOPLEFT", editor, "TOPLEFT", 214, -101)
+        styleText()
     elseif event == "PLAYER_REGEN_DISABLED" then
         stopDrag(false)
         editor:Hide()
