@@ -30,6 +30,8 @@ local DEFAULTS = {
     rfHideClientAuras = true,
     rfBuffs = true, rfBuffSize = 13, rfBuffMax = 3, rfBuffAnchor = "BOTTOMRIGHT", rfBuffGrow = "LEFT",
     rfBuffSpacing = 1, rfBuffX = -2, rfBuffY = 2, rfBuffFilter = "mine", rfAuraTimer = false,
+    -- Renewed Hope (63944): Power Word: Shield puts it on the whole party, so it looked like the shield everywhere.
+    rfBuffHide = "63944",
     rfDebuffs = true, rfDebuffSize = 15, rfDebuffMax = 3, rfDebuffAnchor = "BOTTOMLEFT", rfDebuffGrow = "RIGHT",
     rfDebuffSpacing = 1, rfDebuffX = 2, rfDebuffY = 2, rfDebuffFilter = "all", rfDispelScale = 1.25,
     rfDispelHighlight = true, rfDispelOnlyMine = true, rfDispelStyle = "both", rfDispelAlpha = 0.45,
@@ -108,13 +110,38 @@ local function fieldOf(frame, ...)
     end
 end
 
--- The secure "unit" attribute is the truth for a header button; the Lua fields of the client code can
--- lag behind (or stay shared) when buttons are re-sorted, which made every frame read one unit's auras.
-local function unitOf(frame)
-    local unit = frame.GetAttribute and frame:GetAttribute("unit")
-    if type(unit) ~= "string" or unit == "" then unit = frame.displayedUnit or frame.unit end
-    return unit
+-- Which unit a client button shows. The candidates (secure "unit" attribute, then the Lua fields of
+-- the client code) are not reliable on this client: several party buttons reported the same unit
+-- while the client drew different names on them, so every frame read one ally's auras. The name the
+-- client wrote on the button decides: the candidate whose UnitName matches it wins, and if none does,
+-- the group is searched for that name.
+local groupTokens = { "player" }
+for i = 1, 4 do groupTokens[#groupTokens + 1] = "party" .. i end
+for i = 1, 40 do groupTokens[#groupTokens + 1] = "raid" .. i end
+
+local function shownName(frame)
+    local label = frame.name
+    if type(label) ~= "table" or type(label.GetText) ~= "function" then return nil end
+    local text = label:GetText()
+    if type(text) ~= "string" or text == "" then return nil end
+    return (text:gsub("%-.*$", ""))
 end
+
+local function unitOf(frame)
+    local attribute = frame.GetAttribute and frame:GetAttribute("unit")
+    if type(attribute) ~= "string" or attribute == "" then attribute = nil end
+    local first = attribute or frame.displayedUnit or frame.unit
+    local name = shownName(frame)
+    if not name then return first end
+    for _, unit in ipairs({ attribute, frame.displayedUnit, frame.unit }) do
+        if unit and UnitName(unit) == name then return unit end
+    end
+    for _, unit in ipairs(groupTokens) do
+        if UnitExists(unit) and UnitName(unit) == name then return unit end
+    end
+    return first
+end
+RF.UnitOf = unitOf
 
 local function isUnitButton(frame)
     return type(frame) == "table" and type(frame.GetObjectType) == "function"
@@ -524,8 +551,17 @@ end
 -- Auras: own buff/debuff icons, dispel highlight, Cell-style indicators
 ---------------------------------------------------------------------------------------------------
 local indicatorLookup = {}   -- name or id -> { indicator index, ... }
+local hiddenBuffs = {}       -- name or id -> true: never drawn as a buff icon (indicators still see them)
 local function rebuildIndicatorLookup()
     for k in pairs(indicatorLookup) do indicatorLookup[k] = nil end
+    for k in pairs(hiddenBuffs) do hiddenBuffs[k] = nil end
+    for _, spell in ipairs(Suite.ParseSpellList(cfg().rfBuffHide or "")) do
+        hiddenBuffs[spell] = true
+        if type(spell) == "number" then
+            local name = GetSpellInfo(spell)
+            if name then hiddenBuffs[name] = true end
+        end
+    end
     for index, entry in ipairs(cfg().indicators or {}) do
         if entry.enabled then
             for _, spell in ipairs(Suite.ParseSpellList(entry.spell)) do
@@ -650,7 +686,7 @@ function RF.DrawAuras(deco, buffs, debuffs, now)
         local size = settings.rfBuffSize
         for _, aura in ipairs(buffs) do
             if shownBuffs >= settings.rfBuffMax then break end
-            if not aura.indicated then
+            if not aura.indicated and not hiddenBuffs[aura.id] and not hiddenBuffs[aura.name] then
                 shownBuffs = shownBuffs + 1
                 local icon = auraIcon(deco, deco.buffs, shownBuffs, size)
                 placeIcon(icon, frame, settings.rfBuffAnchor, settings.rfBuffGrow,
