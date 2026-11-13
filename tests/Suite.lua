@@ -507,6 +507,66 @@ tick(0.05)
 tick(0.6)
 tick(0.05)
 assert(not shieldShown(others[2]), "the recycled frame drops the old shield")
+-- The client can report one unit on several buttons while drawing different names on them:
+-- the name on the button decides which unit each frame reads.
+local realUnitName = UnitName
+function UnitName(unit)
+    if unit == "player" then return "Tester" end
+    if unit == "raid1" or unit == "raid2" or unit == "raid3" then return "N" .. unit end
+    return realUnitName(unit)
+end
+local labelled = { [button] = "Nraid1", [others[2]] = "Nraid2", [others[3]] = "Nraid3-Realm" }
+for frame, text in pairs(labelled) do
+    frame.name = frame:CreateFontString()
+    frame.name:SetText(text)
+    frame.attributes.unit = "raid2"
+    frame.unit, frame.displayedUnit = "raid2", "raid2"
+end
+auras.raid2.HELPFUL[1] = { name = "Power Word: Shield", icon = "s", duration = 30, expiration = now + 25, caster = "player", id = 17 }
+tick(0.6)
+tick(0.05)
+fire("UNIT_AURA", "raid2")
+tick(0.05)
+assert(RF.UnitOf(others[3]) == "raid3" and RF.UnitOf(button) == "raid1", "the unit follows the name on the button")
+assert(shieldShown(others[2]), "the shield stays on the shielded ally")
+assert(not shieldShown(button) and not shieldShown(others[3]), "and only there, even when the client reports one unit")
+UnitName = realUnitName
+for frame in pairs(labelled) do frame.name = nil end
+-- Renewed Hope from Power Word: Shield lands on the whole party: hidden from the buff icons by default.
+for _, frame in ipairs({ button, others[2], others[3] }) do frame.attributes.unit = nil end
+button.attributes.unit, others[2].attributes.unit, others[3].attributes.unit = "raid1", "raid2", "raid3"
+tick(0.6)
+tick(0.05)
+for _, unit in ipairs({ "raid1", "raid2", "raid3" }) do
+    table.insert(auras[unit].HELPFUL, 1, { name = "Renewed Hope", icon = "hope", duration = 60, expiration = now + 50,
+        caster = "player", id = 63944 })
+    fire("UNIT_AURA", unit)
+end
+tick(0.05)
+local function hopeShown(frame)
+    local found
+    RF.EachFrame(function(f, d)
+        if f == frame then for _, icon in ipairs(d.buffs) do if icon.shown and icon.texture.texture == "hope" then found = true end end end
+    end)
+    return found
+end
+assert(Suite.Part("raid").rfBuffHide == "63944", "Renewed Hope is hidden by default")
+assert(not hopeShown(button) and not hopeShown(others[2]) and not hopeShown(others[3]), "no party-wide hope icon")
+ui.SetOption("raidframes", "rfBuffHide", "")
+tick(0.05)
+assert(hopeShown(button), "an empty list shows it again")
+ui.SetOption("raidframes", "rfBuffHide", "63944")
+for _, unit in ipairs({ "raid1", "raid2", "raid3" }) do
+    table.remove(auras[unit].HELPFUL, 1)
+    fire("UNIT_AURA", unit)
+end
+tick(0.05)
+button.attributes.unit, others[2].attributes.unit, others[3].attributes.unit = "raid1", "raid2", "raid3"
+button.unit, button.displayedUnit, others[2].unit, others[2].displayedUnit, others[3].unit, others[3].displayedUnit = nil, nil, nil, nil, nil, nil
+auras.raid2.HELPFUL[1] = nil
+fire("UNIT_AURA", "raid2")
+tick(0.6)
+tick(0.05)
 
 -- Role icons and sorting by role
 local roles = { raid1 = "TANK", raid2 = "HEALER", raid3 = "DAMAGER" }
