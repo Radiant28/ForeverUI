@@ -722,6 +722,118 @@ local onlyRaid = Suite.DecodeString(Suite.Export({ raid = true }))
 assert(onlyRaid.profile.raid and not onlyRaid.profile.cdm, "partial export")
 
 ---------------------------------------------------------------------------------------------------
+-- Cooldown Manager: class and talent tree presets, restoring defaults
+---------------------------------------------------------------------------------------------------
+do
+    local function presetGroup(key)
+        for _, g in ipairs(CDM.Groups()) do if g.preset == key then return g end end
+    end
+    local function find(g, spell)
+        for i, e in ipairs(g.items) do if e.spell == spell then return e, i end end
+    end
+    local function setTree(tree)
+        GetTalentTabInfo = function(i) return ({ "Discipline", "Holy", "Shadow" })[i], "", i == tree and 51 or 0 end
+        ui.Fire("SuiteTalentsChanged")
+    end
+    local r = {}
+    local essential = presetGroup("essential")
+    assert(essential and essential.name == "Essential Cooldowns", "starting groups are marked")
+    local penance, pom = find(essential, 47540), find(essential, 33076)
+    assert(penance.class == "PRIEST" and penance.spec == 1 and pom.class == "PRIEST" and pom.spec == 2,
+        "default entries carry their class and tree")
+    assert(find(presetGroup("utility"), 6346).spec == 0, "common entries are for every tree")
+    setTree(2)
+    assert(not CDM.EntryActive(penance) and CDM.EntryActive(pom), "holy shows holy entries")
+    CDM.Evaluate(essential, penance, r, now)
+    assert(not r.show, "entries of another tree are hidden")
+    setTree(1)
+    assert(select(2, CDM.CurrentSpec()) == 1 and CDM.EntryActive(penance) and not CDM.EntryActive(pom),
+        "a talent change switches the set")
+    CDM.Evaluate(essential, penance, r, now)
+    assert(r.show, "penance shows for discipline")
+    setTree(0)
+    assert(CDM.EntryActive(penance) and CDM.EntryActive(pom), "without talents every tree is allowed")
+    setTree(2)
+    assert(not CDM.EntryActive({ kind = "cooldown", spell = 12294, class = "WARRIOR", spec = 0 }), "other classes are hidden")
+    essential.load.class = "WARRIOR"
+    assert(not CDM.LoadAllowed(essential), "group class condition")
+    essential.load.class = "PRIEST"
+    assert(CDM.LoadAllowed(essential))
+    essential.load.class = ""
+
+    -- every class: three tree names, five groups worth of entries, no entry twice for one tree
+    local classes = 0
+    for class, preset in pairs(CDM.presets) do
+        classes = classes + 1
+        assert(#preset.trees == 3, class)
+        local total = 0
+        for _, def in ipairs(CDM.presetGroups) do
+            local common, seen = {}, {}
+            local list = CDM.PresetItems(def.key, class)
+            for _, e in ipairs(list) do if e.spec == 0 then common[CDM.EntryKey(e)] = true end end
+            for _, e in ipairs(list) do
+                local key = CDM.EntryKey(e) .. "#" .. e.spec
+                assert(not seen[key], class .. " " .. def.key .. " repeats " .. key)
+                assert(e.spec == 0 or not common[CDM.EntryKey(e)], class .. " " .. def.key .. " common and tree " .. key)
+                seen[key] = true
+                assert(type(e.spell) == "number" or e.kind == "missing" or e.kind == "totem", class .. " spell id")
+            end
+            total = total + #list
+        end
+        for tree = 1, 3 do
+            local essentialCount = 0
+            for _, e in ipairs(CDM.PresetItems("essential", class)) do
+                if e.spec == tree then essentialCount = essentialCount + 1 end
+            end
+            assert(essentialCount >= 2, class .. " tree " .. tree .. " has its own cooldowns")
+        end
+        assert(total > 20, class)
+    end
+    assert(classes == 10, "all ten classes")
+
+    -- restore deleted groups and entries; the user's own stay
+    local count = #CDM.Groups()
+    local utilityId, utilityPos = presetGroup("utility").id, nil
+    for i, g in ipairs(CDM.Groups()) do if g.id == utilityId then utilityPos = i end end
+    local utilityCount = #presetGroup("utility").items
+    CDM.DeleteGroup(utilityId)
+    local _, pomIndex = find(essential, 33076)
+    CDM.RemoveItem(essential.id, pomIndex)
+    CDM.AddItem(essential.id, "cooldown", 139)
+    local addedGroups, addedItems = CDM.RestoreDefaults("missing")
+    assert(addedGroups == 1 and addedItems == 1 + utilityCount, "restore counts")
+    assert(#CDM.Groups() == count and CDM.Groups()[utilityPos].preset == "utility", "the group returns to its place")
+    local back, backIndex = find(essential, 33076)
+    assert(back and back.spec == 2 and backIndex == pomIndex, "the entry returns to its place")
+    assert(find(essential, 139), "own entries stay")
+    addedGroups, addedItems = CDM.RestoreDefaults("missing")
+    assert(addedGroups == 0 and addedItems == 0, "nothing is added twice")
+    -- a renamed starting group is still recognised
+    essential.name = "Main"
+    assert(CDM.RestoreDefaults("missing") == 0)
+
+    -- profiles from before the split: the starting groups are found by name, default entries get tags
+    Suite.DB().profiles.Legacy = { cdm = { groups = { [1] = { name = "Essential Cooldowns", kind = "icons",
+        items = { { kind = "cooldown", spell = 47540 }, { kind = "cooldown", spell = 139 } } } }, order = { 1 }, nextId = 2 } }
+    assert(Suite.SetProfile("Legacy"))
+    local legacy = CDM.Groups()[1]
+    assert(legacy.preset == "essential" and legacy.items[1].class == "PRIEST" and legacy.items[1].spec == 1,
+        "old default entries get their tree")
+    assert(legacy.items[2].class == "" and legacy.items[2].spec == 0, "own entries stay for every tree")
+    addedGroups = CDM.RestoreDefaults("missing")
+    assert(addedGroups == 4 and #CDM.Groups() == 5 and #legacy.items > 10, "restore completes an old profile")
+    Suite.SetProfile(Suite.DEFAULT_PROFILE)
+    Suite.DeleteProfile("Legacy")
+
+    -- reset: only the starting set
+    CDM.RestoreDefaults("all")
+    assert(#CDM.Groups() == 5 and not find(presetGroup("essential"), 139) and presetGroup("essential").name == "Essential Cooldowns",
+        "reset to defaults")
+    GetTalentTabInfo = function(i) return ({ "Discipline", "Holy", "Shadow" })[i], "", i == 2 and 51 or 10 end
+    ui.Fire("SuiteTalentsChanged")
+end
+
+---------------------------------------------------------------------------------------------------
 -- Option pages on the real modules
 ---------------------------------------------------------------------------------------------------
 for _, module in ipairs({ "cooldowns", "raidframes", "clickcast", "profiles" }) do

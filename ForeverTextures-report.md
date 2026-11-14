@@ -174,7 +174,7 @@
 - [ ] `ui-itemsocketparchementframe-left.tga` (16x128)
 
 **01_Frames_And_Borders/lootframe** (1)
-- [ ] `lootframe.tga` (512x1024)
+- [x] `lootframe.tga` (512x1024) → `Art/Forever/Loot-Atlas.tga` (карточки строк добычи и затемнение, `Loot.lua`)
 
 **01_Frames_And_Borders/macroframe** (2)
 - [ ] `macropopupc60.tga` (256x256)

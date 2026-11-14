@@ -17,6 +17,29 @@ local wrapValues = {
     { "RIGHT", L("Новый столбец справа", "Next column right") }, { "LEFT", L("Новый столбец слева", "Next column left") },
 }
 
+local classOrder = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local classFallback = {
+    WARRIOR = L("Воин", "Warrior"), PALADIN = L("Паладин", "Paladin"), HUNTER = L("Охотник", "Hunter"),
+    ROGUE = L("Разбойник", "Rogue"), PRIEST = L("Жрец", "Priest"), DEATHKNIGHT = L("Рыцарь смерти", "Death Knight"),
+    SHAMAN = L("Шаман", "Shaman"), MAGE = L("Маг", "Mage"), WARLOCK = L("Чернокнижник", "Warlock"), DRUID = L("Друид", "Druid"),
+}
+local function className(class)
+    local names = LOCALIZED_CLASS_NAMES_MALE
+    return names and names[class] or classFallback[class] or class
+end
+local function classValues()
+    local values = { { "", L("Любой", "Any") } }
+    for _, class in ipairs(classOrder) do values[#values + 1] = { class, className(class) } end
+    return values
+end
+-- Tree choices for a class ("" = the player's class); "#1".."#3" when the names are unknown.
+local function treeValues(class)
+    local values = { { 0, L("Любая", "Any") } }
+    local names = CDM().TreeNames(class)
+    for i = 1, 3 do values[#values + 1] = { i, names[i] or ("#" .. i) } end
+    return values
+end
+
 local function buildManager(parent, width)
     local cdm, su = CDM(), SU()
     if not cdm or not su or not ui.Suite then return SU() and SU().Unavailable(parent, width) or 20 end
@@ -139,10 +162,37 @@ local function buildManager(parent, width)
             ui.EditMode.Open()
         end
     end, 2, 4)
-    local hint = W.Description(parent, L("Группа видна на экране, пока открыта эта страница. В режиме редактирования группы "
-        .. "перетаскиваются ЛКМ, а ПКМ открывает их настройки.", "The selected group stays on screen while this page is open. "
-        .. "In Edit Mode drag groups with the left button; right click opens their settings."), 356)
-    hint:SetPoint("TOPLEFT", 236, y - 124)
+    local restoreNote
+    button(L("Вернуть удалённое", "Restore deleted"), function()
+        local addedGroups, addedItems = cdm.RestoreDefaults("missing")
+        state.item = nil
+        restoreNote = (addedGroups + addedItems > 0)
+            and (L("Восстановлено: групп %d, элементов %d.", "Restored: %d groups, %d entries.")):format(addedGroups, addedItems)
+            or L("Всё стандартное на месте.", "All defaults are in place.")
+        refresh()
+    end, 1, 5)
+    local reset = button(L("Сбросить к стандартным", "Reset to defaults"), function()
+        su.Confirm(L("Заменить все группы трекеров стандартным набором вашего класса? Свои группы и изменения "
+            .. "пропадут.", "Replace all tracker groups with the default set of your class? Your own groups and changes "
+            .. "will be lost."), function()
+            cdm.RestoreDefaults("all")
+            state.group, state.item, restoreNote = nil, nil, nil
+            refresh()
+        end)
+    end, 2, 5)
+    reset.text:SetTextColor(W.rgba(S.danger))
+    local hint = W.Description(parent, "", 356)
+    hint:SetPoint("TOPLEFT", 236, y - 154)
+    local function hintText()
+        local class, tree = cdm.CurrentSpec()
+        local treeName = tree and tree > 0 and cdm.TreeNames(class)[tree] or L("без талантов", "no talents")
+        local text = (L("Сейчас: %s, %s. Стандартные элементы меняются вместе с классом и веткой талантов; "
+            .. "серые в списке сейчас не показываются.", "Now: %s, %s. Default entries follow your class and talent "
+            .. "tree; grey ones in the list are not shown now.")):format(
+            className(class or ""), treeName)
+        if restoreNote then text = text .. "\n|cffd9b873" .. restoreNote .. "|r" end
+        return text
+    end
     y = y - 8 * 24 - 16
 
     -------------------------------------------------------------------------------------------
@@ -202,11 +252,10 @@ local function buildManager(parent, width)
     grid:Add({ "select", L("Набор талантов", "Talent spec"), values = {
         { 0, L("Любой", "Any") }, { 1, L("Основной", "Primary") }, { 2, L("Дополнительный", "Secondary") } } },
         gl({ "load", "talentGroup" }, 0), false, hasGroup)
+    grid:Add({ "select", L("Класс", "Class"), values = classValues }, gl({ "load", "class" }, ""), false, hasGroup)
     grid:Add({ "select", L("Ветка талантов", "Talent tree"), values = function()
-        local values = { { 0, L("Любая", "Any") } }
-        for index, name in ipairs(ui.Suite.TreeNames()) do values[#values + 1] = { index, name } end
-        if #values == 1 then for i = 1, 3 do values[#values + 1] = { i, "#" .. i } end end
-        return values
+        local group = selectedGroup()
+        return treeValues(group and group.load and group.load.class or "")
     end }, gl({ "load", "tree" }, 0), false, hasGroup)
     grid:Add({ "select", L("Стойка / форма", "Stance / form"), values = function()
         local values = { { 0, L("Любая", "Any") }, { 1, L("Без формы", "No form") } }
@@ -322,6 +371,11 @@ local function buildManager(parent, width)
     itemGrid:Add({ "toggle", L("Подсветка, когда доступно", "Glow when usable") }, it("glowUsable"), false, itemKind("cooldown"))
     itemGrid:Add({ "toggle", L("Скрывать неизученное", "Hide unlearned") }, it("hideUnknown"), false, itemKind("cooldown"))
     itemGrid:Add({ "text", L("Требует заклинание / талант", "Requires spell / talent") }, it("requires", ""), false, hasItem)
+    itemGrid:Add({ "select", L("Только для класса", "Class only"), values = classValues }, it("class", ""), false, hasItem)
+    itemGrid:Add({ "select", L("Только для ветки талантов", "Talent tree only"), values = function()
+        local entry = selectedItem()
+        return treeValues(entry and entry.class or "")
+    end }, it("spec", 0), false, hasItem)
     itemGrid:Add({ "toggle", L("Только в бою", "Only in combat") }, it("onlyCombat"), false, hasItem)
     itemGrid:Add({ "toggle", L("Только в группе / рейде", "Only in a party / raid") }, it("onlyGroup"), false, hasItem)
     itemGrid:Add({ "color", L("Свой цвет полосы", "Own bar colour"), alpha = true },
@@ -368,7 +422,17 @@ local function buildManager(parent, width)
             name = L("Тотем, слот ", "Totem slot ") .. entry.spell
         end
         row.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
-        row.text:SetText(entry.label and entry.label ~= "" and entry.label or name or spec)
+        local text = entry.label and entry.label ~= "" and entry.label or name or spec
+        if (entry.spec or 0) > 0 then
+            local tree = cdm.TreeNames(entry.class)[entry.spec] or ("#" .. entry.spec)
+            text = text .. " |cff8f8f96(" .. tree .. ")|r"
+        end
+        row.text:SetText(text)
+        -- entries of another class or tree are dimmed: they are not shown now
+        local active = cdm.EntryActive(entry)
+        row.text:SetTextColor(W.rgba(active and S.text or S.muted))
+        row.icon:SetDesaturated(not active)
+        row.icon:SetAlpha(active and 1 or 0.5)
         row.sub:SetText(cdm.kindNames[entry.kind] and cdm.kindNames[entry.kind]:match("^[^%s]+") or entry.kind)
     end
 
@@ -383,6 +447,7 @@ local function buildManager(parent, width)
         if state.item and not items[state.item] then state.item = nil end
         itemList:SetItems(items, renderItem)
         itemList:Select(state.item)
+        hint.label:SetText(hintText())
         grid:Refresh()
         itemGrid:Refresh()
         addSpell:Refresh()

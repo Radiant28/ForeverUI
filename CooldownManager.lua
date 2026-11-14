@@ -51,7 +51,7 @@ local GROUP_DEFAULTS = {
     borderColor = { 0.85, 0.72, 0.45, 1 },
     barWidth = 200, barHeight = 20, barFormat = "full", barTexture = "WoW Forever Raid",
     barColor = { 0.86, 0.62, 0.24, 1 }, barBackground = { 0, 0, 0, 0.55 },
-    load = { when = "always", group = "any", talentGroup = 0, tree = 0, form = 0,
+    load = { when = "always", group = "any", talentGroup = 0, tree = 0, form = 0, class = "",
         zone = { none = true, party = true, raid = true, pvp = true, arena = true } },
 }
 CDM.groupDefaults = GROUP_DEFAULTS
@@ -59,7 +59,7 @@ CDM.groupDefaults = GROUP_DEFAULTS
 local ITEM_DEFAULTS = {
     kind = "cooldown", spell = "", unit = "player", mine = true, missingType = "aura",
     duration = 45, warn = 3, procAura = "", glowUsable = false, hideUnknown = true,
-    onlyCombat = false, onlyGroup = false, requires = "",
+    onlyCombat = false, onlyGroup = false, requires = "", class = "", spec = 0,
     glowReady = false, soundReady = "", stacks = 0, glowStacks = true, soundStacks = "",
     expire = 0, glowExpire = true, soundExpire = "", glowMissing = true,
 }
@@ -78,60 +78,180 @@ local function dots(list, unit)
     return t
 end
 
--- Class presets for the four starting groups (WotLK spell ids; unknown spells hide themselves).
+-- Class presets (WotLK spell ids; unknown spells hide themselves). For each class: `all` holds what every
+-- spec tracks, [1]..[3] what only that talent tree (in the order of the talent tabs) tracks. Starting
+-- groups put the spec entries first, then the common ones; every entry is tagged with its class and
+-- tree, so the groups change with the primary talent tree. A spell may repeat in several trees.
 local presets = {
-    WARRIOR = { essential = cds({ 23881, 12294, 23922, 6572, 1680, 7384, 1719, 46924, 871, 12975 }),
-        utility = cds({ 6552, 20252, 100, 5246, 23920, 57755, 3411, 18499 }),
-        buffs = buffs({ 46916, 52437, 50227, 12292, 2565 }),
-        bars = { item("buff", 6673, { warn = 10 }), item("debuff", 7386), item("debuff", 47467) },
-        missing = { item("missing", "6673, 469", { onlyCombat = true }) } },
-    PALADIN = { essential = cds({ 20473, 20271, 35395, 53385, 53595, 53600, 26573, 879, 31884, 54428 }),
-        utility = cds({ 853, 642, 1022, 633, 1044, 6940, 31821, 498 }),
-        buffs = buffs({ 54149, 59578, 20925, 53601, 31884 }),
-        bars = { item("buff", 53601), item("buff", 20925) },
-        missing = { item("missing", "20166, 20165, 21084, 20375, 31801, 53736"),
-            item("missing", "", { missingType = "form" }) } },
-    PRIEST = { essential = cds({ 47540, 17, 33076, 34861, 47788, 33206, 8092, 32379, 47585 }),
-        utility = cds({ 6346, 8122, 586, 34433, 64901, 64843, 10060 }),
-        buffs = buffs({ 33151, 63735, 59889, 15258, 47788 }),
-        bars = dots({ 589, 34914, 2944 }),
-        missing = { item("missing", 588), item("missing", "1243, 21562", { onlyGroup = true }) } },
-    DRUID = { essential = cds({ 18562, 17116, 740, 29166, 22812, 48505, 33831, 33878, 50334, 5217, 61336 }),
-        utility = cds({ 5211, 49377, 1850, 20484, 22842, 16979 }),
-        buffs = buffs({ 48517, 48518, 16870, 69369, 52610 }),
-        bars = dots({ 8921, 5570, 1079, 1822, 33745 }),
-        missing = { item("missing", "1126, 21849", { onlyGroup = true }), item("missing", "", { missingType = "form" }) } },
-    SHAMAN = { essential = cds({ 61295, 16188, 16190, 51505, 51490, 16166, 17364, 60103, 30823, 51533, 8042 }),
-        utility = cds({ 57994, 51514, 8177, 32182, 2825, 2484 }),
-        buffs = buffs({ 53817, 53390, 16246, 324, 52127, 974 }),
-        bars = { item("totem", 1), item("totem", 2), item("totem", 3), item("totem", 4) },
-        missing = { item("missing", "52127, 324"), item("missing", "", { missingType = "weapon_mh" }) } },
-    MAGE = { essential = cds({ 12042, 12472, 11129, 12043, 55342, 12051, 44572, 2136, 120, 122 }),
-        utility = cds({ 1953, 2139, 45438, 11958, 31687, 66 }),
-        buffs = buffs({ 48108, 44401, 44544, 57761, 36032 }),
-        bars = dots({ 44457, 12654 }),
-        missing = { item("missing", "1459, 23028, 61316"), item("missing", "30482, 6117, 7302, 168") } },
-    WARLOCK = { essential = cds({ 50796, 17962, 17877, 48181, 47241, 47193, 6789, 5484, 30283 }),
-        utility = cds({ 29858, 18708, 47883, 698, 29893 }),
-        buffs = buffs({ 54277, 71165, 63167, 64371, 17941 }),
-        bars = dots({ 172, 348, 30108, 980, 603, 1490 }),
-        missing = { item("missing", "28176, 706, 687") } },
-    HUNTER = { essential = cds({ 53351, 53209, 19434, 53301, 34026, 19574, 3045, 23989, 2643, 3044, 3674 }),
-        utility = cds({ 34490, 34477, 5384, 781, 19263, 1499, 19577 }),
-        buffs = buffs({ 56453, 53220, 3045, 6150 }),
-        bars = dots({ 1978, 1130, 3674 }),
-        missing = { item("missing", "61846, 13165, 34074") } },
-    ROGUE = { essential = cds({ 13750, 13877, 51690, 14177, 51713, 1856, 14185 }),
-        utility = cds({ 5277, 31224, 1766, 408, 2094, 57934, 2983 }),
-        buffs = buffs({ 5171, 51662, 32645, 13750 }),
-        bars = { item("buff", 5171, { warn = 3 }), item("debuff", 1943), item("debuff", 703) },
-        missing = { item("missing", "", { missingType = "weapon_mh" }), item("missing", "", { missingType = "weapon_oh" }) } },
-    DEATHKNIGHT = { essential = cds({ 43265, 49184, 49028, 55233, 48792, 48707, 51271, 47568, 49206, 49016 }),
-        utility = cds({ 47528, 47476, 49576, 46584, 49039, 48982, 42650 }),
-        buffs = buffs({ 51124, 59052, 49222, 53365 }),
-        bars = dots({ 55078, 55095 }),
-        missing = { item("missing", 57330, { onlyCombat = true }), item("missing", "", { missingType = "form" }) } },
+    WARRIOR = {
+        trees = { L("Оружие", "Arms"), L("Неистовство", "Fury"), L("Защита", "Protection") },
+        all = { essential = cds({ 1719, 871 }),
+            utility = cds({ 6552, 100, 20252, 5246, 23920, 3411, 18499, 57755 }),
+            bars = { item("buff", 6673, { warn = 10 }) },
+            missing = { item("missing", "6673, 469", { onlyCombat = true }) } },
+        { essential = cds({ 12294, 7384, 46924, 12328 }), buffs = buffs({ 52437, 60503 }),
+            bars = { item("debuff", 772, { unit = "target", warn = 3 }), item("debuff", 12294, { unit = "target" }) } },
+        { essential = cds({ 23881, 1680, 12292, 60970 }), buffs = buffs({ 46916, 12292 }),
+            bars = { item("buff", 12292) } },
+        { essential = cds({ 23922, 6572, 46968, 12809, 12975, 2565 }), utility = cds({ 355, 694, 1161, 72 }),
+            buffs = buffs({ 50227, 2565, 871, 12975 }), bars = dots({ 7386, 6343, 1160 }) },
+    },
+    PALADIN = {
+        trees = { L("Свет", "Holy"), L("Защита", "Protection"), L("Воздаяние", "Retribution") },
+        all = { essential = cds({ 31884, 642, 498 }),
+            utility = cds({ 853, 1022, 633, 1044, 6940 }),
+            buffs = buffs({ 31884 }),
+            missing = { item("missing", "20166, 20165, 21084, 20375, 31801, 53736"),
+                item("missing", "", { missingType = "form" }) } },
+        { essential = cds({ 20473, 31842, 54428, 31821, 20216 }), buffs = buffs({ 54149, 31842, 53601 }),
+            bars = { item("buff", 53601), item("buff", 54428) } },
+        { essential = cds({ 31935, 53595, 20925, 26573, 53600, 20271 }), utility = cds({ 62124, 31789, 64205 }),
+            buffs = buffs({ 20925 }), bars = { item("buff", 20925) },
+            missing = { item("missing", 25780, { onlyCombat = true }) } },
+        { essential = cds({ 35395, 53385, 20271, 879, 26573, 24275 }), buffs = buffs({ 59578 }) },
+    },
+    PRIEST = {
+        trees = { L("Послушание", "Discipline"), L("Свет", "Holy"), L("Тьма", "Shadow") },
+        all = { utility = cds({ 6346, 8122, 586, 34433, 64843, 64901 }),
+            missing = { item("missing", 588), item("missing", "1243, 21562", { onlyGroup = true }) } },
+        { essential = cds({ 47540, 17, 33206, 10060, 14751 }), buffs = buffs({ 59889, 14751, 10060 }),
+            bars = { item("buff", 10060) } },
+        { essential = cds({ 34861, 33076, 47788, 724, 14751 }), buffs = buffs({ 33151, 63735 }),
+            bars = { item("buff", 63735) } },
+        { essential = cds({ 8092, 32379, 47585, 64044 }), utility = cds({ 15487 }), buffs = buffs({ 15258 }),
+            bars = dots({ 589, 34914, 2944 }), missing = { item("missing", 15473) } },
+    },
+    DRUID = {
+        trees = { L("Баланс", "Balance"), L("Сила зверя", "Feral Combat"), L("Исцеление", "Restoration") },
+        all = { essential = cds({ 22812, 29166 }),
+            utility = cds({ 1850, 20484, 33786 }),
+            buffs = buffs({ 16870 }),
+            missing = { item("missing", "1126, 21849", { onlyGroup = true }), item("missing", "", { missingType = "form" }) } },
+        { essential = cds({ 48505, 33831, 50516 }), buffs = buffs({ 48517, 48518 }),
+            bars = dots({ 8921, 5570, 770 }) },
+        { essential = cds({ 5217, 50334, 33878, 61336, 5229 }), utility = cds({ 5211, 22842, 16979, 49376 }),
+            buffs = buffs({ 52610, 50334, 69369 }), bars = dots({ 1079, 1822, 33745 }) },
+        { essential = cds({ 18562, 17116, 48438, 740 }), bars = { item("buff", 29166) } },
+    },
+    SHAMAN = {
+        trees = { L("Стихии", "Elemental"), L("Совершенствование", "Enhancement"), L("Исцеление", "Restoration") },
+        all = { utility = cds({ 57994, 51514, 8177, 32182, 2825, 2484, 2894, 2062 }),
+            bars = { item("totem", 1), item("totem", 2), item("totem", 3), item("totem", 4) },
+            missing = { item("missing", "", { missingType = "weapon_mh" }) } },
+        { essential = cds({ 51505, 8050, 16166, 51490 }), buffs = buffs({ 16246, 324 }),
+            bars = dots({ 8050 }), missing = { item("missing", 324) } },
+        { essential = cds({ 17364, 60103, 51533, 30823, 8042, 1535 }), buffs = buffs({ 53817, 30823 }),
+            missing = { item("missing", 324), item("missing", "", { missingType = "weapon_oh" }) } },
+        { essential = cds({ 61295, 16188, 16190, 55198 }), buffs = buffs({ 53390, 52127 }),
+            missing = { item("missing", 52127) } },
+    },
+    MAGE = {
+        trees = { L("Тайная магия", "Arcane"), L("Огонь", "Fire"), L("Лёд", "Frost") },
+        all = { essential = cds({ 12051, 55342, 45438 }),
+            utility = cds({ 1953, 2139, 122, 66 }),
+            missing = { item("missing", "1459, 23028, 61316", { onlyGroup = true }),
+                item("missing", "30482, 6117, 7302, 168") } },
+        { essential = cds({ 12042, 12043, 44425 }), buffs = { item("buff", 44401), item("buff", 12042), item("buff", 12043),
+            item("debuff", 36032, { unit = "player" }) } },
+        { essential = cds({ 11129, 31661, 11113, 2136 }), buffs = buffs({ 48108 }), bars = dots({ 44457, 12654, 22959 }) },
+        { essential = cds({ 12472, 11958, 31687, 44572, 120, 11426 }), buffs = buffs({ 44544, 57761, 12472 }),
+            bars = { item("buff", 11426) } },
+    },
+    WARLOCK = {
+        trees = { L("Колдовство", "Affliction"), L("Демонология", "Demonology"), L("Разрушение", "Destruction") },
+        all = { utility = cds({ 29858, 18708, 698, 29893, 6789, 5484, 48020 }),
+            missing = { item("missing", "28176, 706, 687") } },
+        { essential = cds({ 48181, 18220 }), buffs = buffs({ 17941, 64371 }), bars = dots({ 172, 980, 30108, 48181 }) },
+        { essential = cds({ 47193, 47241, 50589, 54785 }), buffs = buffs({ 63167, 71165, 47241 }),
+            bars = dots({ 172, 348, 603 }) },
+        { essential = cds({ 17962, 50796, 17877, 30283 }), buffs = buffs({ 54277, 34936 }), bars = dots({ 348, 1490, 980 }) },
+    },
+    HUNTER = {
+        trees = { L("Чувство зверя", "Beast Mastery"), L("Стрельба", "Marksmanship"), L("Выживание", "Survival") },
+        all = { essential = cds({ 3045, 53351, 2643 }),
+            utility = cds({ 34477, 5384, 781, 19263, 1499, 13813, 60192 }),
+            buffs = buffs({ 3045 }),
+            bars = dots({ 1978 }),
+            missing = { item("missing", "61846, 13165, 34074") } },
+        { essential = cds({ 19574, 34026, 19577, 3044 }), buffs = buffs({ 19574, 34471, 53257 }),
+            bars = { item("buff", 136, { unit = "pet" }) } },
+        { essential = cds({ 53209, 19434, 3044, 23989, 34490 }), buffs = buffs({ 53220, 6150 }) },
+        { essential = cds({ 53301, 3674, 19306 }), buffs = buffs({ 56453 }), bars = dots({ 3674 }) },
+    },
+    ROGUE = {
+        trees = { L("Ликвидация", "Assassination"), L("Бой", "Combat"), L("Скрытность", "Subtlety") },
+        all = { utility = cds({ 1766, 5277, 31224, 1856, 2094, 408, 57934, 2983, 1776 }),
+            buffs = buffs({ 5171 }),
+            bars = { item("buff", 5171, { warn = 3 }), item("debuff", 1943, { unit = "target" }) },
+            missing = { item("missing", "", { missingType = "weapon_mh" }), item("missing", "", { missingType = "weapon_oh" }) } },
+        { essential = cds({ 14177, 51662 }), buffs = buffs({ 51662, 32645, 14177 }), bars = dots({ 2818 }) },
+        { essential = cds({ 13750, 13877, 51690 }), buffs = buffs({ 13750, 13877, 51690 }), bars = dots({ 8647 }) },
+        { essential = cds({ 14185, 51713, 36554, 14183 }), buffs = buffs({ 51713, 36554 }), bars = dots({ 703, 16511 }) },
+    },
+    DEATHKNIGHT = {
+        trees = { L("Кровь", "Blood"), L("Лёд", "Frost"), L("Нечестивость", "Unholy") },
+        all = { essential = cds({ 48792, 48707, 47568, 42650 }),
+            utility = cds({ 47528, 47476, 49576, 56222, 48743, 46584, 49039 }),
+            buffs = buffs({ 53365 }),
+            bars = dots({ 55078, 55095 }),
+            missing = { item("missing", 57330, { onlyCombat = true }), item("missing", "", { missingType = "form" }) } },
+        { essential = cds({ 55233, 49028, 48982, 49005, 49016 }), buffs = buffs({ 55233 }) },
+        { essential = cds({ 49184, 51271, 49203, 49796 }), buffs = buffs({ 51124, 59052, 51271 }) },
+        { essential = cds({ 49206, 43265, 49222, 51052 }), buffs = buffs({ 49222 }) },
+    },
 }
+CDM.presets = presets
+
+-- The five starting groups; `preset` marks a group as one of them, so a deleted group can be restored.
+local PRESET_GROUPS = {
+    { key = "essential", name = "Essential Cooldowns", kind = "icons", extra = { size = 42, perRow = 8 } },
+    { key = "utility", name = "Utility Cooldowns", kind = "icons", extra = { size = 30, perRow = 10 } },
+    { key = "buffs", name = "Tracked Buffs", kind = "icons", extra = { size = 32, perRow = 8, cdShow = "always" } },
+    { key = "bars", name = "Tracked Bars", kind = "bars", extra = { perRow = 1, grow = "DOWN" } },
+    { key = "missing", name = L("Напоминания", "Reminders"), names = { "Напоминания", "Reminders" }, kind = "icons",
+        extra = { size = 34, perRow = 6 }, zone = { none = true, party = true, raid = true, pvp = false, arena = false },
+        -- class-free entries every character gets
+        tail = { item("missing", "", { missingType = "flask", onlyGroup = true }),
+            item("missing", "", { missingType = "food", onlyGroup = true }) } },
+}
+CDM.presetGroups = PRESET_GROUPS
+
+local function playerClass()
+    local _, class = UnitClass("player")
+    return class
+end
+
+-- Talent tree names of a class: the client's own names for the player's class, the preset names otherwise.
+function CDM.TreeNames(class)
+    class = class and class ~= "" and class or playerClass()
+    if class == playerClass() and Suite.TreeNames then
+        local names = Suite.TreeNames()
+        if #names > 0 then return names end
+    end
+    return presets[class] and presets[class].trees or {}
+end
+
+-- Default entries of one preset group for a class, tagged with class and tree: spec entries first
+-- (tree 1, 2, 3; only one of them is ever shown), then the common ones, then the class-free tail.
+local function presetItems(key, class)
+    local preset, list = presets[class or ""], {}
+    local function add(source, spec, tagClass)
+        for _, entry in ipairs(source or {}) do
+            local copy = Suite.Copy(entry)
+            copy.class, copy.spec = tagClass or "", spec
+            list[#list + 1] = copy
+        end
+    end
+    if preset then
+        for tree = 1, 3 do add(preset[tree] and preset[tree][key], tree, class) end
+        add(preset.all and preset.all[key], 0, class)
+    end
+    for _, def in ipairs(PRESET_GROUPS) do
+        if def.key == key then add(def.tail, 0, nil) end
+    end
+    return list
+end
+CDM.PresetItems = presetItems
 
 local function newGroup(name, kind, extra)
     local group = Suite.Copy(GROUP_DEFAULTS)
@@ -140,35 +260,81 @@ local function newGroup(name, kind, extra)
     return group
 end
 
-local function starterGroups()
-    local _, class = UnitClass("player")
-    local preset = presets[class] or {}
-    local list = {
-        newGroup("Essential Cooldowns", "icons", { size = 42, perRow = 8, items = Suite.Copy(preset.essential or {}) }),
-        newGroup("Utility Cooldowns", "icons", { size = 30, perRow = 10, items = Suite.Copy(preset.utility or {}) }),
-        newGroup("Tracked Buffs", "icons", { size = 32, perRow = 8, cdShow = "always",
-            items = Suite.Copy(preset.buffs or {}) }),
-        newGroup("Tracked Bars", "bars", { perRow = 1, grow = "DOWN", items = Suite.Copy(preset.bars or {}) }),
-    }
-    local missing = Suite.Copy(preset.missing or {})
-    missing[#missing + 1] = item("missing", "", { missingType = "flask", onlyGroup = true })
-    missing[#missing + 1] = item("missing", "", { missingType = "food", onlyGroup = true })
-    list[#list + 1] = newGroup(L("Напоминания", "Reminders"), "icons", { size = 34, perRow = 6, items = missing,
-        load = { when = "always", group = "any", talentGroup = 0, tree = 0, form = 0,
-            zone = { none = true, party = true, raid = true, pvp = false, arena = false } } })
+local function presetGroup(def, class)
+    local extra = Suite.Copy(def.extra or {})
+    extra.items, extra.preset = presetItems(def.key, class), def.key
+    local group = newGroup(def.name, def.kind, extra)
+    if def.zone then group.load.zone = Suite.Copy(def.zone) end
+    return group
+end
+
+local function starterGroups(class)
+    local list = {}
+    for _, def in ipairs(PRESET_GROUPS) do list[#list + 1] = presetGroup(def, class or playerClass()) end
     return list
 end
 
+-- Identity of an entry for restoring defaults: what is tracked, not how it looks.
+local function entryKey(entry)
+    return (entry.kind or "") .. "|" .. tostring(entry.spell or "") .. "|"
+        .. (entry.kind == "missing" and (entry.missingType or "aura") or "")
+end
+CDM.EntryKey = entryKey
+
+local function insertGroup(db, group, position)
+    local id = db.nextId
+    db.nextId = id + 1
+    group.id = id
+    db.groups[id] = group
+    table.insert(db.order, min(position or #db.order + 1, #db.order + 1), id)
+    return id
+end
+
+local function presetGroupOf(db, key)
+    for _, id in ipairs(db.order) do
+        local group = db.groups[id]
+        if group and group.preset == key then return group end
+    end
+end
+
+-- Profiles from before the spec split: the starting groups are found by name and their default
+-- entries get the class and tree tags of the matching preset entries; the user's own entries stay
+-- for every spec. Runs once per class and profile.
+local function tagLegacy(db, class)
+    for _, def in ipairs(PRESET_GROUPS) do
+        if not presetGroupOf(db, def.key) then
+            for _, id in ipairs(db.order) do
+                local group = db.groups[id]
+                local names = def.names or { def.name }
+                local matches = false
+                for _, name in ipairs(names) do if group and group.name == name then matches = true end end
+                if matches and not group.preset then group.preset = def.key break end
+            end
+        end
+        local group = presetGroupOf(db, def.key)
+        if group then
+            local byKey = {}
+            for _, entry in ipairs(presetItems(def.key, class)) do
+                byKey[entryKey(entry)] = byKey[entryKey(entry)] or entry
+            end
+            for _, entry in ipairs(group.items or {}) do
+                local default = byKey[entryKey(entry)]
+                if default and (entry.class or "") == "" and (entry.spec or 0) == 0 then
+                    entry.class, entry.spec = default.class, default.spec
+                    byKey[entryKey(entry)] = nil
+                end
+            end
+        end
+    end
+end
+
 Suite.RegisterProfilePart("cdm", function(db)
+    if type(db.specTagged) ~= "table" then db.specTagged = {} end
     if type(db.groups) ~= "table" then
         db.groups, db.order, db.nextId = {}, {}, 1
-        for _, group in ipairs(starterGroups()) do
-            local id = db.nextId
-            db.nextId = id + 1
-            group.id = id
-            db.groups[id] = group
-            db.order[#db.order + 1] = id
-        end
+        local class = playerClass()
+        for _, group in ipairs(starterGroups(class)) do insertGroup(db, group) end
+        if class then db.specTagged[class] = true end
     end
     if type(db.order) ~= "table" then db.order = {} end
     db.nextId = tonumber(db.nextId) or 1
@@ -190,6 +356,11 @@ Suite.RegisterProfilePart("cdm", function(db)
     end
     for id in pairs(db.groups) do if not seen[id] then order[#order + 1] = id end end
     db.order = order
+    local class = playerClass()
+    if class and not db.specTagged[class] then
+        tagLegacy(db, class)
+        db.specTagged[class] = true
+    end
 end)
 
 local function data() return Suite.Part("cdm") end
@@ -286,6 +457,54 @@ function CDM.MoveItem(groupId, index, delta)
         return target
     end
     return index
+end
+
+-- Restores the starting groups. mode "missing": deleted starting groups come back where they were
+-- and deleted default entries return into the starting groups (the user's own groups and entries stay);
+-- mode "all": every group is replaced by the starting set. Returns groups and entries added.
+function CDM.RestoreDefaults(mode)
+    local db, class = data(), playerClass()
+    if mode == "all" then
+        db.groups, db.order, db.nextId = {}, {}, 1
+        for _, group in ipairs(starterGroups(class)) do insertGroup(db, group) end
+        if class then db.specTagged[class] = true end
+        CDM.selectedGroup = nil
+        if CDM.RefreshCombatLog then CDM.RefreshCombatLog() end
+        CDM.Rebuild()
+        return #db.order, 0
+    end
+    local addedGroups, addedItems = 0, 0
+    local position = 0          -- order index of the last starting group seen
+    for _, def in ipairs(PRESET_GROUPS) do
+        local group = presetGroupOf(db, def.key)
+        if not group then
+            local id = insertGroup(db, presetGroup(def, class), position + 1)
+            addedGroups, addedItems = addedGroups + 1, addedItems + #db.groups[id].items
+            position = position + 1
+        else
+            for index, id in ipairs(db.order) do if id == group.id then position = index end end
+            -- An entry is present when it tracks the same thing for the same tree, or for every tree.
+            local cursor = 0
+            for _, default in ipairs(presetItems(def.key, class)) do
+                local key, found = entryKey(default), nil
+                for index, entry in ipairs(group.items) do
+                    local sameSpec = (entry.spec or 0) == 0 or (entry.spec == default.spec
+                        and ((entry.class or "") == "" or entry.class == default.class))
+                    if entryKey(entry) == key and sameSpec then found = index break end
+                end
+                if found then
+                    cursor = max(cursor, found)
+                else
+                    cursor = min(cursor, #group.items) + 1
+                    table.insert(group.items, cursor, Suite.Merge(Suite.Copy(default), ITEM_DEFAULTS))
+                    addedItems = addedItems + 1
+                end
+            end
+        end
+    end
+    if CDM.RefreshCombatLog then CDM.RefreshCombatLog() end
+    CDM.Rebuild()
+    return addedGroups, addedItems
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -402,7 +621,30 @@ end
 
 local inCombat = false
 
+-- Class and primary talent tree of the player, cached: entries and groups are checked many times a
+-- second. Without talent points (low level) the tree is 0 and entries of every tree are allowed.
+local currentClass, currentTree
+local function refreshSpec()
+    currentClass, currentTree = playerClass(), Suite.PrimaryTree()
+end
+local function specNow()
+    if currentTree == nil then refreshSpec() end
+    return currentClass, currentTree
+end
+
+-- Whether an entry belongs to the current class and talent tree.
+local function entryActive(entry)
+    local class, tree = specNow()
+    if (entry.class or "") ~= "" and entry.class ~= class then return false end
+    local spec = entry.spec or 0
+    if spec > 0 and tree > 0 and spec ~= tree then return false end
+    return true
+end
+CDM.EntryActive = entryActive
+function CDM.CurrentSpec() return specNow() end
+
 local function conditionsBlock(entry)
+    if not entryActive(entry) then return true end
     if entry.onlyCombat and not inCombat then return true end
     if entry.onlyGroup and Suite.GroupType() == "solo" then return true end
     if entry.requires and entry.requires ~= "" then
@@ -752,7 +994,9 @@ local function loadAllowed(group)
     local zone = Suite.ZoneType()
     if type(load.zone) == "table" and load.zone[zone] == false then return false end
     if (load.talentGroup or 0) > 0 and Suite.TalentGroup() ~= load.talentGroup then return false end
-    if (load.tree or 0) > 0 and Suite.PrimaryTree() ~= load.tree then return false end
+    local class, tree = specNow()
+    if (load.class or "") ~= "" and load.class ~= class then return false end
+    if (load.tree or 0) > 0 and tree ~= load.tree then return false end
     if (load.form or 0) > 0 and (GetShapeshiftForm() or 0) ~= load.form - 1 then return false end
     return true
 end
@@ -1142,6 +1386,7 @@ events:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PLAYER_REGEN_ENABLED" then
         inCombat = false
     elseif event == "PLAYER_LOGIN" then
+        refreshSpec()
         playerGUID = UnitGUID("player")
         inCombat = InCombatLockdown() and true or false
         refreshCombatLog()
@@ -1159,7 +1404,10 @@ ui.RegisterCallback("SuiteProfileChanged", function()
     CDM.Rebuild()
 end, "CooldownManagerProfile")
 ui.RegisterCallback("SuiteSpellsChanged", function() dirty = true end, "CooldownManagerSpells")
-ui.RegisterCallback("SuiteTalentsChanged", function() dirty = true end, "CooldownManagerTalents")
+ui.RegisterCallback("SuiteTalentsChanged", function()
+    refreshSpec()
+    CDM.Rebuild()
+end, "CooldownManagerTalents")
 
 -- Edit Mode: show every group with placeholders while the editor is open.
 if ForeverStockUIEditMode then
