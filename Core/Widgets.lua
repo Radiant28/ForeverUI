@@ -137,7 +137,12 @@ W.BindTooltip = bindTooltip
 ---------------------------------------------------------------------------------------------------
 -- Scroll container used by the window, pages and the dropdown list
 ---------------------------------------------------------------------------------------------------
-function W.Scroll(parent)
+-- Scroll frame with a wide, clickable scrollbar beside it: the wheel scrolls, a click on the track
+-- jumps there (the thumb centres on the cursor) and the thumb can be dragged. barWidth and barGap
+-- (space between the scroll frame and the bar) default to 10 and 4; the bar sits outside the frame.
+-- scroll.onScroll(scroll, offset) is called whenever the offset changes.
+function W.Scroll(parent, barWidth, barGap)
+    barWidth, barGap = barWidth or 10, barGap or 4
     local scroll = CreateFrame("ScrollFrame", nil, parent)
     local child = CreateFrame("Frame", nil, scroll)
     child:SetSize(1, 1)
@@ -145,31 +150,61 @@ function W.Scroll(parent)
     scroll.child = child
     scroll:EnableMouseWheel(true)
 
-    local bar = CreateFrame("Frame", nil, scroll)
-    bar:SetWidth(3)
-    bar:SetPoint("TOPRIGHT", scroll, "TOPRIGHT", 6, 0)
-    bar:SetPoint("BOTTOMRIGHT", scroll, "BOTTOMRIGHT", 6, 0)
+    local bar = CreateFrame("Button", nil, scroll)
+    bar:SetWidth(barWidth)
+    bar:SetPoint("TOPLEFT", scroll, "TOPRIGHT", barGap, 0)
+    bar:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", barGap, 0)
+    bar:EnableMouse(true)
+    bar:EnableMouseWheel(true)
+    bar:RegisterForClicks("LeftButtonUp")
+    local track = bar:CreateTexture(nil, "BACKGROUND")
+    track:SetAllPoints(bar)
+    track:SetTexture(white)
+    track:SetVertexColor(1, 1, 1, 0.04)
     local thumb = bar:CreateTexture(nil, "OVERLAY")
     thumb:SetTexture(white)
-    thumb:SetVertexColor(1, 1, 1, 0.22)
-    thumb:SetWidth(3)
-    scroll.thumb = thumb
+    thumb:SetWidth(barWidth)
+    scroll.bar, scroll.thumb = bar, thumb
+
+    local hover, grab = false, nil
+    local function paint()
+        if grab then
+            thumb:SetVertexColor(rgba(S.accent, 0.9))
+        elseif hover then
+            thumb:SetVertexColor(rgba(S.accent, 0.6))
+        else
+            thumb:SetVertexColor(1, 1, 1, 0.28)
+        end
+        track:SetVertexColor(1, 1, 1, (hover or grab) and 0.08 or 0.04)
+    end
+    paint()
+
+    local function geometry()
+        local height = scroll:GetHeight() or 0
+        local content = scroll.contentHeight or 0
+        local range = max(0, content - height)
+        local size = range > 0 and max(24, height * height / content) or height
+        return height, range, size
+    end
 
     function scroll:Update()
-        local height = self:GetHeight()
-        local content = self.contentHeight or 0
-        local range = max(0, content - height)
-        local offset = min(self:GetVerticalScroll(), range)
+        local height, range, size = geometry()
+        local offset = max(0, min(self:GetVerticalScroll() or 0, range))
         self:SetVerticalScroll(offset)
         if range <= 0 or height <= 0 then
             thumb:Hide()
-            return
+            bar:Hide()
+        else
+            bar:Show()
+            thumb:ClearAllPoints()
+            thumb:SetHeight(size)
+            thumb:SetPoint("TOP", bar, "TOP", 0, -(height - size) * offset / range)
+            thumb:Show()
         end
-        local size = max(24, height * height / content)
-        thumb:ClearAllPoints()
-        thumb:SetHeight(size)
-        thumb:SetPoint("TOP", bar, "TOP", 0, -(height - size) * offset / range)
-        thumb:Show()
+        if self.onScroll and self.lastOffset ~= offset then
+            self.lastOffset = offset
+            self.onScroll(self, offset)
+        end
     end
 
     function scroll:SetContentHeight(height)
@@ -179,11 +214,56 @@ function W.Scroll(parent)
         self:Update()
     end
 
-    function scroll:ForeverScroll(delta)
-        local range = max(0, (self.contentHeight or 0) - self:GetHeight())
-        self:SetVerticalScroll(max(0, min(range, self:GetVerticalScroll() - delta * 48)))
+    function scroll:ScrollTo(offset)
+        local _, range = geometry()
+        self:SetVerticalScroll(max(0, min(range, offset or 0)))
         self:Update()
     end
+
+    function scroll:ForeverScroll(delta)
+        self:ScrollTo((self:GetVerticalScroll() or 0) - delta * 48)
+    end
+
+    -- Cursor height below the top of the bar, in the bar's own units.
+    local function cursorDepth()
+        local _, y = GetCursorPosition()
+        local scale = bar:GetEffectiveScale() or 1
+        return (bar:GetTop() or 0) - y / scale
+    end
+    -- Moves the thumb so that the point `grab` px below its top follows the cursor.
+    local function follow()
+        local height, range, size = geometry()
+        if range <= 0 or height <= size then return end
+        local top = max(0, min(height - size, cursorDepth() - grab))
+        scroll:ScrollTo(range * top / (height - size))
+    end
+    bar:SetScript("OnMouseDown", function(_, button)
+        if button ~= "LeftButton" then return end
+        local height, range, size = geometry()
+        if range <= 0 then return end
+        local thumbTop = (height - size) * (scroll:GetVerticalScroll() or 0) / range
+        local depth = cursorDepth()
+        if depth >= thumbTop and depth <= thumbTop + size then
+            grab = depth - thumbTop          -- drag from where the thumb was taken
+        else
+            grab = size / 2                  -- jump: centre the thumb on the cursor, then drag
+            follow()
+        end
+        paint()
+        bar:SetScript("OnUpdate", follow)
+    end)
+    local function release()
+        if not grab then return end
+        grab = nil
+        bar:SetScript("OnUpdate", nil)
+        paint()
+        W.Redraw(scroll)
+    end
+    bar:SetScript("OnMouseUp", release)
+    bar:SetScript("OnHide", release)
+    bar:SetScript("OnEnter", function() hover = true paint() end)
+    bar:SetScript("OnLeave", function() hover = false paint() end)
+    bar:SetScript("OnMouseWheel", function(_, delta) scroll:ForeverScroll(delta) end)
 
     scroll:SetScript("OnMouseWheel", scroll.ForeverScroll)
     scroll:SetScript("OnSizeChanged", function(self, width)
