@@ -29,9 +29,8 @@ local DEFAULTS = {
     rfRangeMode = "custom", rfRangeAlpha = 0.4, rfRangeFade = true,
     rfHideClientAuras = true,
     rfBuffs = true, rfBuffSize = 13, rfBuffMax = 3, rfBuffAnchor = "BOTTOMRIGHT", rfBuffGrow = "LEFT",
-    rfBuffSpacing = 1, rfBuffX = -2, rfBuffY = 2, rfBuffFilter = "mine", rfAuraTimer = false,
-    -- Renewed Hope (63944): Power Word: Shield puts it on the whole party, so it looked like the shield everywhere.
-    rfBuffHide = "63944",
+    rfBuffSpacing = 1, rfBuffX = -2, rfBuffY = 2, rfBuffFilter = "all", rfAuraTimer = false,
+    rfBuffTrack = "", rfDebuffHide = "",   -- filled from RF.defaultTracked / RF.defaultExclusions below
     rfDebuffs = true, rfDebuffSize = 15, rfDebuffMax = 3, rfDebuffAnchor = "BOTTOMLEFT", rfDebuffGrow = "RIGHT",
     rfDebuffSpacing = 1, rfDebuffX = 2, rfDebuffY = 2, rfDebuffFilter = "all", rfDispelScale = 1.25,
     rfDispelHighlight = true, rfDispelOnlyMine = true, rfDispelStyle = "both", rfDispelAlpha = 0.45,
@@ -40,10 +39,59 @@ local DEFAULTS = {
     rfShieldHeight = 0, rfShieldMode = "attached", rfShieldAlign = "BOTTOM", rfHideAbsorbGlow = true,
     rfIndicators = true, rfIndicatorTimer = true,
     rfMoveContainer = true,
+    rfPartyShow = "client", rfRaidShow = "client",
     rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
     rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
 }
 RF.defaults = DEFAULTS
+
+-- Buff icons show only what is in the tracked list (an empty list shows no buff icons): big
+-- defensive cooldowns, external saves and mana or haste cooldowns a healer reacts to. Matched by spell
+-- name, so one id covers every rank. Indicators still see every buff.
+local defensives = {
+    33206, 47788, 1022, 6940, 642, 498,     -- Pain Suppression, Guardian Spirit, Hand of Protection, Hand of Sacrifice, Divine Shield, Divine Protection
+    871, 12975, 48792, 48707, 55233,        -- Shield Wall, Last Stand, Icebound Fortitude, Anti-Magic Shell, Vampiric Blood
+    61336, 22812, 5277, 31224, 45438, 19263, -- Survival Instincts, Barkskin, Evasion, Cloak of Shadows, Ice Block, Deterrence
+}
+RF.defaultTracked = {}
+for _, id in ipairs(defensives) do RF.defaultTracked[#RF.defaultTracked + 1] = id end
+for _, id in ipairs({ 10060, 29166, 64901, 31821, 1044, 6346 }) do -- Power Infusion, Innervate, Hymn of Hope, Aura Mastery, Hand of Freedom, Fear Ward
+    RF.defaultTracked[#RF.defaultTracked + 1] = id
+end
+
+-- Debuffs that tell nothing on a raid frame: long debuffs nobody can act on. Based on Cell (Ghost,
+-- Exhaustion, Sated), extended for 3.3.5.
+RF.defaultExclusions = {
+    debuffs = {
+        8326, 57723, 57724,                 -- Ghost, Exhaustion, Sated (Cell)
+        15007, 26013, 71041,                -- Resurrection Sickness, Deserter, Dungeon Deserter
+        11196, 41425, 66233,                -- Recently Bandaged, Hypothermia, Ardent Defender cooldown
+        69127,                              -- Chill of the Throne (Icecrown Citadel, on everyone)
+        2479, 24755,                        -- Honorless Target, Tricked or Treated
+    },
+}
+local function joinIds(list)
+    local parts = {}
+    for i, id in ipairs(list) do parts[i] = tostring(id) end
+    return table.concat(parts, ", ")
+end
+RF.JoinIds = joinIds
+DEFAULTS.rfBuffTrack = joinIds(RF.defaultTracked)
+DEFAULTS.rfDebuffHide = joinIds(RF.defaultExclusions.debuffs)
+RF.defaultExclusionText = { rfBuffTrack = DEFAULTS.rfBuffTrack, rfDebuffHide = DEFAULTS.rfDebuffHide }
+
+-- Profiles from before the tracked list (they had an exclusion list rfBuffHide and the "mine" filter)
+-- get the recommended tracked list; the old filter would hide the defensives cast by others.
+function RF.MigrateExclusions(part)
+    if type(part) ~= "table" then return end
+    if part.rfBuffHide ~= nil then
+        part.rfBuffHide = nil
+        part.rfBuffTrack = DEFAULTS.rfBuffTrack
+        part.rfBuffFilter = "all"
+    end
+    if part.rfBuffTrack == nil then part.rfBuffTrack = DEFAULTS.rfBuffTrack end
+    if part.rfDebuffHide == nil then part.rfDebuffHide = DEFAULTS.rfDebuffHide end
+end
 
 local function indicator(name, spell, point, color, extra)
     local entry = { enabled = true, name = name, spell = tostring(spell), kind = "aura", mine = true, harmful = false,
@@ -56,6 +104,8 @@ local classIndicators = {
         indicator("Renew", 139, "TOPLEFT", { 0.3, 1, 0.3 }),
         indicator("Power Word: Shield", 17, "TOP", { 1, 0.9, 0.3 }, { mine = false }),
         indicator("Prayer of Mending", 33076, "TOPRIGHT", { 1, 0.5, 0.2 }, { stacks = true, mine = false }),
+        indicator("Divine Aegis", 47753, "TOP", { 1, 1, 0.8 }, { x = 10, size = 6 }),
+        indicator("Grace", 47930, "TOPRIGHT", { 0.9, 0.9, 1 }, { stacks = true, x = -10, size = 6 }),
         indicator("Weakened Soul", 6788, "TOP", { 0.8, 0.2, 0.2 }, { harmful = true, mine = false, enabled = false, y = -10 }),
         indicator("Fortitude", "1243, 21562", "BOTTOM", { 1, 1, 1 }, { kind = "missing", mine = false, size = 6 }),
     },
@@ -63,21 +113,47 @@ local classIndicators = {
         indicator("Rejuvenation", 774, "TOPLEFT", { 0.75, 0.35, 1 }),
         indicator("Regrowth", 8936, "TOP", { 0.3, 1, 0.3 }),
         indicator("Lifebloom", 33763, "TOPRIGHT", { 0.6, 1, 0.4 }, { stacks = true }),
-        indicator("Wild Growth", 48438, "LEFT", { 0.6, 0.9, 0.2 }),
+        indicator("Wild Growth", 48438, "TOP", { 0.6, 0.9, 0.2 }, { x = 10 }),
         indicator("Mark of the Wild", "1126, 21849", "BOTTOM", { 1, 0.5, 1 }, { kind = "missing", mine = false, size = 6 }),
     },
     SHAMAN = {
         indicator("Riptide", 61295, "TOPLEFT", { 0.2, 0.7, 1 }),
         indicator("Earth Shield", 974, "TOPRIGHT", { 0.65, 0.45, 0.2 }, { stacks = true }),
         indicator("Earthliving", 51945, "TOP", { 0.4, 0.9, 0.3 }),
+        indicator("Ancestral Fortitude", 16177, "TOP", { 0.8, 0.7, 0.4 }, { x = 10, size = 6 }),
     },
     PALADIN = {
         indicator("Beacon of Light", 53563, "TOPLEFT", { 1, 0.85, 0.3 }),
         indicator("Sacred Shield", 53601, "TOPRIGHT", { 1, 0.95, 0.6 }),
-        indicator("Hand of Sacrifice", 6940, "TOP", { 1, 0.4, 0.3 }, { mine = false }),
+        indicator("Hand of Freedom", 1044, "TOP", { 1, 0.7, 0.3 }, { mine = false, size = 6 }),
     },
     MAGE = { indicator("Arcane Intellect", "1459, 23028, 61316", "BOTTOM", { 0.4, 0.6, 1 }, { kind = "missing", mine = false, size = 6 }) },
 }
+-- What every healer watches, whatever the class: a big defensive or an external save on the member
+-- (any caster, as a spell icon on the right) and healing reduction (Mortal Strike, Wound Poison,
+-- Aimed Shot) as a red mark on the left.
+RF.healerIndicators = {
+    indicator("Defensive cooldown", joinIds(defensives), "RIGHT", { 1, 1, 1 },
+        { mine = false, style = "icon", size = 14, x = -2 }),
+    indicator("Healing reduced", "12294, 13218, 19434", "LEFT", { 1, 0.15, 0.15 },
+        { harmful = true, mine = false, size = 7, x = 2 }),
+}
+RF.classIndicators = classIndicators
+RF.healerClasses = { PRIEST = true, DRUID = true, SHAMAN = true, PALADIN = true }
+
+-- Adds preset entries that are not in the list yet (by name). Returns how many were added.
+function RF.AddPresets(list, presets)
+    local have, added = {}, 0
+    for _, entry in ipairs(list) do have[entry.name or ""] = true end
+    for _, entry in ipairs(presets or {}) do
+        if not have[entry.name] then
+            list[#list + 1] = Suite.Copy(entry)
+            have[entry.name] = true
+            added = added + 1
+        end
+    end
+    return added
+end
 
 Suite.RegisterProfilePart("raid", function(db)
     for key, value in pairs(DEFAULTS) do
@@ -86,6 +162,7 @@ Suite.RegisterProfilePart("raid", function(db)
     if type(db.indicators) ~= "table" then
         local _, class = UnitClass("player")
         db.indicators = Suite.Copy(classIndicators[class] or {})
+        if RF.healerClasses[class] then RF.AddPresets(db.indicators, RF.healerIndicators) end
     end
 end)
 
@@ -551,17 +628,23 @@ end
 -- Auras: own buff/debuff icons, dispel highlight, Cell-style indicators
 ---------------------------------------------------------------------------------------------------
 local indicatorLookup = {}   -- name or id -> { indicator index, ... }
-local hiddenBuffs = {}       -- name or id -> true: never drawn as a buff icon (indicators still see them)
-local function rebuildIndicatorLookup()
-    for k in pairs(indicatorLookup) do indicatorLookup[k] = nil end
-    for k in pairs(hiddenBuffs) do hiddenBuffs[k] = nil end
-    for _, spell in ipairs(Suite.ParseSpellList(cfg().rfBuffHide or "")) do
-        hiddenBuffs[spell] = true
+local trackedBuffs = {}      -- name or id -> true: the only buffs drawn as icons (indicators see every buff)
+local hiddenDebuffs = {}     -- the same for debuff icons and the dispel highlight
+local function fillHidden(target, text)
+    for k in pairs(target) do target[k] = nil end
+    for _, spell in ipairs(Suite.ParseSpellList(text or "")) do
+        target[spell] = true
         if type(spell) == "number" then
             local name = GetSpellInfo(spell)
-            if name then hiddenBuffs[name] = true end
+            if name then target[name] = true end
         end
     end
+end
+local function rebuildIndicatorLookup()
+    for k in pairs(indicatorLookup) do indicatorLookup[k] = nil end
+    RF.MigrateExclusions(cfg())
+    fillHidden(trackedBuffs, cfg().rfBuffTrack)
+    fillHidden(hiddenDebuffs, cfg().rfDebuffHide)
     for index, entry in ipairs(cfg().indicators or {}) do
         if entry.enabled then
             for _, spell in ipairs(Suite.ParseSpellList(entry.spell)) do
@@ -577,6 +660,10 @@ local function rebuildIndicatorLookup()
     end
 end
 RF.RebuildIndicators = rebuildIndicatorLookup
+function RF.IsHidden(harmful, aura)
+    if harmful then return (aura.id and hiddenDebuffs[aura.id] or aura.name and hiddenDebuffs[aura.name]) and true or false end
+    return not ((aura.id and trackedBuffs[aura.id]) or (aura.name and trackedBuffs[aura.name]))
+end
 
 local function auraIcon(deco, list, index, size)
     local icon = list[index]
@@ -629,6 +716,7 @@ end
 local scratchDebuffs = {}
 local foundIndicator = {}
 
+local INDICATOR_LAYERS = 24
 local function indicatorWidget(deco, index, entry)
     local widget = deco.indicators[index]
     if not widget then
@@ -653,6 +741,12 @@ local function indicatorWidget(deco, index, entry)
     -- place, so the table identity alone would keep the old size, colour or position (preview included).
     if widget.stamp ~= entry or widget.styleVersion ~= RF.styleVersion then
         widget.stamp, widget.styleVersion = entry, RF.styleVersion
+        -- List order is the layer order: the first indicator is drawn above the ones below it, so
+        -- "Up"/"Down" in the options decide which of two overlapping indicators is on top. Each widget
+        -- takes two levels (square, then its cooldown spiral) above the layer.
+        local level = deco.layer:GetFrameLevel() + 1 + (INDICATOR_LAYERS - min(index, INDICATOR_LAYERS)) * 2
+        widget:SetFrameLevel(level)
+        widget.cooldown:SetFrameLevel(level + 1)
         local size = entry.size or 8
         widget:SetWidth(size)
         widget:SetHeight(size)
@@ -686,7 +780,9 @@ function RF.DrawAuras(deco, buffs, debuffs, now)
         local size = settings.rfBuffSize
         for _, aura in ipairs(buffs) do
             if shownBuffs >= settings.rfBuffMax then break end
-            if not aura.indicated and not hiddenBuffs[aura.id] and not hiddenBuffs[aura.name] then
+            local whose = settings.rfBuffFilter
+            local allowed = whose == "all" or (whose == "mine" and aura.mine) or (whose == "raid" and aura.raid)
+            if allowed and not aura.indicated and (trackedBuffs[aura.id] or trackedBuffs[aura.name]) then
                 shownBuffs = shownBuffs + 1
                 local icon = auraIcon(deco, deco.buffs, shownBuffs, size)
                 placeIcon(icon, frame, settings.rfBuffAnchor, settings.rfBuffGrow,
@@ -702,12 +798,14 @@ function RF.DrawAuras(deco, buffs, debuffs, now)
     local dispelType
     for i = #scratchDebuffs, 1, -1 do scratchDebuffs[i] = nil end
     for _, aura in ipairs(debuffs) do
-        aura.dispellable = aura.type and Suite.CanDispel(aura.type) or false
-        if aura.dispellable and not dispelType then dispelType = aura.type end
-        if not dispelType and not settings.rfDispelOnlyMine and aura.type and Suite.dispelColors[aura.type] then
-            dispelType = aura.type
+        if not (hiddenDebuffs[aura.id] or hiddenDebuffs[aura.name]) then
+            aura.dispellable = aura.type and Suite.CanDispel(aura.type) or false
+            if aura.dispellable and not dispelType then dispelType = aura.type end
+            if not dispelType and not settings.rfDispelOnlyMine and aura.type and Suite.dispelColors[aura.type] then
+                dispelType = aura.type
+            end
+            scratchDebuffs[#scratchDebuffs + 1] = aura
         end
-        scratchDebuffs[#scratchDebuffs + 1] = aura
     end
     if settings.rfEnabled and settings.rfDebuffs then
         table.sort(scratchDebuffs, function(a, b)
@@ -773,6 +871,17 @@ local function collect(unit, filter, list, mineOnly)
             list[#list + 1] = aura
         end
     end
+end
+
+local raidNames = {}
+local function markRaidBuffs(unit, list)
+    for k in pairs(raidNames) do raidNames[k] = nil end
+    for i = 1, 40 do
+        local name = UnitAura(unit, i, "HELPFUL|RAID")
+        if not name then break end
+        raidNames[name] = true
+    end
+    for _, aura in ipairs(list) do aura.raid = raidNames[aura.name] or false end
 end
 
 local function release(list)
@@ -867,8 +976,10 @@ local function updateAuras(deco)
         drawIndicators(deco, buffList, debuffList, now)
         return
     end
-    local filter = settings.rfBuffFilter
-    collect(unit, filter == "raid" and "HELPFUL|RAID" or "HELPFUL", buffList, filter == "mine")
+    -- Every buff is collected: indicators of others' shields and saves need them. "Whose buffs" only
+    -- filters the icons (RF.DrawAuras).
+    collect(unit, "HELPFUL", buffList, false)
+    if settings.rfBuffFilter == "raid" then markRaidBuffs(unit, buffList) end
     collect(unit, "HARMFUL", debuffList, false)
     -- Indicators claim their auras first so they are not drawn twice.
     drawIndicators(deco, buffList, debuffList, now)
@@ -1279,6 +1390,7 @@ function RF.Init()
     RF.Scan()
     RF.SyncAnchor()
     RF.AttachContainer()
+    if RF.ApplyVisibility then RF.ApplyVisibility() end
 end
 
 if ForeverStockUIEditMode then
@@ -1451,10 +1563,183 @@ function RF.ApplyLayout()
     if cfg().rfMoveContainer then RF.AttachContainer() end
 end
 
+---------------------------------------------------------------------------------------------------
+-- Visibility: "client" leaves the frames to the client, "always" keeps them shown (also solo or in a
+-- party), "hidden" turns them off. Show/Hide of the protected containers happens only out of combat.
+---------------------------------------------------------------------------------------------------
+local visibilityForced = {}   -- frame -> its shown state before ForeverUI first forced it
+local visibilityApplying
+
+local function desiredVisibility(frame)
+    local settings = cfg()
+    local party, raid = settings.rfPartyShow or "client", settings.rfRaidShow or "client"
+    local inRaid = (GetNumRaidMembers and GetNumRaidMembers() or 0) > 0
+    local partyFrame = _G.CompactPartyFrame
+    if frame == partyFrame then
+        if party == "hidden" then return false end
+        if party == "always" and not inRaid then return true end
+        return nil
+    elseif frame == _G.CompactRaidFrameContainer then
+        if raid == "always" then return true end
+        if inRaid or partyFrame then
+            if raid == "hidden" then return false end
+            return nil
+        end
+        -- No separate party frame: outside a raid the container shows the party.
+        if party == "hidden" then return false end
+        if party == "always" then return true end
+        return nil
+    elseif frame == _G.CompactRaidFrameManager then
+        if party == "hidden" and raid == "hidden" then return false end
+        return nil
+    end
+end
+
+local function clientVisibilityUpdate()
+    local manager = _G.CompactRaidFrameManager
+    for _, name in ipairs({ "CompactRaidFrameManager_UpdateShown", "CompactRaidFrameManager_UpdateContainerVisibility" }) do
+        if manager and type(_G[name]) == "function" then pcall(_G[name], manager) end
+    end
+    if type(_G.CompactPartyFrame_UpdateVisibility) == "function" then pcall(_G.CompactPartyFrame_UpdateVisibility) end
+    if _G.CompactRaidFrameContainer and type(_G.CompactRaidFrameContainer_TryUpdate) == "function" then
+        pcall(_G.CompactRaidFrameContainer_TryUpdate, _G.CompactRaidFrameContainer)
+    end
+end
+
+local function visibilityFrames()
+    return { _G.CompactRaidFrameContainer, _G.CompactPartyFrame, _G.CompactRaidFrameManager }
+end
+
+local visibilityParent = {}  -- frame -> its own parent, while a hidden ancestor forced it onto UIParent
+local forcedMembers = {}     -- party member button -> true while ForeverUI shows it outside a group
+
+-- A frame can be shown and still invisible when an ancestor is hidden (the client hides its party frame
+-- holder outside a group). Then it is lifted onto UIParent; the old parent comes back on release.
+local function revealChain(frame)
+    if not frame:IsShown() or frame:IsVisible() then return end
+    local parent = frame:GetParent()
+    if parent and parent ~= UIParent and not visibilityParent[frame] then
+        visibilityParent[frame] = { parent = parent, scale = frame:GetScale() }
+        local scale = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+        frame:SetParent(UIParent)
+        frame:SetScale(scale)
+    end
+end
+
+local function restoreParent(frame)
+    local saved = visibilityParent[frame]
+    if not saved then return end
+    visibilityParent[frame] = nil
+    frame:SetParent(saved.parent)
+    frame:SetScale(saved.scale or 1)
+end
+
+local function setMemberUnit(member, unit)
+    if type(_G.CompactUnitFrame_SetUnit) == "function" then
+        pcall(_G.CompactUnitFrame_SetUnit, member, unit)
+    else
+        member.unit, member.displayedUnit = unit, unit
+    end
+    if member.SetAttribute then member:SetAttribute("unit", unit) end
+end
+
+-- Outside a group the client gives its party buttons no unit, so "always" would show an empty frame:
+-- the first button gets the player.
+local function fillPartyMembers(show)
+    local solo = (GetNumRaidMembers and GetNumRaidMembers() or 0) == 0
+        and (GetNumPartyMembers and GetNumPartyMembers() or 0) == 0
+    local member = _G.CompactPartyFrameMember1
+    if show and solo and member then
+        local unit = member.GetAttribute and member:GetAttribute("unit") or member.displayedUnit or member.unit
+        if unit ~= "player" then setMemberUnit(member, "player") end
+        forcedMembers[member] = true
+        member:Show()
+        if not member.foreverVisibilityHooked then
+            member.foreverVisibilityHooked = true
+            member:HookScript("OnHide", function(self)
+                if forcedMembers[self] and not visibilityApplying then
+                    ui.RunOutOfCombat("rfVisibility", RF.ApplyVisibility)
+                end
+            end)
+        end
+        if type(_G.CompactUnitFrame_UpdateAll) == "function" then pcall(_G.CompactUnitFrame_UpdateAll, member) end
+    else
+        for frame in pairs(forcedMembers) do
+            forcedMembers[frame] = nil
+            if solo then frame:Hide() end
+        end
+    end
+end
+
+function RF.ApplyVisibility()
+    if InCombatLockdown() then
+        ui.RunOutOfCombat("rfVisibility", RF.ApplyVisibility)
+        return
+    end
+    visibilityApplying = true
+    local released = false
+    for _, frame in ipairs(visibilityFrames()) do
+        if frame then
+            if not frame.foreverVisibilityHooked then
+                frame.foreverVisibilityHooked = true
+                frame:HookScript("OnShow", function(self)
+                    if not visibilityApplying and desiredVisibility(self) == false then
+                        ui.RunOutOfCombat("rfVisibility", RF.ApplyVisibility)
+                    end
+                end)
+                frame:HookScript("OnHide", function(self)
+                    if not visibilityApplying and desiredVisibility(self) == true then
+                        ui.RunOutOfCombat("rfVisibility", RF.ApplyVisibility)
+                    end
+                end)
+            end
+            local want = desiredVisibility(frame)
+            if want ~= true then restoreParent(frame) end
+            if want == nil then
+                if visibilityForced[frame] ~= nil then
+                    ui.Widgets.SetVisible(frame, visibilityForced[frame])
+                    visibilityForced[frame] = nil
+                    released = true
+                end
+            else
+                if visibilityForced[frame] == nil then visibilityForced[frame] = frame:IsShown() and true or false end
+                ui.Widgets.SetVisible(frame, want)
+            end
+        end
+    end
+    -- Hand the frames back: let the client decide again what it shows.
+    if released then clientVisibilityUpdate() end
+    for _, frame in ipairs(visibilityFrames()) do
+        local want = frame and desiredVisibility(frame)
+        if want ~= nil then ui.Widgets.SetVisible(frame, want) end
+    end
+    local party, container = _G.CompactPartyFrame, _G.CompactRaidFrameContainer
+    if container and desiredVisibility(container) == true and type(_G.CompactRaidFrameContainer_TryUpdate) == "function" then
+        pcall(_G.CompactRaidFrameContainer_TryUpdate, container)
+    end
+    fillPartyMembers(party ~= nil and desiredVisibility(party) == true)
+    for _, frame in ipairs(visibilityFrames()) do
+        if frame and desiredVisibility(frame) == true then revealChain(frame) end
+    end
+    visibilityApplying = nil
+    if (container and desiredVisibility(container) == true) or (party and desiredVisibility(party) == true) then
+        RF.Scan()
+        for _, deco in ipairs(ordered) do deco.unitDirty = true end
+        RF.MarkDirty()
+    end
+end
+
+local visibilityEvents = CreateFrame("Frame")
+for _, event in ipairs({ "PLAYER_ENTERING_WORLD", "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE" }) do
+    visibilityEvents:RegisterEvent(event)
+end
+visibilityEvents:SetScript("OnEvent", function() RF.ApplyVisibility() end)
+
 ui.RegisterCallback("SuiteProfileChanged", function()
     if ui.NormalizeModule then ui.NormalizeModule("raidframes") end
     RF.Apply()
     RF.ApplyLayout()
+    RF.ApplyVisibility()
 end, "RaidFramesProfile")
 ui.RegisterCallback("SuiteSpellsChanged", function()
     for _, deco in ipairs(ordered) do deco.auraDirty = true end
@@ -1465,32 +1750,70 @@ end, "RaidFramesSpells")
 -- Live preview for the options page: a mock unit button decorated by the same code
 ---------------------------------------------------------------------------------------------------
 -- Each variant shows one state clearly instead of everything on one frame.
+-- The three preview frames differ only in their bars (health, shield, incoming heals, threat, role);
+-- indicators, buffs and debuffs are the same set on all three, built from the current settings
+-- (previewAuras), so every change shows the same way on each frame.
 local previewVariants = {
     tank = { name = L("Танк", "Tank"), class = "WARRIOR", health = 0.92, heal = 0, absorb = 0.3, role = "TANK",
-        threat = 3, deficit = "-1.2k",
-        buffs = { { name = "Power Word: Shield", icon = "Interface\\Icons\\Spell_Holy_PowerWordShield", duration = 30, left = 20, id = 17 } },
-        debuffs = {} },
+        threat = 3, deficit = "-1.2k" },
     healer = { name = L("Лекарь", "Healer"), class = "PRIEST", health = 0.62, heal = 0.15, absorb = 0, role = "HEALER",
-        deficit = "-9.5k",
-        buffs = {
-            { name = "Renew", icon = "Interface\\Icons\\Spell_Holy_Renew", duration = 15, left = 9, mine = true, id = 139 },
-            { name = "Rejuvenation", icon = "Interface\\Icons\\Spell_Nature_Rejuvenation", duration = 12, left = 6, mine = true, id = 774 },
-            { name = "Earth Shield", icon = "Interface\\Icons\\Spell_Nature_SkinofEarth", count = 6, duration = 600, left = 500, mine = true, id = 974 },
-        },
-        debuffs = { { name = "Poison", icon = "Interface\\Icons\\Ability_Creature_Poison_06", count = 3, type = "Poison", duration = 12, left = 4 } } },
+        deficit = "-9.5k" },
     dps = { name = L("Боец", "Damage"), class = "MAGE", health = 0.34, heal = 0.1, absorb = 0.08, role = "DAMAGER",
-        deficit = "-16.8k", dispel = "Curse",
-        buffs = {},
-        debuffs = { { name = "Curse", icon = "Interface\\Icons\\Spell_Shadow_CurseOfTounges", type = "Curse", duration = 20, left = 14 } } },
+        deficit = "-16.8k" },
 }
 RF.previewOrder = { "tank", "healer", "dps" }
 RF.previews = {}
+
+local PREVIEW_DISPEL = "Curse"   -- the preview pretends the player removes curses, whatever the real class
+local QUESTION = "Interface\\Icons\\INV_Misc_QuestionMark"
+-- Debuffs shown when nothing else fills the row: a curse the "player" can dispel, a poison and an untyped one.
+local previewDebuffs = {
+    { name = "Curse of Tongues", icon = "Interface\\Icons\\Spell_Shadow_CurseOfTounges", type = "Curse", duration = 20, left = 14 },
+    { name = "Poison", icon = "Interface\\Icons\\Ability_Creature_Poison_06", count = 3, type = "Poison", duration = 12, left = 4 },
+    { name = "Rend", icon = "Interface\\Icons\\Ability_Gouge", duration = 15, left = 9 },
+}
+
+local function demoAura(spell, harmful, left, extra)
+    local name, icon = Suite.SpellInfo(spell)
+    local aura = { name = name or tostring(spell), icon = icon or QUESTION, id = type(spell) == "number" and spell or nil,
+        count = 0, duration = 15, left = left or 8, harmful = harmful }
+    for k, v in pairs(extra or {}) do aura[k] = v end
+    return aura
+end
+
+-- One aura per enabled indicator (its first spell; "missing" indicators stay empty so they show), then
+-- the first tracked buffs that no indicator claims, then the demo debuffs.
+local function previewAuras()
+    local settings = cfg()
+    local buffs, debuffs, used = {}, {}, {}
+    for i, entry in ipairs(settings.indicators or {}) do
+        local spell = Suite.ParseSpellList(entry.spell)[1]
+        if entry.enabled and entry.kind ~= "missing" and spell then
+            local aura = demoAura(spell, entry.harmful, 4 + (i % 5) * 2, entry.stacks and { count = 3 } or nil)
+            local target = entry.harmful and debuffs or buffs
+            target[#target + 1] = aura
+            used[aura.name] = true
+        end
+    end
+    local tracked = 0
+    for _, spell in ipairs(Suite.ParseSpellList(settings.rfBuffTrack or "")) do
+        if tracked >= (settings.rfBuffMax or 3) then break end
+        local name = Suite.SpellInfo(spell) or tostring(spell)
+        if not used[name] then
+            buffs[#buffs + 1] = demoAura(spell, false, 6 + tracked * 3)
+            used[name] = true
+            tracked = tracked + 1
+        end
+    end
+    for _, aura in ipairs(previewDebuffs) do debuffs[#debuffs + 1] = aura end
+    return buffs, debuffs
+end
 
 local function demoAuras(list, now)
     local result = {}
     for i, aura in ipairs(list) do
         result[i] = { name = aura.name, icon = aura.icon, count = aura.count or 0, type = aura.type, id = aura.id,
-            duration = aura.duration, expiration = now + (aura.left or 0), mine = aura.mine ~= false, caster = "player" }
+            duration = aura.duration, expiration = now + (aura.left or 0), mine = true, raid = true, caster = "player" }
     end
     return result
 end
@@ -1516,6 +1839,7 @@ function RF.BuildPreview(parent, width, height, variant)
     frame.powerBar:SetStatusBarColor(0, 0.45, 1)
     local deco = createDeco(frame)
     deco.preview = true
+    frame.deco = deco
     -- The name sits in the middle of the bar, clear of the corner indicators and icons.
     local name = deco.layer:CreateFontString(nil, "OVERLAY")
     name:SetFont(Suite.art.font, 11, "OUTLINE")
@@ -1542,12 +1866,12 @@ function RF.BuildPreview(parent, width, height, variant)
         end
         RF.DrawBars(deco, data.health, data.heal, data.absorb)
         local now = GetTime()
-        local buffs, debuffs = demoAuras(data.buffs, now), demoAuras(data.debuffs, now)
+        local buffSet, debuffSet = previewAuras()
+        local buffs, debuffs = demoAuras(buffSet, now), demoAuras(debuffSet, now)
         deco.unit = "player"
         drawIndicators(deco, buffs, debuffs, now)
-        -- only the "damage" variant shows a debuff the player can remove, whatever the real class
         local canDispel = Suite.CanDispel
-        Suite.CanDispel = function(kind) return data.dispel ~= nil and kind == data.dispel end
+        Suite.CanDispel = function(kind) return kind == PREVIEW_DISPEL end
         RF.DrawAuras(deco, buffs, debuffs, now)
         Suite.CanDispel = canDispel
         if data.threat and settings.rfEnabled and settings.rfThreat then
@@ -1612,6 +1936,23 @@ SlashCmdList.FOREVERUIRAID = function(input)
     ui.Print(L("Сортировка по ролям: ", "Role sorting: ") .. ((container and (container.flowSortFunc ~= nil
         or type(_G.CompactRaidFrameContainer_SetFlowSortFunction) == "function")) and L("поддерживается", "supported")
         or L("клиент не даёт функцию сортировки", "the client exposes no sort function")))
+    -- Visibility in ASCII only: some client chat fonts print Cyrillic as "?".
+    local settings = cfg()
+    ui.Print(("Visibility: party=%s raid=%s group=%d/%d"):format(tostring(settings.rfPartyShow),
+        tostring(settings.rfRaidShow), GetNumPartyMembers and GetNumPartyMembers() or -1,
+        GetNumRaidMembers and GetNumRaidMembers() or -1))
+    local function describe(frame)
+        local parent = frame:GetParent()
+        return ("shown=%d visible=%d alpha=%.2f parent=%s%s"):format(frame:IsShown() and 1 or 0,
+            frame:IsVisible() and 1 or 0, frame:GetAlpha() or 0, parent and (parent:GetName() or "?") or "-",
+            parent and not parent:IsVisible() and "(hidden)" or "")
+    end
+    for _, name in ipairs({ "CompactRaidFrameContainer", "CompactPartyFrame", "CompactRaidFrameManager",
+        "CompactPartyFrameMember1", "CompactPartyFrameMember2", "CompactRaidFrame1" }) do
+        local frame = _G[name]
+        local unit = frame and (frame.GetAttribute and frame:GetAttribute("unit") or frame.displayedUnit or frame.unit)
+        ui.Print(name .. ": " .. (frame and (describe(frame) .. " unit=" .. tostring(unit)) or "-"))
+    end
     ui.Print(L("Источник поглощений: ", "Absorb source: ") .. (UnitGetTotalAbsorbs and "API" or (deco and deco.clientAbsorb and "client bar") or "-")
         .. L(", входящее лечение: ", ", incoming heals: ") .. (RF.healSource or "-"))
 end

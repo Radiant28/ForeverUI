@@ -306,6 +306,38 @@ for _, module in ipairs(ui.optionOrder) do
 end
 assert(built == #ui.optionOrder and built >= 17)
 
+-- Section tabs above the page and the clickable scrollbar.
+do
+    ui.OpenOptions("unitframes")
+    local page
+    walk(window, function(object) if object.sectionTabs and object:IsShown() then page = page or object end end)
+    assert(page and #page.sectionTabs >= 2, "a page with several sections gets section tabs")
+    local scroll = page.scroll
+    scroll.height = 300
+    local last = #page.sectionTabs
+    page.sectionTabs[2].scripts.OnClick(page.sectionTabs[2])
+    assert(page.activeTab == 2 and math.abs(scroll:GetVerticalScroll() - math.min(page.sectionTabs[2].top,
+        scroll.contentHeight - 300)) < 0.01, "a tab scrolls to its section")
+    page.sectionTabs[last].scripts.OnClick(page.sectionTabs[last])
+    assert(page.activeTab == last, "the clicked tab stays lit even when its section cannot reach the top")
+    scroll:ScrollTo(0)
+    assert(page.activeTab == 1, "scrolling back lights the first tab")
+    -- scrollbar: a click on the track jumps there, the thumb drags
+    local bar = scroll.bar
+    bar.height, bar.scale = 300, 1
+    function bar:GetTop() return 1000 end
+    local cursorY = 1000 - 290
+    GetCursorPosition = function() return 0, cursorY end
+    bar.scripts.OnMouseDown(bar, "LeftButton")
+    local range = scroll.contentHeight - 300
+    assert(math.abs(scroll:GetVerticalScroll() - range) < 1, "a click near the bottom jumps to the end")
+    cursorY = 1000 - 10
+    bar.scripts.OnUpdate(bar, 0.02)
+    assert(scroll:GetVerticalScroll() == 0, "dragging up scrolls back")
+    bar.scripts.OnMouseUp(bar)
+    assert(not bar.scripts.OnUpdate, "the drag ends on release")
+end
+
 -- Colour picker with alpha.
 local row
 walk(window, function(object) if object.kind == "color" and object.opt and object.opt.alpha and object.enabled then row = row or object end end)

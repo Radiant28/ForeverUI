@@ -143,6 +143,88 @@ local function confirmReset(spec)
     if dialog then dialog.data = spec.id end
 end
 
+---------------------------------------------------------------------------------------------------
+-- Section tabs: a row of buttons above the page (like the sub-tabs of ElvUI). A click scrolls to the
+-- section; the tab of the section in view is highlighted while scrolling. Rows wrap on narrow windows.
+---------------------------------------------------------------------------------------------------
+local TAB_HEIGHT, TAB_GAP, TAB_MAX = 20, 4, 190
+
+-- Titles of the page sections that get a tab; an untitled first section is the "General" tab.
+local function sectionTabs(spec)
+    local list = {}
+    for index, section in ipairs(spec.sections or {}) do
+        local title = section.title
+        if not title and index == 1 and #(section.options or {}) > 0 then title = L("Основное", "General") end
+        if title then list[#list + 1] = { index = index, title = title } end
+    end
+    return list
+end
+
+local function paintSectionTab(tab, active)
+    tab:SetBackdropColor(rgba(active and S.surfaceActive or S.surface))
+    tab:SetBackdropBorderColor(rgba(active and S.accent or S.border, active and 1 or nil))
+    tab.text:SetTextColor(rgba(active and S.accentText or S.text))
+end
+
+local function buildSectionTabs(page, list, width)
+    local bar = CreateFrame("Frame", nil, page)
+    bar:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 8)
+    bar:SetWidth(width)
+    page.sectionTabs = {}
+    local x, y = 0, 0
+    for i, entry in ipairs(list) do
+        local tab = CreateFrame("Button", nil, bar)
+        W.Skin(tab, S.surface, S.border)
+        local text = W.Text(tab, W.fonts.small)
+        text:SetPoint("LEFT", 8, 0)
+        text:SetPoint("RIGHT", -8, 0)
+        text:SetJustifyH("CENTER")
+        text:SetText(entry.title)
+        tab.text = text
+        local full = floor((text:GetStringWidth() or 60) + 0.5) + 18
+        local tabWidth = min(TAB_MAX, width, full)
+        tab.truncated = full > tabWidth
+        tab:SetSize(tabWidth, TAB_HEIGHT)
+        if x > 0 and x + tabWidth > width then
+            x, y = 0, y - TAB_HEIGHT - TAB_GAP
+        end
+        tab:SetPoint("TOPLEFT", x, y)
+        x = x + tabWidth + TAB_GAP
+        tab.entry = entry
+        tab:SetScript("OnClick", function(self)
+            PlaySound("igMainMenuOptionCheckBoxOn")
+            page:ShowSection(i)
+        end)
+        tab:SetScript("OnEnter", function(self)
+            if self.index ~= page.activeTab then self:SetBackdropBorderColor(rgba(S.accent, 0.6)) end
+            if self.truncated then
+                GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+                GameTooltip:SetText(entry.title, 1, 1, 1)
+                GameTooltip:Show()
+            end
+            W.Redraw(self)
+        end)
+        tab:SetScript("OnLeave", function(self)
+            paintSectionTab(self, self.index == page.activeTab)
+            GameTooltip:Hide()
+            W.Redraw(self)
+        end)
+        tab.index = i
+        paintSectionTab(tab, i == 1)
+        page.sectionTabs[i] = tab
+    end
+    local height = -y + TAB_HEIGHT
+    bar:SetHeight(height)
+    page.sectionBar = bar
+    return height
+end
+
+local function setActiveTab(page, index)
+    if page.activeTab == index then return end
+    page.activeTab = index
+    for i, tab in ipairs(page.sectionTabs or {}) do paintSectionTab(tab, i == index) end
+end
+
 local function buildPage(spec)
     local page = CreateFrame("Frame", nil, window.content)
     page:SetAllPoints(window.content)
@@ -183,18 +265,49 @@ local function buildPage(spec)
     end
 
     ui.NormalizeModule(spec.id)
-    local scroll = W.Scroll(page)
-    scroll:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 14)
-    scroll:SetPoint("BOTTOMRIGHT", -24, 10)
     local width = pageWidth(window:GetWidth())
+    local tabList = sectionTabs(spec)
+    local tabsHeight = 0
+    if #tabList >= 2 then tabsHeight = buildSectionTabs(page, tabList, width) + 8 end
+    local scroll = W.Scroll(page)
+    scroll:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 14 - tabsHeight)
+    scroll:SetPoint("BOTTOMRIGHT", -24, 10)
     page.builtWidth = width
     scroll.child:SetWidth(width)
     local y = 0
-    for _, section in ipairs(spec.sections) do
+    local sectionTop = {}
+    for index, section in ipairs(spec.sections) do
+        sectionTop[index] = -y
         y = layoutSection(page, scroll.child, section, spec, y, width)
     end
     scroll:SetContentHeight(-y)
     page.scroll = scroll
+    if page.sectionTabs then
+        for _, tab in ipairs(page.sectionTabs) do tab.top = sectionTop[tab.entry.index] or 0 end
+        -- A click scrolls the section to the top; short sections at the end cannot reach the top, so the
+        -- clicked tab stays lit until the page is scrolled by other means.
+        function page:ShowSection(i)
+            local tab = self.sectionTabs[i]
+            if not tab then return end
+            scroll:ScrollTo(tab.top)
+            self.clickedTab, self.clickedOffset = i, scroll:GetVerticalScroll()
+            setActiveTab(self, i)
+            W.Redraw(scroll)
+        end
+        scroll.onScroll = function(_, offset)
+            if page.clickedTab and math.abs(offset - (page.clickedOffset or -1)) < 1 then
+                setActiveTab(page, page.clickedTab)
+                return
+            end
+            page.clickedTab = nil
+            local active = 1
+            for i, tab in ipairs(page.sectionTabs) do
+                if tab.top <= offset + 8 then active = i end
+            end
+            setActiveTab(page, active)
+        end
+        page.activeTab = 1
+    end
     page.Refresh = refreshPage
     page:Refresh()
     return page
@@ -538,7 +651,7 @@ local function createWindow()
     sideLine:SetWidth(1)
     sideLine:SetPoint("TOPRIGHT", 0, 0)
     sideLine:SetPoint("BOTTOMRIGHT", 0, 0)
-    sidebar = W.Scroll(side)
+    sidebar = W.Scroll(side, 6, 1)
     sidebar:SetPoint("TOPLEFT", 0, -4)
     sidebar:SetPoint("BOTTOMRIGHT", -8, 4)
     sidebar.child:SetWidth(SIDEBAR - 8)

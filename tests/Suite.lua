@@ -550,12 +550,19 @@ local function hopeShown(frame)
     end)
     return found
 end
-assert(Suite.Part("raid").rfBuffHide == "63944", "Renewed Hope is hidden by default")
-assert(not hopeShown(button) and not hopeShown(others[2]) and not hopeShown(others[3]), "no party-wide hope icon")
-ui.SetOption("raidframes", "rfBuffHide", "")
+assert(Suite.Part("raid").rfBuffTrack == RF.defaultExclusionText.rfBuffTrack and Suite.Part("raid").rfDebuffHide:match("57724"),
+    "the recommended tracked and hidden lists are the defaults")
+assert(not hopeShown(button) and not hopeShown(others[2]) and not hopeShown(others[3]), "untracked buffs get no icon")
+Suite.Part("raid").rfBuffTrack = "63944"; RF.Apply()
 tick(0.05)
-assert(hopeShown(button), "an empty list shows it again")
-ui.SetOption("raidframes", "rfBuffHide", "63944")
+assert(hopeShown(button), "a tracked buff is drawn")
+Suite.Part("raid").rfBuffFilter = "mine"; RF.Apply()
+tick(0.05)
+assert(hopeShown(button), "mine only keeps my tracked buff")
+Suite.Part("raid").rfBuffTrack = ""; Suite.Part("raid").rfBuffFilter = "all"; RF.Apply()
+tick(0.05)
+assert(not hopeShown(button), "an empty tracked list draws no buff icons")
+Suite.Part("raid").rfBuffTrack = RF.defaultExclusionText.rfBuffTrack; RF.Apply()
 for _, unit in ipairs({ "raid1", "raid2", "raid3" }) do
     table.remove(auras[unit].HELPFUL, 1)
     fire("UNIT_AURA", unit)
@@ -647,6 +654,70 @@ assert(imported:find("Импорт") and Suite.DB().profiles[imported].cdm.group
 assert(not Suite.Import("garbage"), "bad strings do not import")
 assert(Suite.RenameProfile(imported, "Shared") and Suite.DB().profiles.Shared)
 assert(Suite.DeleteProfile("Shared") and not Suite.DB().profiles.Shared)
+-- profiles with the old exclusion list get the recommended tracked list and see anyone's buffs
+Suite.Part("raid").rfBuffHide, Suite.Part("raid").rfBuffTrack, Suite.Part("raid").rfBuffFilter = "63944", nil, "mine"
+RF.Apply()
+assert(Suite.Part("raid").rfBuffHide == nil and Suite.Part("raid").rfBuffTrack == RF.defaultExclusionText.rfBuffTrack
+    and Suite.Part("raid").rfBuffFilter == "all", "old profiles move to the tracked list")
+-- healer basics: every healer class starts with them, the button adds only what is missing
+do
+    local names = {}
+    for _, entry in ipairs(Suite.Part("raid").indicators) do names[entry.name] = true end
+    assert(names["Defensive cooldown"] and names["Healing reduced"] and names["Renew"], "a priest starts with healer basics")
+    assert(RF.AddPresets(Suite.Part("raid").indicators, RF.healerIndicators) == 0, "no duplicates")
+    assert(RF.IsHidden(false, { id = 999999, name = "Something" }) and not RF.IsHidden(false, { id = 33206, name = "x" }),
+        "only tracked buffs are drawn")
+    -- an indicator for anyone's saves sees another healer's Pain Suppression even with "mine only" icons
+    local index
+    for i, entry in ipairs(Suite.Part("raid").indicators) do if entry.name == "Defensive cooldown" then index = i end end
+    Suite.Part("raid").rfBuffFilter = "mine"
+    RF.Apply()
+    table.insert(auras.raid1.HELPFUL, { name = "Pain Suppression", icon = "ps", duration = 8, expiration = now + 6,
+        caster = "raid2", id = 33206 })
+    fire("UNIT_AURA", "raid1")
+    tick(0.05)
+    local d
+    RF.EachFrame(function(f, dd) if f == button then d = dd end end)
+    local widget = d.indicators[index]
+    assert(widget and widget.shown and widget.square.texture == "ps", "others' saves reach the indicators")
+    -- list order is the layer order: moving an indicator up puts it over the ones below
+    local list = Suite.Part("raid").indicators
+    local first = d.indicators[1]
+    assert(first and first.level > widget.level and widget.cooldown.level == widget.level + 1,
+        "the first indicator is drawn above later ones")
+    local renewLevel = first.level
+    list[1], list[index] = list[index], list[1]
+    RF.Apply()
+    tick(0.05)
+    assert(d.indicators[1].shown and d.indicators[1].square.texture == "ps" and d.indicators[1].level == renewLevel,
+        "moved to the top, the save takes the top layer")
+    list[1], list[index] = list[index], list[1]
+    RF.Apply()
+    table.remove(auras.raid1.HELPFUL)
+    fire("UNIT_AURA", "raid1")
+    Suite.Part("raid").rfBuffFilter = "all"
+    RF.Apply()
+    tick(0.05)
+end
+-- hidden debuffs: no icon and no dispel highlight; the rest still shows
+do
+    local d
+    RF.EachFrame(function(f, dd) if f == button then d = dd end end)
+    local sated = { name = "Sated", icon = "sated", type = "Magic", duration = 600, expiration = now + 500, id = 57724 }
+    local nova = { name = "Frost Nova", icon = "f", type = "Magic", duration = 8, expiration = now + 4, id = 122 }
+    Suite.Part("raid").rfDebuffHide = "57724, Frost Nova"
+    RF.Apply()
+    RF.DrawAuras(d, {}, { sated, nova }, now)
+    assert(not d.debuffs[1] or not d.debuffs[1].shown, "hidden debuffs get no icon")
+    assert(not d.dispelOutline.shown, "and no dispel highlight")
+    Suite.Part("raid").rfDebuffHide = "57724"
+    RF.Apply()
+    RF.DrawAuras(d, {}, { sated, nova }, now)
+    assert(d.debuffs[1].shown and d.debuffs[1].texture.texture == "f" and d.dispelOutline.shown, "the rest still shows")
+    assert(RF.IsHidden(true, sated) and not RF.IsHidden(true, nova), "only listed debuffs are hidden")
+    Suite.Part("raid").rfDebuffHide = RF.defaultExclusionText.rfDebuffHide
+    RF.Apply()
+end
 local onlyRaid = Suite.DecodeString(Suite.Export({ raid = true }))
 assert(onlyRaid.profile.raid and not onlyRaid.profile.cdm, "partial export")
 
@@ -670,10 +741,56 @@ local function findHolder(frame)
 end
 holder = findHolder(ForeverUIOptions)
 assert(holder, "the raid page keeps its previews")
+-- exclusion editors: add by id or name, no duplicates, recommended merge, remove
+do
+    local function findEditor(frame, key)
+        for _, child in ipairs(frame.children or {}) do
+            if child["input" .. key] then return child end
+            local found = findEditor(child, key)
+            if found then return found end
+        end
+    end
+    local editor = findEditor(ForeverUIOptions, "rfDebuffHide")
+    assert(editor and findEditor(ForeverUIOptions, "rfBuffTrack"), "the tracked and hidden list editors are built")
+    local input = editor.inputrfDebuffHide
+    Suite.Part("raid").rfDebuffHide = ""
+    input:SetText("139, Renew, Curse of Doom")
+    input.scripts.OnEnterPressed(input)
+    assert(Suite.Part("raid").rfDebuffHide == "139, Curse of Doom", "added by id or name without duplicates")
+    local _, count = RF.defaultExclusionText.rfDebuffHide:gsub(",", ",")
+    for _, child in ipairs(editor.children or {}) do
+        if child.text and child.text.text == ui.L("Добавить рекомендуемые", "Add recommended") then child.scripts.OnClick(child) end
+    end
+    local _, after = Suite.Part("raid").rfDebuffHide:gsub(",", ",")
+    assert(after == count + 2, "recommended entries are merged once")
+    Suite.Part("raid").rfDebuffHide = RF.defaultExclusionText.rfDebuffHide
+    editor.refreshrfDebuffHide()
+end
 holder.scripts.OnHide(holder)
 assert(not side:IsShown(), "the side preview hides with the page")
 holder.scripts.OnShow(holder)
 assert(side:IsShown(), "and shows with it")
+-- The three preview frames show the same indicators, buff and debuff icons.
+do
+    local function signature(preview)
+        preview:Refresh()
+        local d, parts = preview.deco, {}
+        for i, widget in pairs(d.indicators) do
+            if widget.shown then parts[#parts + 1] = "i" .. i .. "=" .. tostring(widget.square.texture) end
+        end
+        table.sort(parts)
+        for _, kind in ipairs({ "buffs", "debuffs" }) do
+            for i, icon in ipairs(d[kind]) do
+                if icon.shown then parts[#parts + 1] = kind .. i .. "=" .. tostring(icon.texture.texture) end
+            end
+        end
+        return table.concat(parts, " ") .. (d.dispelOutline.shown and " dispel" or "")
+    end
+    local n = #RF.previews
+    local first = signature(RF.previews[n - 2])
+    assert(first:find("i1=") and first:find("debuffs1=") and first:find("dispel"), "the preview shows indicators, debuffs and dispel")
+    assert(signature(RF.previews[n - 1]) == first and signature(RF.previews[n]) == first, "all three previews show the same auras")
+end
 -- Edited indicators restyle in the preview too (entries change in place).
 local renewEntry = Suite.Part("raid").indicators[1]
 local oldSize = renewEntry.size
@@ -815,6 +932,52 @@ assert(window.width == 340 and window.height == 160, "only a technical minimum r
 rightDown = false
 window.scripts.OnUpdate(window, 0.02)
 
+-- Raid frame visibility: client / always / hidden, protected changes wait for the end of combat
+do
+    local raidSettings = Suite.Part("raid")
+    local container = CompactRaidFrameContainer
+    CompactPartyFrame = CompactPartyFrame or CreateFrame("Frame", "CompactPartyFrame", UIParent)
+    local party = CompactPartyFrame
+    container:Hide()
+    party:Hide()
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "always", "client"
+    RF.ApplyVisibility()
+    assert(party:IsShown() and not container:IsShown(), "party frames always shown outside a raid")
+    raidSettings.rfRaidShow = "always"
+    RF.ApplyVisibility()
+    assert(container:IsShown(), "raid frames always shown")
+    container:Hide()
+    assert(container:IsShown(), "the client hiding them is undone")
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "hidden", "hidden"
+    RF.ApplyVisibility()
+    assert(not party:IsShown() and not container:IsShown(), "both turned off")
+    combat = true
+    container:Show()
+    assert(container:IsShown() and ui.HasCombatQueue(), "no protected hide in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(not container:IsShown(), "hidden again after combat")
+    -- solo: the client party frame hangs on a hidden holder and its first button has no unit
+    local holder = CreateFrame("Frame", nil, UIParent)
+    holder:Hide()
+    party:SetParent(holder)
+    local member = CompactPartyFrameMember1 or CreateFrame("Button", "CompactPartyFrameMember1", party)
+    member:Hide()
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "always", "client"
+    RF.ApplyVisibility()
+    assert(party:IsVisible() and party:GetParent() == UIParent, "a hidden holder does not hide the party frame")
+    assert(member:IsShown() and member:GetAttribute("unit") == "player", "solo: the first button shows the player")
+    raidSettings.rfPartyShow = "client"
+    RF.ApplyVisibility()
+    assert(party:GetParent() == holder and not member:IsShown(), "the client's parent and button come back")
+    party:SetParent(UIParent)
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "client", "client"
+    RF.ApplyVisibility()
+    assert(not container:IsShown() and not party:IsShown(), "the state from before ForeverUI comes back")
+    container:Show()
+    assert(container:IsShown(), "the client is in charge again")
+end
+
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
-    .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators), "
+    .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators, visibility, exclusions), "
     .. "option pages, action bar key binding, options window resizing; %d frames"):format(#objects))
