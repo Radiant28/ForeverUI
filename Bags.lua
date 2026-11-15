@@ -275,7 +275,7 @@ local function toolbarButton(window, name, relative, label, texture, onClick)
 end
 
 local function createInventory(panel, isBank)
-    local window, content, money, searchBox, bagTray, buySlot
+    local window, content, money, searchBox, bagTray, buySlot, footer
     local bags, query = {}, ""
     local slotCount = isBank and NUM_BANKBAGSLOTS or lastBag
     local traySlots = isBank and slotCount or slotCount + 1
@@ -660,7 +660,7 @@ local function createInventory(panel, isBank)
         close:SetScript("OnClick", closeWindow)
         createToolbar(close, panel)
         local footerInset = backpackEdgeSize + 2
-        local footer = CreateFrame("Frame", nil, window)
+        footer = CreateFrame("Frame", name .. "Footer", window)
         footer:SetBackdrop(backpackInset)
         footer:SetBackdropColor(0.09, 0.087, 0.086, 0.98)
         footer:SetHeight(18)
@@ -739,7 +739,8 @@ local function createInventory(panel, isBank)
     end
 
     createWindow(panel)
-    return { window = window, layout = layout, refresh = refresh, open = open, toggle = toggle, toggleKeys = toggleKeys }
+    return { window = window, layout = layout, refresh = refresh, open = open, toggle = toggle, toggleKeys = toggleKeys,
+        bags = bags, bagIDs = bagIDs, footer = footer }
 end
 
 local function connectBank(panel)
@@ -864,4 +865,17 @@ end)
 ui.Bags = {
     Relayout = function() if inventory then relayout() end end,
     Refresh = function() if inventory then refresh() end end,
+    -- The combined backpack window and its footer (nil while the module is off or Bagnon is loaded).
+    Window = function() return inventory and inventory.window end,
+    Footer = function() return inventory and inventory.footer end,
+    -- fn(button, bagID, slot) for every laid-out backpack slot (bags 0..NUM_BAG_SLOTS, no keyring, no bank).
+    EachItem = function(fn)
+        if not inventory then return end
+        for _, id in ipairs(inventory.bagIDs) do
+            local bag = inventory.bags[id]
+            if id >= 0 and id <= lastBag and bag.size then
+                for slot = 1, math.min(bag.size, #bag.items) do fn(bag.items[slot], id, slot) end
+            end
+        end
+    end,
 }
