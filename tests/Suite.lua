@@ -92,6 +92,11 @@ function methods:Click(button) if self.scripts.OnClick then self.scripts.OnClick
 function methods:GetLeft() return 100 end
 function methods:GetTop() return 600 end
 methods.WrapScript = function(self, frame, script, body) frame.wraps = frame.wraps or {}; frame.wraps[script] = body end
+-- The restricted environment of this client has IsUnderMouse: the probe in ClickCast.lua says yes.
+methods.Execute = function(self) self.attributes["fuicc-um"] = 1 end
+local released, hovering = {}, nil
+function ClearOverrideBindings(frame) released[frame] = true end
+function MouseIsOver(frame) return frame == hovering end
 
 function CreateFrame(kind, name, parent)
     local frame = new(kind, parent, name)
@@ -364,10 +369,33 @@ button.healthBar = CreateFrame("StatusBar", nil, button)
 button.healthBar.width, button.healthBar.height = 70, 30
 button.attributes.unit = "raid1"
 button.attributes.type1 = "target"
+button.scripts.OnClick = function() end
 fire("RAID_ROSTER_UPDATE")
 CC.Add(1, "BUTTON1", "", "spell", "Renew")
 assert(button.attributes.type1 == "spell" and button.attributes.spell1 == "Renew", "bindings land on client buttons")
 assert(button.wraps and button.wraps.OnEnter and button.wraps.OnLeave, "secure wrappers for wheel and keys")
+-- Sticky bindings: one owner at a time, the leaving button forgets itself, and a key that fires
+-- with the cursor off the button is cancelled instead of casting on the old unit.
+assert(button.wraps.OnEnter:find("HOVER:ClearBindings%(%)") and button.wraps.OnEnter:find("HOVER = self"),
+    "entering a button clears the previous owner")
+assert(button.wraps.OnLeave:find("self:ClearBindings%(%)") and button.wraps.OnHide == button.wraps.OnLeave,
+    "leaving and hiding drop the bindings")
+assert(button.wraps.OnClick and button.wraps.OnClick:find("IsUnderMouse") and button.wraps.OnClick:find("return false"),
+    "a binding fired off the button is cancelled")
+released = {}
+CC.ReleaseStale()
+assert(released[button], "bindings of a button the cursor left are dropped out of combat")
+released, hovering = {}, button
+CC.ReleaseStale()
+assert(not released[button], "the button under the cursor keeps its bindings")
+hovering = nil
+button.scripts.OnLeave(button)
+assert(released[button], "the plain OnLeave hook drops them too")
+combat, released = true, {}
+CC.ReleaseStale()
+button.scripts.OnLeave(button)
+assert(next(released) == nil, "nothing insecure touches bindings in combat")
+combat = false
 CC.Remove(1, 1)
 assert(button.attributes.type1 == "target" and button.attributes.spell1 == nil, "the client default comes back")
 combat = true
@@ -424,6 +452,50 @@ RF.EachFrame(function(frame, d) if frame == button then deco = d end end)
 assert(deco, "the client button is decorated")
 assert(button.healthBar.barTexture and deco.layer.level > button.level, "Forever texture, click-through layer above")
 local settings = Suite.Part("raid")
+-- Own name text, hover highlight and target border
+tick(0.05)
+assert(deco.name.shown and deco.name.text == "Tester", "own name text")
+settings.rfNameMaxLetters = 3
+RF.Apply()
+tick(0.05)
+assert(deco.name.text == "Tes", "the name is cut to the letter limit")
+assert(RF.CutName("Привет", 3) == "При", "whole UTF-8 letters")
+settings.rfNameMaxLetters, settings.rfNameCustom = 0, false
+RF.Apply()
+tick(0.05)
+assert(not deco.name.shown, "the client name comes back")
+settings.rfNameCustom = true
+RF.Apply()
+tick(0.05)
+button.scripts.OnEnter(button)
+assert(deco.hoverEdge.shown and deco.hoverFill.shown, "hover highlight")
+settings.rfHoverStyle = "border"
+RF.Apply()
+assert(deco.hoverEdge.shown and not deco.hoverFill.shown, "border only")
+settings.rfHoverStyle = "both"
+button.scripts.OnLeave(button)
+assert(not deco.hoverEdge.shown and not deco.hoverFill.shown, "the highlight leaves with the cursor")
+button.scripts.OnEnter(button)
+tick(0.6)
+assert(not deco.hoverEdge.shown, "a highlight whose OnLeave was lost is swept away")
+assert(not deco.target.shown, "no target border on a frame that is not the target")
+do
+    local realIsUnit = UnitIsUnit
+    function UnitIsUnit(a, b) return (a == "raid1" and b == "target") or realIsUnit(a, b) end
+    fire("PLAYER_TARGET_CHANGED")
+    tick(0.05)
+    assert(deco.target.shown and deco.target.borderColor[1] == 1 and deco.target.borderColor[2] == 0.82,
+        "target border in the chosen colour")
+    settings.rfTarget = false
+    RF.Apply()
+    tick(0.05)
+    assert(not deco.target.shown, "the target border can be turned off")
+    settings.rfTarget = true
+    UnitIsUnit = realIsUnit
+    fire("PLAYER_TARGET_CHANGED")
+    tick(0.05)
+    assert(not deco.target.shown, "the border follows the target")
+end
 RF.DrawBars(deco, 0.6, 0.1, 0.2)
 assert(deco.shield.shown and math.abs(deco.shield.width - 70 * 0.2) < 0.01 and deco.shield.points[1][4] == 70 * 0.7,
     "attached shield starts after health and heals")
@@ -831,6 +903,129 @@ do
         "reset to defaults")
     GetTalentTabInfo = function(i) return ({ "Discipline", "Holy", "Shadow" })[i], "", i == 2 and 51 or 10 end
     ui.Fire("SuiteTalentsChanged")
+end
+
+---------------------------------------------------------------------------------------------------
+-- Cooldown Manager: role, categories, display modes, active effect, test mode, per-spec entries
+---------------------------------------------------------------------------------------------------
+do
+    local function presetGroup(key)
+        for _, g in ipairs(CDM.Groups()) do if g.preset == key then return g end end
+    end
+    local r = {}
+    assert(CDM.SpecKey() == "PRIEST-2" and CDM.Role() == "HEALER", "holy priest is a healer")
+    Suite.Part("cdm").role = "TANK"
+    CDM.SettingsChanged()
+    assert(CDM.Role() == "TANK", "the chosen role wins")
+    Suite.Part("cdm").role = "auto"
+    CDM.SettingsChanged()
+    assert(CDM.CategoryOf({ spell = 33206 }) == "raid" and CDM.CategoryOf({ spell = 47540 }) == nil
+        and CDM.CategoryOf({ spell = 47540, category = "offensive" }) == "offensive", "categories")
+    for id in pairs(CDM.categoryById) do assert(type(id) == "number") end
+    assert(presetGroup("essential").sort == "role" and presetGroup("buffs").sort == "manual", "cooldown groups sort by role")
+
+    -- what you add belongs to the current spec
+    local id = CDM.CreateGroup("Mine", "icons")
+    local group = CDM.Group(id)
+    local index = CDM.AddItem(id, "cooldown", 47540)
+    local penance = group.items[index]
+    assert(penance.class == "PRIEST" and penance.spec == 2, "own entries are tagged with the spec")
+    CDM.AddItem(id, "cooldown", 17)
+    group.items[2].category = "raid"
+
+    -- modes: group visibility and hidden categories
+    assert(CDM.ActiveMode() == "full" and CDM.LoadAllowed(presetGroup("utility")))
+    assert(CDM.SetMode("minimal") and not CDM.LoadAllowed(presetGroup("utility")) and CDM.LoadAllowed(presetGroup("essential"))
+        and not CDM.LoadAllowed(group), "minimal shows the main cooldowns only")
+    group.modes = { minimal = true }
+    assert(CDM.LoadAllowed(group), "a group may override its mode visibility")
+    CDM.Evaluate(group, penance, r, now)
+    assert(r.show, "entries without a hidden category stay")
+    CDM.Evaluate(group, group.items[2], r, now)
+    assert(not r.show, "minimal hides raid cooldowns")
+    CDM.SetMode("combat")
+    assert(not CDM.LoadAllowed(presetGroup("essential")), "combat mode hides everything out of combat")
+    assert(not CDM.SetMode("nonsense"))
+    CDM.SetMode("auto")
+    local stock = IsInInstance
+    IsInInstance = function() return true, "raid" end
+    fire("ZONE_CHANGED_NEW_AREA")
+    assert(CDM.ActiveMode() == "raid", "auto mode follows the zone")
+    IsInInstance = stock
+    fire("ZONE_CHANGED_NEW_AREA")
+    assert(CDM.ActiveMode() == "full")
+    assert(_G.ForeverStockUICDMMode and _G.ForeverStockUICDMMode.shown, "mode button")
+    _G.ForeverStockUICDMMode:Click("LeftButton")
+    assert(Suite.Part("cdm").mode == "full", "the button steps to the next mode")
+    _G.ForeverStockUICDMMode:Click("RightButton")
+    assert(Suite.Part("cdm").mode == "auto")
+
+    -- active effect: the spell's own buff takes the icon over
+    cooldowns.Penance = { now - 2, 10, 1 }
+    auras.player.HELPFUL[3] = { name = "Penance", icon = "p", duration = 6, expiration = now + 4, caster = "player", id = 47540 }
+    fire("UNIT_AURA", "player")
+    CDM.Evaluate(group, penance, r, now)
+    assert(r.active and not r.desaturate and r.expiration == now + 4 and r.duration == 6, "active effect")
+    group.showActive = false
+    CDM.Evaluate(group, penance, r, now)
+    assert(not r.active and r.desaturate and r.duration == 10, "cooldown without the active state")
+    group.showActive = true
+    auras.player.HELPFUL[3] = nil
+    fire("UNIT_AURA", "player")
+    cooldowns.Penance = nil
+
+    -- layout: centred rows and the flat border
+    group.grow, group.borderStyle, group.perRow = "CENTER", "pixel", 8
+    CDM.Rebuild()
+    local container = _G["ForeverStockUICDM" .. id]
+    assert(container.shown and container.elements[1].pixelBorder and container.elements[1].shown, "pixel border")
+    -- a group placed in Edit Mode keeps the box it had there; hidden entries do not shift the visible ones
+    CDM.AddItem(id, "cooldown", 60065)        -- not learned: hidden
+    CDM.Rebuild()
+    assert(container:GetWidth() == 76, "an unplaced group is as wide as its visible icons")
+    container.editEntry = { config = { position = { -300, -200 } } }
+    CDM.Rebuild()
+    assert(container:GetWidth() == 116, "a placed group keeps the Edit Mode box")
+    assert(select(4, container.elements[1]:GetPoint(1)) == 20, "visible icons are centred in the box")
+    group.grow = "RIGHT"
+    CDM.Rebuild()
+    assert(select(4, container.elements[1]:GetPoint(1)) == 0, "growth to the right starts at the left edge")
+    group.grow = "CENTER"
+    container.editEntry = nil
+
+    -- test mode: everything of the spec runs a fake loop, combat ends it
+    CDM.SetTest(true)
+    tick(0.2)
+    assert(CDM.IsTesting() and container.unlocked and container.shown, "test mode unlocks the groups")
+    local sawTimer = false
+    for _ = 1, 40 do
+        tick(0.5)
+        if container.elements[1].expiration then sawTimer = true end
+    end
+    assert(sawTimer, "fake timers run")
+    fire("PLAYER_REGEN_DISABLED")
+    assert(not CDM.IsTesting(), "combat ends the test")
+    fire("PLAYER_REGEN_ENABLED")
+    tick(0.2)
+    assert(not container.unlocked)
+
+    -- auto-adaptation off: every tree of the class shows
+    local discipline = { kind = "cooldown", spell = 47540, class = "PRIEST", spec = 1 }
+    assert(not CDM.EntryActive(discipline))
+    Suite.Part("cdm").autoAdapt = false
+    CDM.SettingsChanged()
+    assert(CDM.EntryActive(discipline), "without auto-adaptation trees are not filtered")
+    Suite.Part("cdm").autoAdapt = true
+    CDM.SettingsChanged()
+
+    -- factory layout of the current spec
+    local essential = presetGroup("essential")
+    local before = #essential.items
+    CDM.AddItem(essential.id, "cooldown", 139)
+    assert(#essential.items == before + 1)
+    CDM.ResetSpec()
+    assert(#essential.items == before and #group.items == 0, "the spec returns to its defaults")
+    CDM.DeleteGroup(id)
 end
 
 ---------------------------------------------------------------------------------------------------

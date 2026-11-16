@@ -42,6 +42,14 @@ local DEFAULTS = {
     rfPartyShow = "client", rfRaidShow = "client",
     rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
     rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
+    -- Highlight of the button under the cursor and of the player's target
+    rfHover = true, rfHoverStyle = "both", rfHoverColor = { 1, 1, 1, 0.85 },
+    rfTarget = true, rfTargetClass = false, rfTargetColor = { 1, 0.82, 0.3, 1 }, rfTargetSize = 2,
+    rfTargetHideClient = true,
+    -- Own name text (the client's one stays, invisible: unitOf reads it)
+    rfNameCustom = true, rfNameFont = 1, rfNameSize = 11, rfNameOutline = "OUTLINE", rfNameShadow = false,
+    rfNameMaxLetters = 0, rfNameFit = true, rfNameColorMode = "custom", rfNameColor = { 1, 1, 1 },
+    rfNameAnchor = "CENTER", rfNameX = 0, rfNameY = 1,
 }
 RF.defaults = DEFAULTS
 
@@ -372,8 +380,169 @@ local function createDeco(frame)
     deco.text = layer:CreateFontString(nil, "OVERLAY")
     deco.text:SetPoint("BOTTOM", deco.health, "BOTTOM", 0, 2)
     deco.text:Hide()
+
+    deco.name = layer:CreateFontString(nil, "OVERLAY")
+    deco.name:Hide()
+
+    -- Hover: a light wash over the button and a 1 px edge. Target: a solid edge inside the button
+    -- (the threat border sits 1 px outside, so both stay readable together).
+    deco.hoverFill = layer:CreateTexture(nil, "ARTWORK")
+    deco.hoverFill:SetAllPoints(frame)
+    deco.hoverFill:SetTexture(white)
+    deco.hoverFill:SetBlendMode("ADD")
+    deco.hoverFill:Hide()
+    deco.hoverEdge = CreateFrame("Frame", nil, layer)
+    deco.hoverEdge:SetAllPoints(frame)
+    deco.hoverEdge:EnableMouse(false)
+    deco.hoverEdge:Hide()
+    deco.target = CreateFrame("Frame", nil, layer)
+    deco.target:SetAllPoints(frame)
+    deco.target:EnableMouse(false)
+    deco.target:Hide()
     return deco
 end
+
+---------------------------------------------------------------------------------------------------
+-- Name text, hover highlight and target border
+---------------------------------------------------------------------------------------------------
+local function utf8Cut(text, limit)
+    if not limit or limit <= 0 then return text end
+    local count, i = 0, 1
+    while i <= #text do
+        count = count + 1
+        if count > limit then return text:sub(1, i - 1) end
+        local byte = text:byte(i)
+        i = i + (byte >= 240 and 4 or byte >= 224 and 3 or byte >= 192 and 2 or 1)
+    end
+    return text
+end
+RF.CutName = utf8Cut
+
+-- Drops whole UTF-8 characters from the end until the string fits `width`.
+local function fitName(label, text, width)
+    label:SetText(text)
+    local last = #text
+    while last > 0 and label:GetStringWidth() > width do
+        while last > 1 and text:byte(last) >= 128 and text:byte(last) < 192 do last = last - 1 end
+        last = last - 1
+        label:SetText(text:sub(1, last))
+    end
+end
+
+local justifyOf = { TOPLEFT = "LEFT", LEFT = "LEFT", BOTTOMLEFT = "LEFT", TOPRIGHT = "RIGHT", RIGHT = "RIGHT",
+    BOTTOMRIGHT = "RIGHT" }
+
+local function styleName(deco, settings)
+    local label = deco.name
+    local size, flags = settings.rfNameSize, settings.rfNameOutline or ""
+    local font = ui.MediaPath and ui.MediaPath("font", settings.rfNameFont, true) or Suite.art.font
+    if not label:SetFont(font, size, flags) then label:SetFont(Suite.art.font, size, flags) end
+    if settings.rfNameShadow then
+        label:SetShadowColor(0, 0, 0, 1)
+        label:SetShadowOffset(1, -1)
+    else
+        label:SetShadowOffset(0, 0)
+    end
+    local point = settings.rfNameAnchor
+    label:ClearAllPoints()
+    label:SetPoint(point, deco.health or deco.frame, point, settings.rfNameX, settings.rfNameY)
+    label:SetJustifyH(justifyOf[point] or "CENTER")
+    deco.nameKey = nil
+end
+
+local function updateName(deco)
+    deco.nameDirty = nil
+    local settings = cfg()
+    local own = settings.rfEnabled and settings.rfNameCustom
+    local client = deco.frame.name
+    if type(client) == "table" and client.SetAlpha and (own or deco.clientNameHidden) then
+        client:SetAlpha(own and 0 or 1)
+        deco.clientNameHidden = own or nil
+    end
+    local label = deco.name
+    if not own then
+        label:Hide()
+        return
+    end
+    local unit = deco.unit
+    local text = deco.previewName or (unit and UnitExists(unit) and UnitName(unit)) or shownName(deco.frame) or ""
+    local width = settings.rfNameFit and max(8, (deco.frame:GetWidth() or 0) - 6) or 0
+    local key = text .. "|" .. settings.rfNameMaxLetters .. "|" .. width
+    if deco.nameKey ~= key then
+        deco.nameKey = key
+        text = utf8Cut(text, settings.rfNameMaxLetters)
+        if width > 0 then fitName(label, text, width) else label:SetText(text) end
+    end
+    local color
+    if settings.rfNameColorMode == "class" then
+        local class = deco.previewClass
+        if not class and unit and UnitExists(unit) then
+            local _, token = UnitClass(unit)
+            class = token
+        end
+        color = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+    end
+    if color then
+        label:SetTextColor(color.r, color.g, color.b)
+    else
+        local c = settings.rfNameColor
+        label:SetTextColor(c[1], c[2], c[3])
+    end
+    label:Show()
+end
+
+local function updateTarget(deco)
+    deco.targetDirty = nil
+    local settings = cfg()
+    local unit = deco.unit
+    local on = settings.rfEnabled and settings.rfTarget
+    if on then
+        if deco.preview then
+            on = deco.previewTarget
+        else
+            on = unit and UnitExists(unit) and UnitExists("target") and UnitIsUnit(unit, "target")
+        end
+    end
+    if not on then
+        deco.target:Hide()
+        return
+    end
+    local c = settings.rfTargetColor
+    local r, g, b = c[1], c[2], c[3]
+    if settings.rfTargetClass then
+        local class = deco.previewClass
+        if not class and unit then
+            local _, token = UnitClass(unit)
+            class = token
+        end
+        local color = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+        if color then r, g, b = color.r, color.g, color.b end
+    end
+    deco.target:SetBackdropBorderColor(r, g, b, c[4] or 1)
+    deco.target:Show()
+end
+
+local function drawHover(deco, on)
+    local settings = cfg()
+    local show = on and settings.rfEnabled and settings.rfHover
+    local style = settings.rfHoverStyle
+    Suite.Shown(deco.hoverEdge, show and style ~= "fill" or false)
+    Suite.Shown(deco.hoverFill, show and style ~= "border" or false)
+end
+
+-- Only one button is highlighted: entering the next one clears the previous even if its OnLeave
+-- never came (fast moves between neighbours, a grid rebuilt under the cursor).
+local hoveredDeco
+local function setHover(deco, on)
+    if on then
+        if hoveredDeco and hoveredDeco ~= deco then drawHover(hoveredDeco, false) end
+        hoveredDeco = deco
+    elseif hoveredDeco == deco then
+        hoveredDeco = nil
+    end
+    drawHover(deco, on)
+end
+RF.SetHover = setHover
 
 local function hookClientRegion(deco, region)
     if not region or region.foreverHooked then return end
@@ -393,6 +562,12 @@ decorate = function(frame)
     hookClientRegion(deco, deco.clientAbsorb)
     for _, region in ipairs(deco.clientHeals) do hookClientRegion(deco, region) end
     frame:HookScript("OnShow", function() deco.unitDirty = true RF.MarkDirty() end)
+    frame:HookScript("OnEnter", function() setHover(deco, true) end)
+    frame:HookScript("OnLeave", function() setHover(deco, false) end)
+    frame:HookScript("OnHide", function() setHover(deco, false) end)
+    if type(frame.name) == "table" and frame.name.SetText then
+        hooksecurefunc(frame.name, "SetText", function() deco.nameDirty = true RF.MarkDirty() end)
+    end
     if frame.HookScript then
         frame:HookScript("OnAttributeChanged", function(_, name)
             if name == "unit" then deco.unitDirty = true RF.MarkDirty() end
@@ -453,6 +628,18 @@ applyStyle = function(deco)
     deco.text:SetFont(Suite.art.font, settings.rfTextSize, "OUTLINE")
     local edge = settings.rfBorderSize
     deco.border:SetBackdrop({ edgeFile = white, edgeSize = max(1, edge) })
+    styleName(deco, settings)
+    local hover = settings.rfHoverColor
+    deco.hoverEdge:SetBackdrop({ edgeFile = white, edgeSize = 1 })
+    deco.hoverEdge:SetBackdropBorderColor(hover[1], hover[2], hover[3], hover[4] or 1)
+    deco.hoverFill:SetVertexColor(hover[1], hover[2], hover[3], (hover[4] or 1) * 0.2)
+    deco.target:SetBackdrop({ edgeFile = white, edgeSize = max(1, settings.rfTargetSize) })
+    local selection = deco.frame.selectionHighlight
+    if selection and selection.SetAlpha then
+        selection:SetAlpha(enabled and settings.rfTarget and settings.rfTargetHideClient and 0 or 1)
+    end
+    drawHover(deco, hoveredDeco == deco)
+    deco.nameDirty, deco.targetDirty = true, true
     local hc = settings.rfHealColor
     deco.heal:SetTexture(texturePath(settings.rfHealthTexture))
     deco.heal:SetVertexColor(hc[1], hc[2], hc[3], hc[4] or 0.6)
@@ -1058,6 +1245,7 @@ local function refreshUnit(deco)
         byGUID[guid][deco] = true
     end
     deco.auraDirty, deco.healthDirty, deco.threatDirty = true, true, true
+    deco.nameDirty, deco.targetDirty = true, true
     RF.UpdateRole(deco)
     updateRange(deco)
 end
@@ -1070,6 +1258,8 @@ local function process()
             if deco.healthDirty then updateHealth(deco) end
             if deco.auraDirty then updateAuras(deco) end
             if deco.threatDirty then updateThreat(deco) end
+            if deco.nameDirty then updateName(deco) end
+            if deco.targetDirty then updateTarget(deco) end
         end
     end
 end
@@ -1119,6 +1309,10 @@ driver:SetScript("OnUpdate", function(_, elapsed)
     -- Units of client buttons can change without an event we see (sorting): check twice a second.
     if sweepClock >= 0.5 then
         sweepClock = 0
+        -- A hover highlight whose OnLeave was lost goes away here.
+        if hoveredDeco and MouseIsOver and not (hoveredDeco.frame:IsVisible() and MouseIsOver(hoveredDeco.frame)) then
+            setHover(hoveredDeco, false)
+        end
         for _, deco in ipairs(ordered) do
             if deco.frame:IsVisible() and unitOf(deco.frame) ~= deco.unit then
                 deco.unitDirty = true
@@ -1141,7 +1335,7 @@ end
 local events = CreateFrame("Frame")
 for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "UNIT_AURA", "UNIT_HEALTH", "UNIT_MAXHEALTH",
     "UNIT_THREAT_SITUATION_UPDATE", "UNIT_CONNECTION", "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE",
-    "UNIT_PET", "PLAYER_REGEN_ENABLED", "PLAYER_ROLES_ASSIGNED" }) do
+    "UNIT_PET", "PLAYER_REGEN_ENABLED", "PLAYER_ROLES_ASSIGNED", "PLAYER_TARGET_CHANGED", "UNIT_NAME_UPDATE" }) do
     events:RegisterEvent(event)
 end
 events:SetScript("OnEvent", function(_, event, unit)
@@ -1153,6 +1347,11 @@ events:SetScript("OnEvent", function(_, event, unit)
         markGUID(unit, "threatDirty")
     elseif event == "UNIT_CONNECTION" then
         markGUID(unit, "healthDirty")
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        for _, deco in ipairs(ordered) do deco.targetDirty = true end
+        anyDirty = true
+    elseif event == "UNIT_NAME_UPDATE" then
+        markGUID(unit, "nameDirty")
     else
         if not InCombatLockdown() then RF.Scan() end
         for _, deco in ipairs(ordered) do deco.unitDirty = true end
@@ -1757,9 +1956,9 @@ local previewVariants = {
     tank = { name = L("Танк", "Tank"), class = "WARRIOR", health = 0.92, heal = 0, absorb = 0.3, role = "TANK",
         threat = 3, deficit = "-1.2k" },
     healer = { name = L("Лекарь", "Healer"), class = "PRIEST", health = 0.62, heal = 0.15, absorb = 0, role = "HEALER",
-        deficit = "-9.5k" },
+        deficit = "-9.5k", target = true },
     dps = { name = L("Боец", "Damage"), class = "MAGE", health = 0.34, heal = 0.1, absorb = 0.08, role = "DAMAGER",
-        deficit = "-16.8k" },
+        deficit = "-16.8k", hover = true },
 }
 RF.previewOrder = { "tank", "healer", "dps" }
 RF.previews = {}
@@ -1840,13 +2039,9 @@ function RF.BuildPreview(parent, width, height, variant)
     local deco = createDeco(frame)
     deco.preview = true
     frame.deco = deco
-    -- The name sits in the middle of the bar, clear of the corner indicators and icons.
-    local name = deco.layer:CreateFontString(nil, "OVERLAY")
-    name:SetFont(Suite.art.font, 11, "OUTLINE")
-    name:SetPoint("LEFT", frame.healthBar, "LEFT", 6, 1)
-    name:SetText(data.name)
+    -- The name, the target border (healer) and the hover highlight (damage dealer) follow the settings.
+    deco.previewName, deco.previewClass, deco.previewTarget = data.name, data.class, data.target
     local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[data.class]
-    if color then name:SetTextColor(color.r, color.g, color.b) end
     applyStyle(deco)
     function frame:Refresh()
         applyStyle(deco)
@@ -1881,6 +2076,9 @@ function RF.BuildPreview(parent, width, height, variant)
             deco.border:Hide()
         end
         RF.UpdateRole(deco, data.role)
+        updateName(deco)
+        updateTarget(deco)
+        drawHover(deco, data.hover)
         local text = settings.rfDeficitText
         deco.text:SetText(text == "percent" and (math.floor(data.health * 100) .. "%")
             or text == "current" and Suite.ShortNumber(data.health * 25000) or data.deficit)

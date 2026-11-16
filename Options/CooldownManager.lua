@@ -11,6 +11,7 @@ local function SU() return ui.SuiteUI end
 local growValues = {
     { "RIGHT", L("Вправо", "Right") }, { "LEFT", L("Влево", "Left") },
     { "DOWN", L("Вниз", "Down") }, { "UP", L("Вверх", "Up") },
+    { "CENTER", L("От центра", "From the centre") },
 }
 local wrapValues = {
     { "DOWN", L("Новый ряд ниже", "Next row below") }, { "UP", L("Новый ряд выше", "Next row above") },
@@ -80,23 +81,222 @@ local function buildManager(parent, width)
     end
     local function hasItem() return selectedItem() ~= nil end
 
+    -- Hints by setting key: what the option is for. hinted() makes a grid attach them as tooltips.
+    local hints = {
+        name = L("Имя группы в списке и в режиме редактирования.", "Name of the group in the list and in Edit Mode."),
+        kind = L("Иконки — для перезарядок и баффов, полосы — для ДоТов и длительностей с названием.",
+            "Icons suit cooldowns and buffs, bars suit DoTs and durations with a name."),
+        enabled = L("Выключенная группа не показывается нигде, но её настройки сохраняются.",
+            "A disabled group is shown nowhere, its settings are kept."),
+        layout = L("«Сжатие» убирает скрытые элементы без дыр. «Фиксированные слоты» держат каждое место за своим "
+            .. "элементом (сортировка по роли при этом не действует).",
+            "“Dynamic” closes the gaps of hidden entries. “Fixed slots” keep every cell for its entry (the role "
+            .. "sort does not apply then)."),
+        sort = L("«По роли» ставит вперёд важное для вашей роли (см. «Роль» вверху), внутри категории — порядок "
+            .. "списка. «Как в списке» — строго ваш порядок.",
+            "“By role” puts first what matters for your role (see “Role” above), list order inside a category. "
+            .. "“As listed” keeps exactly your order."),
+        cdShow = L("Показывать перезарядки всегда, только готовые или только те, что откатываются. Активный бафф "
+            .. "заклинания виден в любом случае.",
+            "Show cooldowns always, only when ready or only while recharging. The spell's active buff shows anyway."),
+        size = L("Сторона иконки в пикселях.", "Side of an icon in pixels."),
+        spacing = L("Расстояние между элементами.", "Distance between elements."),
+        perRow = L("Сколько элементов в ряду до переноса.", "How many elements fit a row before it wraps."),
+        grow = L("Куда растёт ряд. «От центра» центрирует каждый ряд — удобно под персонажем.",
+            "Where a row grows. “From the centre” centres every row — handy under the character."),
+        wrap = L("Куда уходит следующий ряд (или столбец при росте вверх и вниз).",
+            "Where the next row goes (or column when growing up or down)."),
+        alpha = L("Прозрачность группы в бою.", "Opacity of the group in combat."),
+        oocAlpha = L("Прозрачность группы вне боя: уменьшите, чтобы панели не отвлекали.",
+            "Opacity of the group out of combat: lower it to keep the panels out of the way."),
+        inactiveAlpha = L("Прозрачность неактивных элементов (фиксированные слоты, предпросмотр).",
+            "Opacity of inactive elements (fixed slots, preview)."),
+        fontSize = L("Размер цифр стаков и зарядов, у полос — названий.", "Size of stack and charge numbers, of names on bars."),
+        timerSize = L("Размер цифр таймера.", "Size of the timer numbers."),
+        showTimer = L("Цифры оставшегося времени на иконке.", "Remaining time as numbers on the icon."),
+        timerColors = L("Белый > жёлтый (10 с) > красный (последние 3 с); у активного баффа — цвет «Активно».",
+            "White > yellow (10 s) > red (last 3 s); the “Active” colour while the buff is up."),
+        showSwipe = L("Затемнение-спираль поверх иконки на время перезарядки.", "The dark sweep over the icon while it recharges."),
+        showCount = L("Число стаков баффа, зарядов или предметов.", "Number of buff stacks, charges or items."),
+        desaturate = L("Иконка на перезарядке становится серой: готовые видны с первого взгляда.",
+            "An icon on cooldown turns grey: the ready ones stand out at a glance."),
+        showGCD = L("Показывать спираль общей перезарядки (1,5 с).", "Show the global cooldown sweep (1.5 s)."),
+        showActive = L("Пока на вас висит бафф самого заклинания, иконка яркая, с рамкой «Активно» и считает время "
+            .. "баффа; потом идёт перезарядка.",
+            "While the spell's own buff is on you the icon is bright, has the “Active” border and counts the buff "
+            .. "down; the cooldown follows."),
+        activeColor = L("Цвет рамки и таймера активного эффекта.", "Colour of the border and timer of an active effect."),
+        rangeTint = L("Лёгкий красный оттенок, когда цель вне радиуса заклинания. Синий оттенок — не хватает "
+            .. "ресурса, серый — сейчас неприменимо.",
+            "A light red tint when the target is out of the spell's range. Blue means not enough resource, grey "
+            .. "means not usable now."),
+        borderStyle = L("Рамка WoW Forever или плоская линия в 1 пиксель.", "The WoW Forever frame or a flat one-pixel line."),
+        categoryBorder = L("Красит рамку по категории: бурст, защита, контроль, утилити, рейдовые.",
+            "Colours the border by category: offensive, defensive, control, utility, raid."),
+        borderColor = L("Обычный цвет рамки иконок.", "Normal colour of the icon border."),
+        when = L("Дополнительное условие показа группы.", "An extra condition for showing the group."),
+        group = L("Показывать группу только соло, в группе или в рейде.", "Show the group only solo, in a party or in a raid."),
+        talentGroup = L("Только для основного или дополнительного набора талантов.", "Only for the primary or secondary talent spec."),
+        class = L("Только для этого класса (для профилей, общих для нескольких персонажей).",
+            "Only for this class (for profiles shared by several characters)."),
+        tree = L("Только для этой ветки талантов.", "Only for this talent tree."),
+        form = L("Только в этой стойке или форме.", "Only in this stance or form."),
+        -- entries
+        spell = L("ID или название; несколько вариантов через запятую; item:ID — предмет, slot:13 — аксессуар.",
+            "An id or a name; several alternatives separated by commas; item:ID — an item, slot:13 — a trinket."),
+        category = L("Для чего перезарядка: от этого зависят порядок по роли, цвет рамки и скрытие в режимах. "
+            .. "«Авто» берёт категорию из встроенной базы.",
+            "What the cooldown is for: it drives the role order, the border colour and hiding in modes. “Auto” "
+            .. "takes the category from the built-in table."),
+        activeAura = L("Бафф, который считается «активным эффектом» этого заклинания, если он называется иначе.",
+            "The buff that counts as this spell's “active effect” when it has another name."),
+        hideUnknown = L("Неизученное заклинание (не взятый талант) не занимает место в сетке.",
+            "A spell you have not learned (a talent not taken) takes no cell in the grid."),
+        requires = L("Показывать, только если изучено это заклинание или взят этот талант.",
+            "Show only while this spell is learned or this talent is taken."),
+        spec = L("Элемент виден только с этой веткой талантов. Добавленное вами получает текущую ветку; «Любая» — "
+            .. "для всех.",
+            "The entry shows only with this talent tree. What you add gets the current tree; “Any” — for all."),
+        procAura = L("Подсветить иконку, пока на вас этот бафф-прок.", "Glow the icon while this proc buff is on you."),
+        glowUsable = L("Подсветка, когда заклинание можно применить (например, по проку).",
+            "Glow when the spell can be used (for instance on a proc)."),
+        glowReady = L("Подсветка готового заклинания — для главных бурстов.", "Glow when ready — for the main bursts."),
+        warn = L("За сколько секунд до спадания рамка становится красной.", "How many seconds before fading the border turns red."),
+        mine = L("Учитывать только эффекты, наложенные вами.", "Count only effects you applied."),
+        duration = L("Длительность внутренней перезарядки или жизни призванного существа.",
+            "Length of the internal cooldown or of the summon's life."),
+    }
+    local function hinted(grid)
+        local add = grid.Add
+        function grid:Add(opt, access, full, enabled)
+            if access and access.hint and not opt.tooltip then opt.tooltip = hints[access.hint] end
+            return add(self, opt, access, full, enabled)
+        end
+        return grid
+    end
+    local function tagged(access, path)
+        access.hint = type(path) == "table" and path[#path] or path
+        return access
+    end
+
     local defaults = cdm.groupDefaults
     local function g(key, default)
-        return su.Access(selectedGroup, key, default == nil and defaults[key] or default, changed)
+        return tagged(su.Access(selectedGroup, key, default == nil and defaults[key] or default, changed), key)
     end
     local function gl(path, default)
-        return su.Access(selectedGroup, path, default, changed)
+        return tagged(su.Access(selectedGroup, path, default, changed), path)
     end
     local itemDefaults = cdm.itemDefaults
     local function it(key, default)
         if default == nil then default = itemDefaults[key] end
-        return su.Access(selectedItem, key, default, itemChanged)
+        return tagged(su.Access(selectedItem, key, default, itemChanged), key)
     end
+    -- Per-mode visibility of the selected group: its own choice, else the rule of the mode.
+    local function modeAccess(mode)
+        return {
+            get = function()
+                local group = selectedGroup()
+                return group and cdm.ModeShows(group, mode) or false
+            end,
+            set = function(value)
+                local group = selectedGroup()
+                if not group then return end
+                if type(group.modes) ~= "table" then group.modes = {} end
+                group.modes[mode] = value and true or false
+                changed()
+            end,
+        }
+    end
+
+    -------------------------------------------------------------------------------------------
+    -- Quick start: what the module does by itself, test mode, role and display modes
+    -------------------------------------------------------------------------------------------
+    local y = 0
+    local function db() return cdm.Data() end
+    local function settingsChanged()
+        cdm.SettingsChanged()
+        if refresh then refresh() end
+    end
+    local function d(path, default) return su.Access(db, path, default, settingsChanged) end
+    local modeValues = { { "auto", L("Авто (по типу зоны)", "Auto (by zone)") } }
+    for _, entry in ipairs(cdm.modes) do modeValues[#modeValues + 1] = entry end
+
+    local intro = su.Grid(parent, 0, y, width, 2)
+    intro:Header(L("Быстрый старт", "Quick start"))
+    intro:Text(L("Ничего настраивать не нужно: панели сами берут набор вашего класса и ветки талантов, прячут "
+        .. "неизученное и смыкаются без дыр. При смене талантов набор, порядок и позиции меняются сами. "
+        .. "Ниже — тест, роль и режимы; ещё ниже — тонкая настройка групп и заклинаний.",
+        "Nothing has to be set up: the panels take the set of your class and talent tree, hide what is not "
+        .. "learned and close the gaps. When talents change, the set, the order and the positions follow. "
+        .. "Below: test, role and modes; further down: fine tuning of groups and spells."))
+    local status = intro:Text(" ")
+    local testRow = intro:Add({ "button", L("Тест / разблокировать панели", "Test / unlock panels"),
+        func = function() cdm.SetTest(not cdm.IsTesting()) end,
+        tooltip = L("Показывает заклинания текущей ветки с ненастоящими таймерами (готово > активно > перезарядка). "
+            .. "Пока тест идёт, группы перетаскиваются мышью, место запоминается для этой ветки. Выход: эта кнопка, "
+            .. "кнопка режима на экране, /fcdm test или начало боя.",
+            "Shows the spells of the current tree with fake timers (ready > active > cooldown). While the test "
+            .. "runs the groups are dragged with the mouse and the spot is remembered for this tree. Leave with "
+            .. "this button, the mode button on screen, /fcdm test or by entering combat.") })
+    local resetNote
+    intro:Add({ "button", L("Сбросить раскладку этой ветки", "Reset the layout of this tree"),
+        func = function()
+            su.Confirm(L("Вернуть заводскую раскладку текущей ветки талантов? Её элементы (и добавленные вами) "
+                .. "заменятся стандартными, позиции групп сбросятся. Другие ветки и свои группы не изменятся.",
+                "Restore the factory layout of the current talent tree? Its entries (yours too) are replaced by the "
+                .. "defaults and the group positions are reset. Other trees and your own groups stay."), function()
+                local addedGroups, addedItems = cdm.ResetSpec()
+                resetNote = (L("Ветка сброшена: групп %d, элементов %d.", "Tree reset: %d groups, %d entries."))
+                    :format(addedGroups or 0, addedItems or 0)
+                if refresh then refresh() end
+            end)
+        end,
+        tooltip = L("Заводская раскладка только для текущей ветки талантов.",
+            "Factory layout for the current talent tree only.") })
+    intro:Add({ "toggle", L("Авто-адаптация под ветку и таланты", "Auto-adapt to tree and talents"),
+        tooltip = L("Вкл.: видны только элементы текущей ветки, порядок в группах — по роли, добавленные вами "
+            .. "заклинания и позиции групп запоминаются отдельно для каждой ветки. Выкл.: показываются элементы "
+            .. "всех веток класса в порядке списка.",
+            "On: only entries of the current tree are shown, groups are ordered by role, spells you add and group "
+            .. "positions are kept per tree. Off: entries of every tree of the class are shown in list order.") },
+        d("autoAdapt", true))
+    intro:Add({ "select", L("Роль", "Role"), values = cdm.roles,
+        tooltip = L("От роли зависит порядок в группах с сортировкой «По роли»: танк — защита и прерывания, "
+            .. "лекарь — сейвы на группу и рейд, боец — бурсты и прерывания. «Авто» берёт роль ветки (друид-медведь "
+            .. "и рыцарь смерти во власти льда — танк).",
+            "The role sets the order in groups sorted “By role”: tank — defensives and interrupts, healer — "
+            .. "externals and raid cooldowns, damage — bursts and interrupts. “Auto” uses the role of the tree "
+            .. "(a bear druid and a death knight in Frost Presence count as tanks).") }, d("role", "auto"))
+
+    intro:Header(L("Режимы панелей", "Panel modes"))
+    intro:Text(L("Режим решает, какие группы видны: «Полный» — все; «Только бой» — без напоминаний и только в бою; "
+        .. "«Рейд» — без мобильности и утилити; «Подземелье» — как полный (настройте под себя); «PvP» — без полос, "
+        .. "напоминаний и рейдовых сейвов; «Минимум» — только главные перезарядки. Видимость каждой группы в режиме "
+        .. "меняется в её настройках ниже.",
+        "The mode decides which groups show: Full — all; Combat — no reminders, in combat only; Raid — no "
+        .. "mobility and utility; Dungeon — like Full (tune it yourself); PvP — no bars, reminders or raid "
+        .. "cooldowns; Minimal — the main cooldowns only. Each group's visibility per mode is set in its settings below."))
+    intro:Add({ "select", L("Режим", "Mode"), values = modeValues,
+        tooltip = L("«Авто» выбирает режим по типу зоны (ниже). Быстро: кнопка режима на экране или /fcdm mode.",
+            "“Auto” picks the mode by the kind of zone (below). Quick switch: the mode button on screen or /fcdm mode.") },
+        d("mode", "auto"))
+    intro:Add({ "toggle", L("Кнопка режима на экране", "Mode button on screen"),
+        tooltip = L("Маленькая кнопка над панелями: ЛКМ — следующий режим, ПКМ — авто. Двигается в режиме редактирования.",
+            "A small button above the panels: left click — next mode, right click — auto. Moved in Edit Mode.") },
+        d("modeButton", true))
+    for _, zone in ipairs({ { "none", L("Авто: открытый мир", "Auto: open world") },
+        { "party", L("Авто: подземелье", "Auto: dungeon") }, { "raid", L("Авто: рейд", "Auto: raid") },
+        { "pvp", L("Авто: поле боя", "Auto: battleground") }, { "arena", L("Авто: арена", "Auto: arena") } }) do
+        intro:Add({ "select", zone[2], values = cdm.modes,
+            tooltip = L("Какой режим включать в этой зоне, когда выбран режим «Авто».",
+                "Which mode to use in this kind of zone while the mode is “Auto”.") },
+            d({ "autoModes", zone[1] }, cdm.autoModeDefaults[zone[1]]))
+    end
+    y = y - intro:Height() - 10
 
     -------------------------------------------------------------------------------------------
     -- Groups
     -------------------------------------------------------------------------------------------
-    local y = 0
     local header = W.Header(parent, L("Группы трекеров", "Tracker groups"), width)
     header:SetPoint("TOPLEFT", 0, y)
     y = y - 30
@@ -198,7 +398,7 @@ local function buildManager(parent, width)
     -------------------------------------------------------------------------------------------
     -- Group settings
     -------------------------------------------------------------------------------------------
-    local grid = su.Grid(parent, 0, y, width, 2)
+    local grid = hinted(su.Grid(parent, 0, y, width, 2))
     grid:Header(L("Группа: вид и геометрия", "Group: look and geometry"))
     grid:Add({ "text", L("Название", "Name") }, g("name", ""), false, hasGroup)
     grid:Add({ "select", L("Тип отображения", "Display type"), values = {
@@ -208,6 +408,9 @@ local function buildManager(parent, width)
     grid:Add({ "select", L("Компоновка", "Layout"), values = {
         { "dynamic", L("Сжатие без пустых мест", "Dynamic, no gaps") }, { "fixed", L("Фиксированные слоты", "Fixed slots") } } },
         g("layout"), false, hasGroup)
+    grid:Add({ "select", L("Порядок элементов", "Order of entries"), values = {
+        { "manual", L("Как в списке", "As listed") }, { "role", L("По роли: важное вперёд", "By role: key ones first") } } },
+        g("sort"), false, isIcons)
     grid:Add({ "select", L("Перезарядки показывать", "Show cooldowns"), values = {
         { "always", L("Всегда", "Always") }, { "ready", L("Только готовые", "Only when ready") },
         { "cooldown", L("Только на перезарядке", "Only on cooldown") } } }, g("cdShow"), false, hasGroup)
@@ -216,7 +419,9 @@ local function buildManager(parent, width)
     grid:Add({ "range", L("Элементов в ряду", "Per row"), min = 1, max = 40, step = 1 }, g("perRow"), false, hasGroup)
     grid:Add({ "select", L("Направление роста", "Growth"), values = growValues }, g("grow"), false, hasGroup)
     grid:Add({ "select", L("Перенос", "Wrap"), values = wrapValues }, g("wrap"), false, hasGroup)
-    grid:Add({ "range", L("Прозрачность", "Opacity"), min = 0.1, max = 1, step = 0.05 }, g("alpha"), false, hasGroup)
+    grid:Add({ "range", L("Прозрачность в бою", "Opacity in combat"), min = 0.1, max = 1, step = 0.05 }, g("alpha"), false, hasGroup)
+    grid:Add({ "range", L("Прозрачность вне боя", "Opacity out of combat"), min = 0, max = 1, step = 0.05 },
+        g("oocAlpha"), false, hasGroup)
     grid:Add({ "range", L("Прозрачность неактивных", "Inactive opacity"), min = 0, max = 1, step = 0.05 },
         g("inactiveAlpha"), false, hasGroup)
     grid:Add({ "range", L("Шрифт: стаки и названия", "Font: stacks and names"), min = 7, max = 24, step = 1 },
@@ -228,6 +433,24 @@ local function buildManager(parent, width)
     grid:Add({ "toggle", L("Серые на перезарядке", "Desaturate on cooldown") }, g("desaturate"), false, hasGroup)
     grid:Add({ "toggle", L("Показывать ГКД", "Show the GCD") }, g("showGCD"), false, hasGroup)
     grid:Add({ "color", L("Цвет рамки иконок", "Icon border colour"), alpha = true }, g("borderColor"), false, hasGroup)
+    grid:Header(L("Состояния иконок", "Icon states"))
+    grid:Text(L("Готово — яркая иконка. Активно — цветная рамка и отсчёт баффа. Перезарядка — серая иконка, спираль и "
+        .. "таймер (жёлтый с 10 с, красный с 3 с). Синий оттенок — нет ресурса, красный — цель далеко.",
+        "Ready — a bright icon. Active — a coloured border and the buff countdown. Cooldown — a grey icon, the sweep "
+        .. "and a timer (yellow from 10 s, red from 3 s). Blue tint — no resource, red tint — target out of range."))
+    grid:Add({ "toggle", L("Активный эффект на иконке", "Active effect on the icon") }, g("showActive"), false, isIcons)
+    grid:Add({ "color", L("Цвет «Активно»", "“Active” colour"), alpha = true }, g("activeColor"), false, isIcons)
+    grid:Add({ "toggle", L("Цвет таймера по времени", "Timer colour by time left") }, g("timerColors"), false, isIcons)
+    grid:Add({ "toggle", L("Оттенок «вне радиуса»", "Out-of-range tint") }, g("rangeTint"), false, isIcons)
+    grid:Add({ "select", L("Стиль рамки", "Border style"), values = {
+        { "forever", L("Рамка WoW Forever", "WoW Forever frame") }, { "pixel", L("Линия 1 пиксель", "One-pixel line") } } },
+        g("borderStyle"), false, isIcons)
+    grid:Add({ "toggle", L("Рамка цветом категории", "Border coloured by category") }, g("categoryBorder"), false, isIcons)
+    grid:Header(L("В каких режимах видна группа", "Modes that show the group"))
+    for _, mode in ipairs(cdm.modes) do
+        grid:Add({ "toggle", mode[2], tooltip = L("Показывать эту группу в этом режиме панелей.",
+            "Show this group in this panel mode.") }, modeAccess(mode[1]), false, hasGroup)
+    end
     grid:Header(L("Полосы прогресса", "Progress bars"))
     grid:Add({ "range", L("Ширина полосы", "Bar width"), min = 60, max = 500, step = 1 }, g("barWidth"), false, isBars)
     grid:Add({ "range", L("Высота полосы", "Bar height"), min = 8, max = 60, step = 1 }, g("barHeight"), false, isBars)
@@ -292,13 +515,64 @@ local function buildManager(parent, width)
     addKind = W.Create(parent, { type = "select", label = L("Тип отслеживания", "Tracking type"), values = cdm.kinds },
         su.Access(function() return state.add end, "kind", nil, function() addKind:Refresh() end), rightWidth)
     addKind:SetPoint("TOPLEFT", right, y - 50)
-    local function addCurrent()
-        -- read the box directly: the text counts even without pressing Enter
-        local text = state.add.spell
+    local function addBox()
         for _, child in ipairs({ addSpell:GetChildren() }) do
-            if child.GetText and child.SetAutoFocus and child:GetText() then text = child:GetText() end
+            if child.GetText and child.SetAutoFocus then return child end
         end
-        text = (text or ""):match("^%s*(.-)%s*$")
+    end
+    -- read the box directly: the text counts even without pressing Enter
+    local function addText()
+        local box = addBox()
+        local text = box and box:GetText() or state.add.spell
+        return (text or ""):match("^%s*(.-)%s*$")
+    end
+    -- Live preview of what is being added: icon, name, category and whether the spell is learned.
+    local preview = CreateFrame("Frame", nil, parent)
+    preview:SetWidth(rightWidth)
+    preview:SetHeight(22)
+    preview:SetPoint("TOPLEFT", right, y - 132)
+    preview.icon = preview:CreateTexture(nil, "ARTWORK")
+    preview.icon:SetWidth(20)
+    preview.icon:SetHeight(20)
+    preview.icon:SetPoint("LEFT", 0, 0)
+    preview.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    preview.text = W.Text(preview, W.fonts.small)
+    preview.text:SetPoint("LEFT", preview.icon, "RIGHT", 6, 0)
+    preview.text:SetPoint("RIGHT", preview, "RIGHT", 0, 0)
+    preview.text:SetJustifyH("LEFT")
+    local function updatePreview()
+        local text = addText()
+        local first = ui.Suite.ParseSpellList(text)[1]
+        local name, icon, note
+        if type(first) == "string" and first:match("^item:%d+$") then
+            local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(tonumber(first:match("%d+")))
+            name, icon = itemName, itemIcon
+        elseif type(first) == "string" and first:match("^slot:%d+$") then
+            local slot = tonumber(first:match("%d+"))
+            name, icon = L("Слот ", "Slot ") .. slot, GetInventoryItemTexture and GetInventoryItemTexture("player", slot)
+        elseif first then
+            name, icon = ui.Suite.SpellInfo(first)
+            if type(first) == "number" and not name then
+                note = L("такого заклинания нет", "no such spell")
+            elseif name then
+                local category = cdm.CategoryOf({ spell = first })
+                note = category and cdm.categoryNames[category] or nil
+                if state.add.kind == "cooldown" and not ui.Suite.IsKnown(first) then
+                    note = (note and note .. " · " or "") .. L("не изучено — будет скрыто", "not learned — will hide")
+                end
+            end
+        end
+        preview.icon:SetTexture(first and (icon or "Interface\\Icons\\INV_Misc_QuestionMark") or nil)
+        if not first then
+            preview.text:SetText(L("Введите ID или название — здесь появится иконка.", "Type an id or a name — the icon shows here."))
+        else
+            preview.text:SetText((name or tostring(first)) .. (note and " |cff8f8f96(" .. note .. ")|r" or ""))
+        end
+    end
+    local box = addBox()
+    if box and box.HookScript then box:HookScript("OnTextChanged", updatePreview) end
+    local function addCurrent()
+        local text = addText()
         local group = selectedGroup()
         if not group then return end
         if state.add.kind ~= "missing" and state.add.kind ~= "totem" and (text == nil or text == "") then return end
@@ -323,13 +597,13 @@ local function buildManager(parent, width)
         if group and state.item then state.item = cdm.MoveItem(group.id, state.item, -1) end
         refresh()
     end, 24)
-    up:SetPoint("TOPLEFT", right, y - 134)
+    up:SetPoint("TOPLEFT", right, y - 160)
     local down = W.Button(parent, L("Ниже", "Down"), 100, function()
         local group = selectedGroup()
         if group and state.item then state.item = cdm.MoveItem(group.id, state.item, 1) end
         refresh()
     end, 24)
-    down:SetPoint("TOPLEFT", right + 108, y - 134)
+    down:SetPoint("TOPLEFT", right + 108, y - 160)
     local remove = W.Button(parent, L("Удалить", "Remove"), 100, function()
         local group = selectedGroup()
         if group and state.item then
@@ -339,15 +613,18 @@ local function buildManager(parent, width)
         end
         refresh(true)
     end, 24)
-    remove:SetPoint("TOPLEFT", right + 216, y - 134)
+    remove:SetPoint("TOPLEFT", right + 216, y - 160)
     remove.text:SetTextColor(W.rgba(S.danger))
     local itemHint = W.Description(parent, L("Несколько вариантов через запятую: «1459, 23028» — сработает любой. "
-        .. "Неизученные заклинания скрываются сами.", "Several alternatives separated by commas: “1459, 23028” — any of them "
-        .. "counts. Unlearned spells hide themselves."), rightWidth)
-    itemHint:SetPoint("TOPLEFT", right, y - 166)
-    y = y - 9 * 24 - 16
+        .. "Неизученное скрывается само. Добавленное запоминается за текущей веткой талантов.",
+        "Several alternatives separated by commas: “1459, 23028” — any of them counts. Unlearned spells hide "
+        .. "themselves. What you add is kept for the current talent tree."), rightWidth)
+    itemHint:SetPoint("TOPLEFT", right, y - 192)
+    y = y - 9 * 24 - 36
 
-    local itemGrid = su.Grid(parent, 0, y, width, 2)
+    local categoryValues = { { "", L("Авто (из базы)", "Auto (built-in table)") }, { "none", L("Без категории", "None") } }
+    for _, entry in ipairs(cdm.categories) do categoryValues[#categoryValues + 1] = { entry[1], entry[2] } end
+    local itemGrid = hinted(su.Grid(parent, 0, y, width, 2))
     itemGrid:Header(L("Выбранный элемент", "Selected entry"))
     itemGrid:Add({ "select", L("Тип отслеживания", "Tracking type"), values = cdm.kinds }, it("kind"), false, hasItem)
     itemGrid:Add({ "text", L("Заклинание / предмет", "Spell / item") }, su.Access(selectedItem, "spell", "", function(key, value)
@@ -368,6 +645,11 @@ local function buildManager(parent, width)
         it("warn"), false, itemKind("debuff"))
     itemGrid:Add({ "text", L("Подсветка при баффе-проке", "Glow while this proc buff is up") }, it("procAura", ""),
         false, itemKind("cooldown"))
+    itemGrid:Add({ "select", L("Категория", "Category"), values = categoryValues }, it("category", ""), false, itemKind("cooldown"))
+    itemGrid:Add({ "toggle", L("Показывать активный эффект", "Show the active effect"),
+        tooltip = hints.showActive }, it("showActive"), false, itemKind("cooldown"))
+    itemGrid:Add({ "text", L("Бафф активного эффекта", "Buff of the active effect") }, it("activeAura", ""), false,
+        itemKind("cooldown"))
     itemGrid:Add({ "toggle", L("Подсветка, когда доступно", "Glow when usable") }, it("glowUsable"), false, itemKind("cooldown"))
     itemGrid:Add({ "toggle", L("Скрывать неизученное", "Hide unlearned") }, it("hideUnknown"), false, itemKind("cooldown"))
     itemGrid:Add({ "text", L("Требует заклинание / талант", "Requires spell / talent") }, it("requires", ""), false, hasItem)
@@ -448,6 +730,23 @@ local function buildManager(parent, width)
         itemList:SetItems(items, renderItem)
         itemList:Select(state.item)
         hint.label:SetText(hintText())
+        do
+            local class, tree = cdm.CurrentSpec()
+            local treeName = tree and tree > 0 and cdm.TreeNames(class)[tree] or L("без талантов", "no talents")
+            local mode = cdm.ActiveMode()
+            local modeText = cdm.modeNames[mode] or mode
+            if db().mode == "auto" then modeText = cdm.modeNames.auto .. " > " .. modeText end
+            local text = (L("Сейчас: %s · %s · роль: %s · режим: %s", "Now: %s · %s · role: %s · mode: %s")):format(
+                className(class or ""), treeName, cdm.roleNames[cdm.Role() or ""] or "?", modeText)
+            if resetNote then text = text .. "  |cffd9b873" .. resetNote .. "|r" end
+            status.label:SetText("|cffd9b873" .. text .. "|r")
+        end
+        if testRow and testRow.button then
+            testRow.button:SetText(cdm.IsTesting() and L("Закончить тест", "Finish the test")
+                or L("Тест / разблокировать панели", "Test / unlock panels"))
+        end
+        intro:Refresh()
+        updatePreview()
         grid:Refresh()
         itemGrid:Refresh()
         addSpell:Refresh()
@@ -473,14 +772,18 @@ local function buildManager(parent, width)
         state.group, state.item = nil, nil
         refresh()
     end, "CooldownManagerOptionsProfile")
+    -- Test and mode are also switched from the screen (mode button, slash command, combat).
+    ui.RegisterCallback("CooldownManagerTest", function() refresh() end, "CooldownManagerOptionsTest")
+    ui.RegisterCallback("CooldownManagerMode", function() refresh() end, "CooldownManagerOptionsMode")
     refresh()
     return -y + 10
 end
 
 ui.RegisterOptions("cooldowns", {
     title = "Cooldown Manager",
-    description = L("Группы трекеров кулдаунов, баффов и полос в стиле WoW Forever.",
-        "Cooldown, buff and bar tracker groups in the WoW Forever style."),
+    description = L("Перезарядки, баффы и полосы в стиле WoW Forever: сами подстраиваются под класс, ветку талантов "
+        .. "и тип контента.", "Cooldowns, buffs and bars in the WoW Forever style that adapt to your class, talent "
+        .. "tree and content by themselves."),
     icon = "Interface\\Icons\\Spell_Nature_TimeStop",
     group = "combat",
     order = 5,

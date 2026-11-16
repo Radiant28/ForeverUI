@@ -51,6 +51,9 @@ local GROUP_DEFAULTS = {
     borderColor = { 0.85, 0.72, 0.45, 1 },
     barWidth = 200, barHeight = 20, barFormat = "full", barTexture = "WoW Forever Raid",
     barColor = { 0.86, 0.62, 0.24, 1 }, barBackground = { 0, 0, 0, 0.55 },
+    -- state clarity: buff of the spell itself on the icon, timer colours, range tint, look of the border
+    showActive = true, activeColor = { 0.35, 1, 0.45, 1 }, timerColors = true, rangeTint = true,
+    borderStyle = "forever", categoryBorder = false, oocAlpha = 1, sort = "manual",
     load = { when = "always", group = "any", talentGroup = 0, tree = 0, form = 0, class = "",
         zone = { none = true, party = true, raid = true, pvp = true, arena = true } },
 }
@@ -62,6 +65,7 @@ local ITEM_DEFAULTS = {
     onlyCombat = false, onlyGroup = false, requires = "", class = "", spec = 0,
     glowReady = false, soundReady = "", stacks = 0, glowStacks = true, soundStacks = "",
     expire = 0, glowExpire = true, soundExpire = "", glowMissing = true,
+    category = "", showActive = true, activeAura = "",
 }
 CDM.itemDefaults = ITEM_DEFAULTS
 
@@ -86,7 +90,7 @@ local presets = {
     WARRIOR = {
         trees = { L("Оружие", "Arms"), L("Неистовство", "Fury"), L("Защита", "Protection") },
         all = { essential = cds({ 1719, 871 }),
-            utility = cds({ 6552, 100, 20252, 5246, 23920, 3411, 18499, 57755 }),
+            utility = cds({ 6552, 100, 20252, 5246, 23920, 3411, 18499, 57755, 55694, 64382 }),
             bars = { item("buff", 6673, { warn = 10 }) },
             missing = { item("missing", "6673, 469", { onlyCombat = true }) } },
         { essential = cds({ 12294, 7384, 46924, 12328 }), buffs = buffs({ 52437, 60503 }),
@@ -108,7 +112,8 @@ local presets = {
         { essential = cds({ 31935, 53595, 20925, 26573, 53600, 20271 }), utility = cds({ 62124, 31789, 64205 }),
             buffs = buffs({ 20925 }), bars = { item("buff", 20925) },
             missing = { item("missing", 25780, { onlyCombat = true }) } },
-        { essential = cds({ 35395, 53385, 20271, 879, 26573, 24275 }), buffs = buffs({ 59578 }) },
+        { essential = cds({ 35395, 53385, 20271, 879, 26573, 24275 }), utility = cds({ 20066 }),
+            buffs = buffs({ 59578 }) },
     },
     PRIEST = {
         trees = { L("Послушание", "Discipline"), L("Свет", "Holy"), L("Тьма", "Shadow") },
@@ -159,7 +164,7 @@ local presets = {
     },
     WARLOCK = {
         trees = { L("Колдовство", "Affliction"), L("Демонология", "Demonology"), L("Разрушение", "Destruction") },
-        all = { utility = cds({ 29858, 18708, 698, 29893, 6789, 5484, 48020 }),
+        all = { utility = cds({ 29858, 18708, 698, 29893, 6789, 5484, 48020, 19647 }),
             missing = { item("missing", "28176, 706, 687") } },
         { essential = cds({ 48181, 18220 }), buffs = buffs({ 17941, 64371 }), bars = dots({ 172, 980, 30108, 48181 }) },
         { essential = cds({ 47193, 47241, 50589, 54785 }), buffs = buffs({ 63167, 71165, 47241 }),
@@ -169,7 +174,7 @@ local presets = {
     HUNTER = {
         trees = { L("Чувство зверя", "Beast Mastery"), L("Стрельба", "Marksmanship"), L("Выживание", "Survival") },
         all = { essential = cds({ 3045, 53351, 2643 }),
-            utility = cds({ 34477, 5384, 781, 19263, 1499, 13813, 60192 }),
+            utility = cds({ 34477, 5384, 781, 19263, 1499, 13813, 60192, 19503, 53271 }),
             buffs = buffs({ 3045 }),
             bars = dots({ 1978 }),
             missing = { item("missing", "61846, 13165, 34074") } },
@@ -202,14 +207,103 @@ local presets = {
 }
 CDM.presets = presets
 
+---------------------------------------------------------------------------------------------------
+-- Categories, roles and display modes
+---------------------------------------------------------------------------------------------------
+-- What a cooldown is for. Drives the order inside a group (by role), the optional border colour and
+-- what a display mode hides. An entry may override it (entry.category); "" = from this table.
+CDM.categories = {
+    { "offensive", L("Бурст", "Offensive"), { 1.00, 0.55, 0.15 } },
+    { "defensive", L("Защита / иммунитет", "Defensive / immunity"), { 0.35, 0.75, 1.00 } },
+    { "control", L("Прерывание и контроль", "Interrupt and control"), { 0.80, 0.50, 1.00 } },
+    { "utility", L("Мобильность и утилити", "Mobility and utility"), { 0.60, 0.85, 0.50 } },
+    { "raid", L("На группу / рейд", "Externals / raid"), { 1.00, 0.85, 0.30 } },
+}
+CDM.categoryColors, CDM.categoryNames = {}, {}
+for _, entry in ipairs(CDM.categories) do
+    CDM.categoryNames[entry[1]], CDM.categoryColors[entry[1]] = entry[2], entry[3]
+end
+
+local CATEGORY_SPELLS = {
+    offensive = { 1719, 12292, 46924, 12328, 31884, 20216, 31842, 10060, 14751, 34433, 48505, 33831, 50334, 5217,
+        17116, 16166, 51533, 16188, 2894, 12042, 12043, 11129, 12472, 55342, 31687, 47241, 3045, 19574, 23989,
+        34026, 14177, 13750, 13877, 51690, 51713, 14185, 49016, 49028, 49206, 47568, 42650 },
+    defensive = { 871, 12975, 2565, 23920, 55694, 642, 498, 633, 47585, 586, 22812, 61336, 22842, 30823, 45438,
+        11426, 19263, 5384, 5277, 31224, 1856, 48792, 48707, 55233, 48982, 49222, 51271, 49039, 48743 },
+    control = { 6552, 72, 5246, 46968, 12809, 853, 20066, 8122, 15487, 64044, 33786, 5211, 16979, 50516, 57994,
+        51514, 8177, 2139, 122, 44572, 31661, 19647, 6789, 5484, 30283, 34490, 19577, 1499, 19503, 1766, 2094,
+        408, 1776, 47528, 47476, 49203, 49576 },
+    utility = { 100, 20252, 3411, 18499, 57755, 355, 694, 1161, 1044, 62124, 31789, 6346, 1850, 49376, 2484, 2062,
+        1953, 66, 12051, 11958, 18708, 698, 29893, 48020, 34477, 781, 13813, 60192, 57934, 2983, 36554, 56222,
+        46584, 29858, 53271 },
+    raid = { 6940, 1022, 31821, 64205, 33206, 47788, 64843, 64901, 724, 29166, 20484, 740, 2825, 32182, 16190,
+        51052, 20707 },
+}
+local categoryById, categoryByName = {}, nil
+for category, ids in pairs(CATEGORY_SPELLS) do
+    for _, id in ipairs(ids) do categoryById[id] = category end
+end
+CDM.categoryById = categoryById
+
+-- Role of each talent tree (order of the talent tabs). Feral druids and death knights are resolved at
+-- run time: see resolveRole().
+local ROLES = {
+    WARRIOR = { "MELEE", "MELEE", "TANK" }, PALADIN = { "HEALER", "TANK", "MELEE" },
+    PRIEST = { "HEALER", "HEALER", "RANGED" }, DRUID = { "RANGED", "MELEE", "HEALER" },
+    SHAMAN = { "RANGED", "MELEE", "HEALER" }, MAGE = { "RANGED", "RANGED", "RANGED" },
+    WARLOCK = { "RANGED", "RANGED", "RANGED" }, HUNTER = { "RANGED", "RANGED", "RANGED" },
+    ROGUE = { "MELEE", "MELEE", "MELEE" }, DEATHKNIGHT = { "MELEE", "MELEE", "MELEE" },
+}
+CDM.treeRoles = ROLES
+CDM.roles = {
+    { "auto", L("Авто (по талантам)", "Auto (from talents)") },
+    { "TANK", L("Танк", "Tank") }, { "HEALER", L("Лекарь", "Healer") },
+    { "MELEE", L("Ближний бой", "Melee DPS") }, { "RANGED", L("Дальний бой", "Ranged DPS") },
+}
+CDM.roleNames = {}
+for _, entry in ipairs(CDM.roles) do CDM.roleNames[entry[1]] = entry[2] end
+
+-- Order of the categories inside a group sorted by role (lower first); entries without a category
+-- (rotation spells) sit after the two leading categories.
+local ROLE_ORDER = {
+    TANK = { defensive = 1, control = 2, offensive = 3, raid = 4, utility = 5 },
+    HEALER = { raid = 1, defensive = 2, offensive = 3, control = 4, utility = 5 },
+    MELEE = { offensive = 1, control = 2, defensive = 3, utility = 4, raid = 5 },
+}
+ROLE_ORDER.RANGED = ROLE_ORDER.MELEE
+local UNCATEGORISED_RANK = 2.5
+
+-- Display modes: which starting groups a mode shows ("custom" = the user's own groups) and which
+-- cooldown categories it hides. A group may override its own visibility per mode (group.modes).
+local ALL_GROUPS = { essential = true, utility = true, buffs = true, bars = true, missing = true, custom = true }
+CDM.modes = {
+    { "full", L("Полный", "Full") }, { "combat", L("Только бой", "Combat") }, { "raid", L("Рейд", "Raid") },
+    { "dungeon", L("Подземелье", "Dungeon") }, { "pvp", "PvP" }, { "minimal", L("Минимум", "Minimal") },
+}
+CDM.modeNames = { auto = L("Авто", "Auto") }
+for _, entry in ipairs(CDM.modes) do CDM.modeNames[entry[1]] = entry[2] end
+local MODE_RULES = {
+    full = { groups = ALL_GROUPS },
+    combat = { groups = { essential = true, utility = true, buffs = true, bars = true, custom = true }, combatOnly = true },
+    raid = { groups = ALL_GROUPS, hide = { utility = true } },
+    dungeon = { groups = ALL_GROUPS },
+    pvp = { groups = { essential = true, utility = true, buffs = true, custom = true }, hide = { raid = true } },
+    minimal = { groups = { essential = true }, hide = { utility = true, raid = true, control = true } },
+}
+CDM.modeRules = MODE_RULES
+local AUTO_MODES = { none = "full", party = "dungeon", raid = "raid", pvp = "pvp", arena = "pvp" }
+CDM.autoModeDefaults = AUTO_MODES
+
 -- The five starting groups; `preset` marks a group as one of them, so a deleted group can be restored.
 local PRESET_GROUPS = {
-    { key = "essential", name = "Essential Cooldowns", kind = "icons", extra = { size = 42, perRow = 8 } },
-    { key = "utility", name = "Utility Cooldowns", kind = "icons", extra = { size = 30, perRow = 10 } },
-    { key = "buffs", name = "Tracked Buffs", kind = "icons", extra = { size = 32, perRow = 8, cdShow = "always" } },
+    { key = "essential", name = "Essential Cooldowns", kind = "icons",
+        extra = { size = 42, perRow = 8, sort = "role", grow = "CENTER" } },
+    { key = "utility", name = "Utility Cooldowns", kind = "icons",
+        extra = { size = 30, perRow = 10, sort = "role", grow = "CENTER" } },
+    { key = "buffs", name = "Tracked Buffs", kind = "icons", extra = { size = 32, perRow = 8, cdShow = "always", grow = "CENTER" } },
     { key = "bars", name = "Tracked Bars", kind = "bars", extra = { perRow = 1, grow = "DOWN" } },
     { key = "missing", name = L("Напоминания", "Reminders"), names = { "Напоминания", "Reminders" }, kind = "icons",
-        extra = { size = 34, perRow = 6 }, zone = { none = true, party = true, raid = true, pvp = false, arena = false },
+        extra = { size = 34, perRow = 6, grow = "CENTER" }, zone = { none = true, party = true, raid = true, pvp = false, arena = false },
         -- class-free entries every character gets
         tail = { item("missing", "", { missingType = "flask", onlyGroup = true }),
             item("missing", "", { missingType = "food", onlyGroup = true }) } },
@@ -361,6 +455,31 @@ Suite.RegisterProfilePart("cdm", function(db)
         tagLegacy(db, class)
         db.specTagged[class] = true
     end
+    -- Auto-adaptation, role, display mode and per-spec positions.
+    if db.autoAdapt == nil then db.autoAdapt = true end
+    if db.modeButton == nil then db.modeButton = true end
+    if not CDM.roleNames[db.role or ""] then db.role = "auto" end
+    if not CDM.modeNames[db.mode or ""] then db.mode = "auto" end
+    if type(db.autoModes) ~= "table" then db.autoModes = {} end
+    for zone, mode in pairs(AUTO_MODES) do
+        if not MODE_RULES[db.autoModes[zone] or ""] then db.autoModes[zone] = mode end
+    end
+    if type(db.specSpots) ~= "table" then db.specSpots = {} end
+    -- Profiles from before the role sort: the two cooldown groups get it once.
+    if (tonumber(db.version) or 0) < 2 then
+        for _, group in pairs(db.groups) do
+            if group.preset == "essential" or group.preset == "utility" then group.sort = "role" end
+        end
+        db.version = 2
+    end
+    -- Starting icon groups still growing to the right are centred: the visible icons then sit in the
+    -- middle of the box placed in Edit Mode, however many of them are hidden.
+    if db.version < 3 then
+        for _, group in pairs(db.groups) do
+            if group.preset and group.kind == "icons" and group.grow == "RIGHT" then group.grow = "CENTER" end
+        end
+        db.version = 3
+    end
 end)
 
 local function data() return Suite.Part("cdm") end
@@ -434,6 +553,11 @@ function CDM.AddItem(groupId, kind, spell)
     if not group then return end
     local entry = Suite.Merge({ kind = kind or "cooldown", spell = spell or "" }, ITEM_DEFAULTS)
     if kind == "debuff" then entry.unit = "target" end
+    -- With auto-adaptation the user's own entries belong to the spec they were added on.
+    if data().autoAdapt and CDM.CurrentSpec then
+        local class, tree = CDM.CurrentSpec()
+        entry.class, entry.spec = class or "", tree or 0
+    end
     group.items[#group.items + 1] = entry
     CDM.Refresh()
     return #group.items
@@ -623,28 +747,116 @@ local inCombat = false
 
 -- Class and primary talent tree of the player, cached: entries and groups are checked many times a
 -- second. Without talent points (low level) the tree is 0 and entries of every tree are allowed.
-local currentClass, currentTree
+local currentClass, currentTree, currentRole
+local autoAdapt = true
+
+-- Role of the current spec. A feral druid is a tank with Protector of the Pack or in bear form, a
+-- death knight in Frost Presence; the user's choice (db.role) wins over all of it.
+local function resolveRole()
+    local db = data()
+    autoAdapt = db.autoAdapt ~= false
+    if db.role and db.role ~= "auto" then return db.role end
+    local class, tree = currentClass, currentTree or 0
+    local role = ROLES[class or ""] and ROLES[class][tree] or (class and ROLES[class] and ROLES[class][1]) or "MELEE"
+    if tree == 0 and (class == "PALADIN" or class == "PRIEST") then role = "MELEE" end
+    local form = GetShapeshiftForm and GetShapeshiftForm() or 0
+    if class == "DRUID" and tree == 2 then
+        local talent = GetSpellInfo(57877)
+        if form == 1 or (talent and Suite.TalentRank(talent) > 0) then role = "TANK" end
+    elseif class == "DEATHKNIGHT" and form == 2 then
+        role = "TANK"
+    end
+    return role
+end
+
 local function refreshSpec()
     currentClass, currentTree = playerClass(), Suite.PrimaryTree()
+    currentRole = resolveRole()
 end
 local function specNow()
     if currentTree == nil then refreshSpec() end
     return currentClass, currentTree
 end
+function CDM.Role()
+    if currentTree == nil then refreshSpec() end
+    return currentRole
+end
+-- Key of the per-spec data ("PRIEST-2"; tree 0 = no talent points yet).
+local function specKey()
+    local class, tree = specNow()
+    return (class or "?") .. "-" .. (tree or 0)
+end
+CDM.SpecKey = specKey
 
--- Whether an entry belongs to the current class and talent tree.
+-- Whether an entry belongs to the current class and talent tree. With auto-adaptation switched off
+-- the tree is ignored: every entry of the class is allowed.
 local function entryActive(entry)
     local class, tree = specNow()
     if (entry.class or "") ~= "" and entry.class ~= class then return false end
     local spec = entry.spec or 0
-    if spec > 0 and tree > 0 and spec ~= tree then return false end
+    if autoAdapt and spec > 0 and tree > 0 and spec ~= tree then return false end
     return true
 end
 CDM.EntryActive = entryActive
 function CDM.CurrentSpec() return specNow() end
 
+-- Category of an entry: its own choice, else the table by spell id, else by spell name (other ranks).
+local function categoryOf(entry)
+    local own = entry.category
+    if own and own ~= "" then return own ~= "none" and own or nil end
+    local state = stateOf(entry)
+    if state.catKey ~= entry.spell then
+        state.catKey = entry.spell
+        local first = spellList(entry.spell)[1]
+        local category = type(first) == "number" and categoryById[first] or nil
+        if not category and first then
+            if not categoryByName then
+                categoryByName = {}
+                for id, value in pairs(categoryById) do
+                    local name = GetSpellInfo(id)
+                    if name then categoryByName[name] = value end
+                end
+            end
+            local name = Suite.SpellInfo(first)
+            category = name and categoryByName[name] or nil
+        end
+        state.cat = category or false
+    end
+    return state.cat or nil
+end
+CDM.CategoryOf = categoryOf
+
+-- Display mode: the user's choice, or the mode bound to the kind of zone ("auto").
+local currentMode
+function CDM.ActiveMode()
+    local db = data()
+    local mode = db.mode
+    if mode == "auto" or not MODE_RULES[mode or ""] then
+        mode = db.autoModes[Suite.ZoneType()] or "full"
+    end
+    return MODE_RULES[mode] and mode or "full"
+end
+local function modeNow()
+    if not currentMode then currentMode = CDM.ActiveMode() end
+    return currentMode
+end
+-- Whether a mode shows a group: the group's own choice, else the rule of the mode.
+function CDM.ModeShows(group, mode)
+    local own = group.modes and group.modes[mode]
+    if own ~= nil then return own and true or false end
+    local rule = MODE_RULES[mode] or MODE_RULES.full
+    return rule.groups[group.preset or "custom"] and true or false
+end
+
 local function conditionsBlock(entry)
     if not entryActive(entry) then return true end
+    if entry.kind == "cooldown" then
+        local hide = MODE_RULES[modeNow()].hide
+        if hide then
+            local category = categoryOf(entry)
+            if category and hide[category] then return true end
+        end
+    end
     if entry.onlyCombat and not inCombat then return true end
     if entry.onlyGroup and Suite.GroupType() == "solo" then return true end
     if entry.requires and entry.requires ~= "" then
@@ -656,9 +868,13 @@ end
 
 -- Resolves an item into a display result. r is reused per element.
 -- r: show, icon, name, start, duration, count, desaturate, tint, glow, ready, expiration, missing
+local oneName = {}
+local needPoll = false     -- something on screen depends on the range to the target: no event for that
+
 local function evaluate(group, entry, r, now)
     r.show, r.icon, r.name, r.start, r.duration, r.count = false, nil, nil, nil, nil, nil
     r.desaturate, r.tint, r.glow, r.ready, r.expiration, r.inactive, r.warn = false, nil, false, false, nil, false, false
+    r.active = false
     local kind = entry.kind
     if conditionsBlock(entry) then return r end
     local list = spellList(entry.spell)
@@ -666,6 +882,7 @@ local function evaluate(group, entry, r, now)
     if kind == "cooldown" then
         local spec = list[1]
         local start, duration, enabled
+        local spellName, recharging
         if type(spec) == "string" and spec:match("^item:%d+$") then
             local id = tonumber(spec:match("%d+"))
             local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(id)
@@ -697,12 +914,17 @@ local function evaluate(group, entry, r, now)
             local name, icon = Suite.SpellInfo(chosen)
             if not name then return r end
             r.name, r.icon = name, icon
+            spellName = name
             start, duration, enabled = GetSpellCooldown(name)
+            -- Charges exist only on clients that have the API (not stock 3.3.5a): with a charge left
+            -- the spell is ready and the spiral shows the next charge coming back.
             if GetSpellCharges then
                 local charges, maxCharges, chargeStart, chargeDuration = GetSpellCharges(name)
                 if maxCharges and maxCharges > 1 then
                     r.count = charges
-                    if charges and charges > 0 then start, duration = chargeStart, chargeDuration end
+                    if charges and charges > 0 and charges < maxCharges then
+                        start, duration, recharging = chargeStart, chargeDuration, true
+                    end
                 end
             end
             local usable, noMana = IsUsableSpell(name)
@@ -711,24 +933,50 @@ local function evaluate(group, entry, r, now)
             elseif not usable then
                 r.tint = 2
             end
+            if group.rangeTint and IsSpellInRange and UnitExists("target") then
+                local inRange = IsSpellInRange(name, "target")
+                if inRange ~= nil then needPoll = true end
+                if inRange == 0 then r.tint = 3 end
+            end
             if entry.glowUsable and usable then r.glow = true end
         end
         duration = duration or 0
         local isGCD = duration > 0 and duration <= 1.51
-        if isGCD and not group.showGCD then duration = 0 end
+        if isGCD and not group.showGCD and not recharging then duration = 0 end
         if enabled == 0 then duration = 0 end
-        r.ready = duration == 0 or (start or 0) + duration <= now
-        if not r.ready then
+        local running = duration > 0 and (start or 0) + duration > now
+        r.ready = not running or recharging or false
+        if running then
             r.start, r.duration = start, duration
             r.expiration = start + duration
-            if group.desaturate then r.desaturate = true end
-            r.glow = false
+            if not recharging then
+                if group.desaturate then r.desaturate = true end
+                r.glow = false
+            end
         end
         if entry.procAura and entry.procAura ~= "" and findAura("player", spellList(entry.procAura), false, false) then
             r.glow = true
         end
-        if group.cdShow == "ready" and not r.ready then return r end
-        if group.cdShow == "cooldown" and r.ready then return r end
+        -- Active: while the spell's own buff is on the player the icon counts the buff down, bright
+        -- and with the active border; the cooldown takes over when the buff ends.
+        if group.showActive and entry.showActive ~= false then
+            local auras
+            if entry.activeAura and entry.activeAura ~= "" then
+                auras = spellList(entry.activeAura)
+            elseif spellName then
+                oneName[1] = spellName
+                auras = oneName
+            end
+            local record = auras and findAura("player", auras, false, true)
+            if record and record.duration > 0 and record.expiration > now then
+                r.active, r.desaturate = true, false
+                r.start, r.duration, r.expiration = record.expiration - record.duration, record.duration, record.expiration
+            end
+        end
+        if not r.active then
+            if group.cdShow == "ready" and not r.ready then return r end
+            if group.cdShow == "cooldown" and r.ready then return r end
+        end
         r.show = true
         return r
 
@@ -911,6 +1159,31 @@ local function styleElement(group, element)
         element.count:SetFont(font, group.fontSize, "OUTLINE")
         element.timer:SetFont(font, group.timerSize, "OUTLINE")
         Suite.Shown(element.cooldown, group.showSwipe)
+        -- Border: the WoW Forever icon frame, or a flat one-pixel line around the full icon.
+        local pixel = group.borderStyle == "pixel"
+        if pixel and not element.pixel then
+            element.pixel = CreateFrame("Frame", nil, element)
+            element.pixel:SetAllPoints(element)
+            element.pixel:SetBackdrop({ edgeFile = Suite.art.white, edgeSize = 1 })
+            element.pixel:SetFrameLevel(element.cooldown:GetFrameLevel() + 1)
+        end
+        if element.pixel then Suite.Shown(element.pixel, pixel) end
+        Suite.Shown(element.border, not pixel)
+        local inset = pixel and 1 or 2
+        for _, region in ipairs({ element.texture, element.cooldown }) do
+            region:ClearAllPoints()
+            region:SetPoint("TOPLEFT", inset, -inset)
+            region:SetPoint("BOTTOMRIGHT", -inset, inset)
+        end
+        element.pixelBorder = pixel
+    end
+end
+
+local function setBorder(el, r, g, b, a)
+    if el.pixelBorder then
+        el.pixel:SetBackdropBorderColor(r, g, b, a or 1)
+    else
+        el.border:SetVertexColor(r, g, b, a or 1)
     end
 end
 
@@ -979,6 +1252,9 @@ end
 
 local function loadAllowed(group)
     if not group.enabled then return false end
+    local mode = modeNow()
+    if MODE_RULES[mode].combatOnly and not inCombat then return false end
+    if not CDM.ModeShows(group, mode) then return false end
     local load = group.load or {}
     local when = load.when or "always"
     if when == "combat" and not inCombat then return false end
@@ -1033,23 +1309,49 @@ local animating = {}
 local function drawIcon(group, el, r, now)
     el.texture:SetTexture(r.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     el.texture:SetDesaturated(r.desaturate and 1 or nil)
+    -- Light tints that keep the icon and the timer readable: blue = no resource, red = out of range,
+    -- grey = not usable now.
     if r.tint == 1 then
         el.texture:SetVertexColor(0.45, 0.55, 1)
+    elseif r.tint == 3 then
+        el.texture:SetVertexColor(1, 0.4, 0.4)
     elseif r.tint == 2 then
         el.texture:SetVertexColor(0.45, 0.45, 0.45)
     else
         el.texture:SetVertexColor(1, 1, 1)
     end
+    local category = group.categoryBorder and r.category and CDM.categoryColors[r.category]
     if r.warn then
-        el.border:SetVertexColor(1, 0.25, 0.2)
+        setBorder(el, 1, 0.25, 0.2)
+    elseif r.active then
+        local c = group.activeColor
+        setBorder(el, c[1], c[2], c[3])
+    elseif category then
+        setBorder(el, category[1], category[2], category[3])
     else
-        el.border:SetVertexColor(group.borderColor[1], group.borderColor[2], group.borderColor[3])
+        setBorder(el, group.borderColor[1], group.borderColor[2], group.borderColor[3], group.borderColor[4])
     end
     el:SetAlpha(r.inactive and group.inactiveAlpha or 1)
     if group.showSwipe then Suite.SetCooldown(el.cooldown, r.start, r.duration) end
     el.count:SetText(group.showCount and r.count and r.count > 0 and r.count or "")
     el.expiration = r.expiration
-    el.timer:SetText(group.showTimer and r.expiration and Suite.FormatTime(r.expiration - now) or "")
+    local remaining = r.expiration and r.expiration - now
+    el.timer:SetText(group.showTimer and remaining and Suite.FormatTime(remaining) or "")
+    -- Timer colour: the buff colour while active, else white -> yellow (10 s) -> red (3 s).
+    local tr, tg, tb = 1, 1, 1
+    if group.timerColors and remaining then
+        if r.active then
+            tr, tg, tb = group.activeColor[1], group.activeColor[2], group.activeColor[3]
+        elseif remaining <= 3 then
+            tr, tg, tb = 1, 0.25, 0.2
+        elseif remaining <= 10 then
+            tr, tg, tb = 1, 0.85, 0.2
+        end
+    end
+    if el.timerShade ~= tr + tg * 2 + tb * 4 then
+        el.timerShade = tr + tg * 2 + tb * 4
+        el.timer:SetTextColor(tr, tg, tb)
+    end
     Suite.SetGlow(el, r.glow)
 end
 
@@ -1074,19 +1376,30 @@ local function drawBar(group, el, r, entry, now)
 end
 
 -- Grid placement: perRow elements per line, grow along the line, wrap to the next one.
-local function place(group, container, shownList)
+-- `footprint`: number of entries the group shows in Edit Mode. A group with a saved spot keeps at least
+-- that box, so the icons stay where they were placed: Edit Mode pins the top right corner, and a box
+-- that shrank with the number of visible icons used to drag them to the right.
+local function place(group, container, shownList, footprint)
     local isBars = group.kind == "bars"
     local w = isBars and group.barWidth or group.size
     local h = isBars and group.barHeight or group.size
     local gap = group.spacing
     local perRow = max(1, group.perRow)
     local grow, wrap = group.grow, group.wrap
-    local horizontal = grow == "LEFT" or grow == "RIGHT"
+    local centred = grow == "CENTER"     -- rows grow from the middle: every line is centred
+    local horizontal = grow == "LEFT" or grow == "RIGHT" or centred
     local count = #shownList
     local lines = max(1, math.ceil(count / perRow))
     local along = min(max(count, 1), perRow)
     local width = horizontal and along * w + (along - 1) * gap or lines * w + (lines - 1) * gap
     local height = horizontal and lines * h + (lines - 1) * gap or along * h + (along - 1) * gap
+    if footprint and footprint > count then
+        local fullLines = math.ceil(footprint / perRow)
+        local fullAlong = min(footprint, perRow)
+        local fullWidth = horizontal and fullAlong * w + (fullAlong - 1) * gap or fullLines * w + (fullLines - 1) * gap
+        local fullHeight = horizontal and fullLines * h + (fullLines - 1) * gap or fullAlong * h + (fullAlong - 1) * gap
+        width, height = max(width, fullWidth), max(height, fullHeight)
+    end
     container:SetWidth(max(width, 8))
     container:SetHeight(max(height, 8))
     for i, el in ipairs(shownList) do
@@ -1100,8 +1413,12 @@ local function place(group, container, shownList)
             y = pos * (h + gap)
         end
         local anchor
+        if centred then
+            local onLine = line < lines - 1 and perRow or count - perRow * (lines - 1)
+            x = x + (width - (onLine * w + (onLine - 1) * gap)) / 2
+        end
         if horizontal then
-            local fromLeft = grow == "RIGHT"
+            local fromLeft = grow ~= "LEFT"
             local fromTop = wrap ~= "UP"
             anchor = (fromTop and "TOP" or "BOTTOM") .. (fromLeft and "LEFT" or "RIGHT")
             x = fromLeft and x or -x
@@ -1120,34 +1437,107 @@ local function place(group, container, shownList)
 end
 
 local hasTimers = false
+local testing, testStart = false, 0
+
+-- Test mode: every entry of the current spec runs a fake loop (ready -> active -> cooldown), so the
+-- whole layout can be judged and dragged without waiting for real cooldowns. The cycle is derived
+-- from the moment the test started, so the spiral gets the same start on every redraw.
+local function fakeState(group, entry, r, index, now)
+    local period = 14 + (index % 4) * 4
+    local shifted = now - testStart + index * 3.7
+    local cycleStart = now - shifted % period
+    local t = now - cycleStart
+    r.show, r.inactive, r.desaturate, r.tint, r.warn, r.active, r.glow = true, false, false, nil, false, false, false
+    r.start, r.duration, r.expiration, r.ready = nil, nil, nil, true
+    local kind = entry.kind
+    if kind == "cooldown" or kind == "icd" then
+        local activeFor = (kind == "cooldown" and index % 3 == 0 and group.showActive) and 4 or 0
+        if t < 3 then
+            r.glow = index % 4 == 1
+        elseif t < 3 + activeFor then
+            r.active = true
+            r.start, r.duration, r.expiration = cycleStart + 3, activeFor, cycleStart + 3 + activeFor
+        else
+            r.ready, r.desaturate = false, group.desaturate
+            r.start, r.duration, r.expiration = cycleStart + 3, period - 3, cycleStart + period
+        end
+    elseif kind ~= "missing" then
+        r.start, r.duration, r.expiration = cycleStart, period, cycleStart + period
+        r.warn = kind == "debuff" and period - t <= 3
+    end
+end
+
+local function bySortKey(a, b) return a.sortKey < b.sortKey end
+
+local function saveSpot(container)
+    local entry = container.editEntry
+    if not entry or not entry.config then return end
+    local right, top = container:GetRight(), container:GetTop()
+    if not right or not top then return end
+    local ratio = container:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    entry.config.position = { right * ratio - UIParent:GetRight(), top * ratio - UIParent:GetTop() }
+    container.defaultSpot = nil
+    if ui.RefreshEditLayout then ui.RefreshEditLayout() end
+end
 
 local function drawGroup(group, now)
     local container = getContainer(group)
-    local forced = editing or (previewing and (not focusGroup or focusGroup == group.id))
+    local unlocked = testing and not editing
+    -- Unlocked in test mode: the group is dragged by itself, like in Edit Mode.
+    if container.unlocked ~= unlocked then
+        container.unlocked = unlocked
+        container:EnableMouse(unlocked)
+        if unlocked and not container.dragScripts then
+            container.dragScripts = true
+            container:RegisterForDrag("LeftButton")
+            container:SetScript("OnDragStart", function(self)
+                if testing and not InCombatLockdown() then
+                    self.dragging = true
+                    self:StartMoving()
+                end
+            end)
+            container:SetScript("OnDragStop", function(self)
+                if not self.dragging then return end
+                self.dragging = nil
+                self:StopMovingOrSizing()
+                saveSpot(self)
+            end)
+        end
+    end
+    local forced = editing or testing or (previewing and (not focusGroup or focusGroup == group.id))
+    if testing and not group.enabled then forced = false end
     if not forced and not loadAllowed(group) then
         container:Hide()
         for _, el in ipairs(container.elements) do animating[el] = nil end
         return
     end
-    container:SetAlpha(group.alpha)
+    container:SetAlpha((inCombat or forced) and group.alpha or (group.oocAlpha or 1))
     local shownList, used = {}, 0
     local results = container.results
+    local sorted = autoAdapt and group.sort == "role" and group.layout ~= "fixed"
+    local order = sorted and (ROLE_ORDER[CDM.Role() or "MELEE"] or ROLE_ORDER.MELEE)
     for index, entry in ipairs(group.items) do
         local r = results[index] or {}
         results[index] = r
         evaluate(group, entry, r, now)
-        if forced and not r.show then
+        r.category = (sorted or group.categoryBorder) and entry.kind == "cooldown" and categoryOf(entry) or nil
+        -- Test mode fills in only what the current spec really has: no foreign trees, no unlearned spells.
+        if forced and not r.show and (not testing
+            or (entryActive(entry) and (entry.kind ~= "cooldown" or r.name ~= nil))) then
             local name, icon = Suite.SpellInfo(spellList(entry.spell)[1])
             r.show, r.inactive, r.name = true, true, r.name or name or CDM.kindNames[entry.kind]
             r.icon = r.icon or icon
         end
-        if r.show then
+        if testing then
+            if r.show then fakeState(group, entry, r, index, now) end
+        elseif r.show then
             local glow = alerts(entry, r, now)
             r.glow = r.glow or glow
         else
             alerts(entry, r, now)
         end
         local el = element(container, group, index)
+        el.sortKey = ((order and (order[r.category or ""] or UNCATEGORISED_RANK)) or 0) * 1000 + index
         if el.styledFor ~= group or el.styleStamp ~= group.styleStamp then
             styleElement(group, el)
             el.styledFor, el.styleStamp = group, group.styleStamp
@@ -1176,12 +1566,15 @@ local function drawGroup(group, now)
         animating[el] = nil
         if el.kind == "icon" then Suite.SetGlow(el, false) elseif el.icon then Suite.SetGlow(el.icon, false) end
     end
-    place(group, container, shownList)
+    if sorted then table.sort(shownList, bySortKey) end
+    local edit = container.editEntry
+    local pinned = not editing and edit and edit.config and type(edit.config.position) == "table"
+    place(group, container, shownList, pinned and #group.items or nil)
     for _, el in ipairs(shownList) do
         if el.emptySlot then el:Hide() end
     end
-    Suite.Shown(container.placeholder, editing and used == 0)
-    if used == 0 and editing then
+    Suite.Shown(container.placeholder, (editing and used == 0) or unlocked)
+    if used == 0 and (editing or testing) then
         container:SetWidth(group.kind == "bars" and group.barWidth or group.size)
         container:SetHeight(group.kind == "bars" and group.barHeight or group.size)
     end
@@ -1234,7 +1627,7 @@ local function drawAll()
         return
     end
     local now = GetTime()
-    hasTimers = false
+    hasTimers, needPoll = testing, false
     local active = {}
     for _, group in ipairs(CDM.Groups()) do
         active[group.id] = true
@@ -1267,7 +1660,7 @@ driver:SetScript("OnUpdate", function(_, elapsed)
         elapsedSinceDraw = 0
         tickElapsed = 0
         drawAll()
-    elseif hasTimers and tickElapsed >= 0.1 then
+    elseif (hasTimers and tickElapsed >= 0.1) or (needPoll and tickElapsed >= 0.25) then
         tickElapsed = 0
         elapsedSinceDraw = 0
         drawAll()
@@ -1292,6 +1685,188 @@ CDM.Apply = CDM.Rebuild
 function CDM.SetPreview(on, groupId)
     previewing, focusGroup = on and true or false, groupId
     dirty = true
+end
+
+---------------------------------------------------------------------------------------------------
+-- Display mode switcher: a small button (left click: next mode, right click: automatic).
+---------------------------------------------------------------------------------------------------
+local modeButton
+
+local function refreshModeButton()
+    local db = data()
+    local enabled = ui.IsModuleEnabled and ui.IsModuleEnabled("cooldowns")
+    if not (enabled and (db.modeButton or testing)) then
+        if modeButton then modeButton:Hide() end
+        return
+    end
+    if not modeButton then
+        modeButton = CreateFrame("Button", "ForeverStockUICDMMode", UIParent)
+        modeButton:SetWidth(96)
+        modeButton:SetHeight(16)
+        modeButton:SetPoint("BOTTOM", UIParent, "CENTER", 0, -104)
+        modeButton:SetBackdrop({ bgFile = Suite.art.white, edgeFile = Suite.art.white, edgeSize = 1 })
+        modeButton:SetBackdropColor(0, 0, 0, 0.55)
+        modeButton:SetBackdropBorderColor(0, 0, 0, 0.9)
+        modeButton.text = modeButton:CreateFontString(nil, "OVERLAY")
+        modeButton.text:SetFont(Suite.art.font, 10, "OUTLINE")
+        modeButton.text:SetPoint("CENTER", 0, 0)
+        modeButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        modeButton:SetAlpha(0.55)
+        modeButton:SetScript("OnClick", function(_, mouse)
+            if testing then
+                CDM.SetTest(false)
+            elseif mouse == "RightButton" then
+                CDM.SetMode("auto")
+            else
+                CDM.NextMode()
+            end
+        end)
+        modeButton:SetScript("OnEnter", function(self)
+            self:SetAlpha(1)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:AddLine("Cooldown Manager")
+            if testing then
+                GameTooltip:AddLine(L("Идёт тест: группы можно перетаскивать мышью. Клик — закончить.",
+                    "Test is running: drag the groups with the mouse. Click to finish."), 1, 1, 1, true)
+            else
+                GameTooltip:AddLine(L("Режим показа панелей. ЛКМ — следующий режим, ПКМ — авто по типу зоны.",
+                    "Display mode of the panels. Left click: next mode, right click: automatic by zone."), 1, 1, 1, true)
+            end
+            GameTooltip:Show()
+        end)
+        modeButton:SetScript("OnLeave", function(self)
+            self:SetAlpha(0.55)
+            GameTooltip:Hide()
+        end)
+        if ui.RegisterEditFrame then
+            ui.RegisterEditFrame(modeButton, L("Cooldown Manager: режим", "Cooldown Manager: mode"), "cooldowns")
+        end
+    end
+    if testing then
+        modeButton.text:SetText(L("ТЕСТ — закончить", "TEST - finish"))
+        modeButton.text:SetTextColor(1, 0.82, 0.2)
+    else
+        local name = CDM.modeNames[modeNow()] or modeNow()
+        modeButton.text:SetText(db.mode == "auto" and (CDM.modeNames.auto .. ": " .. name) or name)
+        modeButton.text:SetTextColor(0.9, 0.86, 0.75)
+    end
+    modeButton:Show()
+end
+
+-- Re-reads the mode (zone or setting changed). Tracker frames are not protected, so the switch is
+-- safe in combat too and needs no queue.
+function CDM.UpdateMode()
+    local mode = CDM.ActiveMode()
+    if mode ~= currentMode then
+        currentMode = mode
+        dirty = true
+        ui.Fire("CooldownManagerMode", mode)
+    end
+    refreshModeButton()
+end
+
+function CDM.SetMode(mode)
+    if mode ~= "auto" and not MODE_RULES[mode or ""] then return false end
+    data().mode = mode
+    CDM.UpdateMode()
+    return true
+end
+
+function CDM.NextMode()
+    local current = data().mode
+    local list = { "auto" }
+    for _, entry in ipairs(CDM.modes) do list[#list + 1] = entry[1] end
+    for index, mode in ipairs(list) do
+        if mode == current then return CDM.SetMode(list[index % #list + 1]) end
+    end
+    return CDM.SetMode("auto")
+end
+
+---------------------------------------------------------------------------------------------------
+-- Test mode, role and per-spec layout
+---------------------------------------------------------------------------------------------------
+function CDM.SetTest(on)
+    on = on and true or false
+    if on == testing then return end
+    testing, testStart = on, GetTime()
+    refreshModeButton()
+    ui.Fire("CooldownManagerTest", on)
+    CDM.Rebuild()
+end
+function CDM.IsTesting() return testing end
+
+-- Settings of the module itself changed (auto-adaptation, role, mode, mode button).
+function CDM.SettingsChanged()
+    currentRole = resolveRole()
+    CDM.UpdateMode()
+    CDM.Rebuild()
+end
+
+-- Positions per spec: the spots of the groups saved in Edit Mode are remembered under the spec key
+-- when the spec is left and put back when it returns. A spec seen for the first time keeps the
+-- layout that is on screen.
+local lastSpecKey
+local function saveSpots(key)
+    if not key then return end
+    local spots = {}
+    for id, container in pairs(containers) do
+        local entry = container.editEntry
+        local position = entry and entry.config and entry.config.position
+        if type(position) == "table" and CDM.Group(id) then spots[id] = { position[1], position[2] } end
+    end
+    data().specSpots[key] = spots
+end
+local function loadSpots(key)
+    local spots = data().specSpots[key]
+    if type(spots) ~= "table" then return end
+    for id, container in pairs(containers) do
+        local entry = container.editEntry
+        if entry and entry.config then
+            local spot = spots[id]
+            entry.config.position = type(spot) == "table" and { spot[1], spot[2] } or nil
+            container.defaultSpot = nil
+        end
+    end
+    if ui.RefreshEditLayout then ui.RefreshEditLayout() end
+end
+
+local function specChanged()
+    local previous = lastSpecKey
+    refreshSpec()
+    local key = specKey()
+    if previous and previous ~= key and autoAdapt then
+        saveSpots(previous)
+        loadSpots(key)
+    end
+    lastSpecKey = key
+end
+
+-- Factory layout of the current spec: its entries (default and the user's own) are replaced by the
+-- default set, the saved positions of the spec are dropped and the groups return to the default stack.
+-- Entries of other specs and the user's own groups stay. Returns groups and entries added.
+function CDM.ResetSpec()
+    local db = data()
+    local class, tree = specNow()
+    if tree and tree > 0 then
+        for _, group in pairs(db.groups) do
+            for index = #group.items, 1, -1 do
+                local entry = group.items[index]
+                if entry.class == class and (entry.spec or 0) == tree then table.remove(group.items, index) end
+            end
+        end
+    end
+    db.specSpots[specKey()] = nil
+    for _, container in pairs(containers) do
+        local entry = container.editEntry
+        if entry and entry.config then entry.config.position = nil end
+        container.defaultSpot = nil
+    end
+    for _, group in pairs(db.groups) do
+        if group.preset == "essential" or group.preset == "utility" then group.sort = "role" end
+    end
+    local addedGroups, addedItems = CDM.RestoreDefaults("missing")
+    if ui.RefreshEditLayout then ui.RefreshEditLayout() end
+    return addedGroups, addedItems
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -1363,7 +1938,7 @@ for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "SPELL_UPDATE_
     "BAG_UPDATE_COOLDOWN", "UNIT_AURA", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_INVENTORY_CHANGED",
     "PLAYER_TOTEM_UPDATE", "UPDATE_SHAPESHIFT_FORM", "UPDATE_SHAPESHIFT_FORMS", "PLAYER_REGEN_DISABLED",
     "PLAYER_REGEN_ENABLED", "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE", "ZONE_CHANGED_NEW_AREA",
-    "UNIT_PET", "BAG_UPDATE", "ACTIONBAR_UPDATE_COOLDOWN" }) do
+    "UNIT_PET", "BAG_UPDATE", "ACTIONBAR_UPDATE_COOLDOWN", "PLAYER_LOGOUT" }) do
     events:RegisterEvent(event)
 end
 events:SetScript("OnEvent", function(_, event, ...)
@@ -1383,17 +1958,30 @@ events:SetScript("OnEvent", function(_, event, ...)
         auraDirty.pet = true
     elseif event == "PLAYER_REGEN_DISABLED" then
         inCombat = true
+        if testing then CDM.SetTest(false) end      -- real cooldowns matter now
     elseif event == "PLAYER_REGEN_ENABLED" then
         inCombat = false
     elseif event == "PLAYER_LOGIN" then
         refreshSpec()
+        lastSpecKey = specKey()
         playerGUID = UnitGUID("player")
         inCombat = InCombatLockdown() and true or false
         refreshCombatLog()
         CDM.Rebuild()
+        loadSpots(lastSpecKey)
+        CDM.UpdateMode()
     elseif event == "PLAYER_ENTERING_WORLD" then
         playerGUID = UnitGUID("player")
         for unit in pairs(watched) do auraDirty[unit] = true end
+        if Suite.ready then CDM.UpdateMode() end
+    elseif event == "ZONE_CHANGED_NEW_AREA" then
+        if Suite.ready then CDM.UpdateMode() end
+    elseif event == "UPDATE_SHAPESHIFT_FORM" then
+        -- bear form and Frost Presence change the role (and with it the order inside the groups)
+        if Suite.ready then currentRole = resolveRole() end
+    elseif event == "PLAYER_LOGOUT" then
+        if Suite.ready and autoAdapt then saveSpots(lastSpecKey) end
+        return
     end
     dirty = true
 end)
@@ -1401,11 +1989,17 @@ end)
 ui.RegisterCallback("SuiteProfileChanged", function()
     refreshCombatLog()
     CDM.selectedGroup = nil
+    refreshSpec()
+    lastSpecKey = specKey()
+    currentMode = nil
+    CDM.UpdateMode()
     CDM.Rebuild()
 end, "CooldownManagerProfile")
 ui.RegisterCallback("SuiteSpellsChanged", function() dirty = true end, "CooldownManagerSpells")
+-- Talents or the talent group changed: new tree, new role, new set of entries and positions. The
+-- client does not allow that in combat, and the tracker frames are not protected anyway.
 ui.RegisterCallback("SuiteTalentsChanged", function()
-    refreshSpec()
+    specChanged()
     CDM.Rebuild()
 end, "CooldownManagerTalents")
 
@@ -1422,4 +2016,22 @@ if ForeverStockUIEditMode then
 end
 
 SLASH_FOREVERUICDM1 = "/fcdm"
-SlashCmdList.FOREVERUICDM = function() ui.OpenOptions("cooldowns") end
+-- /fcdm            options
+-- /fcdm test       test mode on / off
+-- /fcdm mode X     auto, full, combat, raid, dungeon, pvp, minimal (no X: next mode)
+SlashCmdList.FOREVERUICDM = function(text)
+    local command, argument = (text or ""):lower():match("^%s*(%S*)%s*(%S*)")
+    if command == "test" then
+        CDM.SetTest(not testing)
+    elseif command == "mode" then
+        if argument == "" then
+            CDM.NextMode()
+        elseif not CDM.SetMode(argument) then
+            ui.Print("Cooldown Manager: auto, full, combat, raid, dungeon, pvp, minimal")
+            return
+        end
+        ui.Print("Cooldown Manager: " .. data().mode .. " -> " .. modeNow())
+    else
+        ui.OpenOptions("cooldowns")
+    end
+end
