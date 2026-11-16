@@ -42,7 +42,24 @@ MainMenuBarRightEndCap:SetVertexColor(1, 0.84, 0.65)
 
 local events = CreateFrame("Frame")
 local tinted = { MainMenuBarLeftEndCap, MainMenuBarRightEndCap }
-local slotEdges, slotBackgrounds, progressBorders = {}, {}, {}
+local slotEdges, progressBorders = {}, {}
+local layoutWings -- winged slot backdrops of ActionButton1..12, defined at the end of the file
+
+-- The stock strip between the caps (MainMenuBarTexture0..3: slot recesses, page buttons, micro menu and bag
+-- frames) keeps the plain Blizzard look: its texture, its coordinates, no tint. Coordinates are those of the
+-- client's MainMenuBar.xml; the ones read at load win when the client still has the stock file there.
+local STOCK_STRIP = "Interface\\MainMenuBar\\UI-MainMenuBar-Dwarf"
+local stockStrip = {
+    [0] = { 0, 1, 0.83203125, 1 }, { 0, 1, 0.58203125, 0.75 }, { 0, 1, 0.33203125, 0.5 }, { 0, 1, 0.08203125, 0.25 },
+}
+for i = 0, 3 do
+    local texture = _G["MainMenuBarTexture" .. i]
+    local path = texture and texture:GetTexture()
+    if type(path) == "string" and path:gsub("/", "\\"):lower() == STOCK_STRIP:lower() then
+        local ulx, uly, _, _, _, _, lrx, lry = texture:GetTexCoord()
+        if ulx and lry then stockStrip[i] = { ulx, lrx, uly, lry } end
+    end
+end
 
 local function artColor()
     local value = ui.Settings().barArtColor
@@ -114,6 +131,8 @@ function ui.ApplyGryphons()
     MainMenuBarLeftEndCap:SetAlpha(alpha)
     MainMenuBarRightEndCap:SetAlpha(alpha)
     placeGryphons()
+    -- Edit Mode calls this after it lays out the main bar grid: the slot backdrops follow the buttons.
+    if layoutWings then layoutWings() end
 end
 
 -- Shared helpers: remember how a texture region looked so the Classic layout can restore it.
@@ -402,13 +421,15 @@ if ReputationWatchBar then hooksecurefunc(ReputationWatchBar, "SetScale", fitTex
 
 local function applyArt()
     local settings = ui.Settings()
-    -- The stock strip under the main bar was briefly hidden by default (12.11.2026); it is switched back on once,
-    -- and stays as the player sets it afterwards.
-    if not settings.barStripBack then
-        settings.barStockArt = true
-        settings.barStripBack = true
+    -- Keys of the former "stock bar background" switch (removed 16.11.2026: Classic always shows the strip,
+    -- Retail never does).
+    settings.barStockArt, settings.barStripBack, settings.barStripOff = nil, nil, nil
+    -- The Retail layout used to switch the slot backdrops off; since 16.11.2026 they belong to both layouts, so
+    -- they are switched back on once and stay as the player sets them afterwards.
+    if not settings.barWingsBack then
+        settings.barSlotBackgrounds = true
+        settings.barWingsBack = true
     end
-    settings.barStripOff = nil
     ui.ApplyGryphons()
     for _, texture in ipairs(tinted) do texture:SetVertexColor(artColor()) end
     -- The Retail caps keep their own colours; reapply their state after the tint.
@@ -418,26 +439,42 @@ local function applyArt()
     applyPager()
     if ui.MicroMenu and ui.MicroMenu.ApplyLayout then ui.MicroMenu.ApplyLayout() end
     fitTexts()
-    local stockArt = settings.barStockArt ~= false and 1 or 0
-    -- Retail has no strip at all: the max-level bar (shown instead of the XP bar at the level cap) goes too.
+    -- Classic always shows the stock strip; Retail moves the buttons, bags and micro menu off it, so there it is
+    -- always hidden. The tint is opt-in (`barStockTint`).
     local retail = retailLayout()
+    local stockArt = retail and 0 or 1
     for i = 0, 3 do
         local texture = _G["MainMenuBarTexture" .. i]
-        if texture then texture:SetAlpha(stockArt) end
+        if texture then
+            texture:SetTexture(STOCK_STRIP)
+            texture:SetTexCoord(unpack(stockStrip[i], 1, 4))
+            if settings.barStockTint == true then
+                local r, g, b = artColor()
+                texture:SetVertexColor(r, g, b, 1)
+            else
+                texture:SetVertexColor(1, 1, 1, 1)
+            end
+            texture:SetAlpha(stockArt)
+            texture:Show()
+        end
+        -- Retail has no strip at all: the max-level bar (shown instead of the XP bar at the level cap) goes too.
         local maxLevel = _G["MainMenuMaxLevelBar" .. i]
         if maxLevel then maxLevel:SetAlpha(retail and 0 or 1) end
     end
     local edges = settings.barSlotEdges ~= false and 1 or 0
     for edge in pairs(slotEdges) do edge:SetAlpha(edges) end
-    local backgrounds = settings.barSlotBackgrounds ~= false and 1 or 0
-    for background in pairs(slotBackgrounds) do background:SetAlpha(backgrounds) end
+    layoutWings()
     local borders = (settings.barProgressBorder ~= false and not retail) and 1 or 0
     for border in pairs(progressBorders) do border:SetAlpha(borders) end
 end
 ui.ActionBars = { Apply = applyArt }
 
 events:RegisterEvent("PLAYER_LOGIN")
-events:SetScript("OnEvent", function(self)
+events:SetScript("OnEvent", function(self, event)
+    if event == "PLAYER_ENTERING_WORLD" then
+        layoutWings()
+        return
+    end
     self:UnregisterEvent("PLAYER_LOGIN")
     applyArt()
     if ui.RegisterEditFrame then
@@ -447,8 +484,8 @@ events:SetScript("OnEvent", function(self)
     end
 end)
 
+-- The stock strip (MainMenuBarTexture0..3) is not tinted here: applyArt keeps it white unless `barStockTint`.
 for i = 0, 3 do
-    tinted[#tinted + 1] = _G["MainMenuBarTexture" .. i]
     tinted[#tinted + 1] = _G["MainMenuXPBarTexture" .. i]
     tinted[#tinted + 1] = _G["MainMenuMaxLevelBar" .. i]
 end
@@ -486,16 +523,6 @@ for _, prefix in ipairs({
             slotEdges[edge] = true
 
             slots[button] = true
-            if prefix == "ActionButton" or prefix == "BonusActionButton" then
-                -- Main bar only. The artwork stays visible when the stock grid hides an empty button.
-                local background = button:GetParent():CreateTexture(nil, "OVERLAY")
-                -- WoW: Forever empty cell (ui-hud-actionbar-iconframe-slot, 64 x 62 on the 512 px sheet).
-                background:SetTexture(art .. "ActionBar/Forever-Slots")
-                background:SetTexCoord(0.001953, 0.126953, 0.556641, 0.677734)
-                background:SetPoint("TOPLEFT", icon, "TOPLEFT", -5, 5)
-                background:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 5, -5)
-                slotBackgrounds[background] = true
-            end
             updateSlot(button)
         end
     end
@@ -508,6 +535,100 @@ if PetActionBar_Update then
         end
     end)
 end
+
+-- Winged slot backdrops, ActionButton1..12 only (uiactionbar2xc60, the dark cell with a wing at 0..128 x 566..690,
+-- copied to Art/Forever/ActionBar-SlotWing.tga; its opaque square is 8..122 x 6..120 of the 128 px file).
+-- They are regions of the buttons' parent on BACKGROUND sublevel 1: above the stock strip (sublevel 0, its slot
+-- recesses included), below every region of the buttons (icon, cooldown, hotkey, count). Each one follows its
+-- button (the Edit Mode grid included), reaching `WING_OUTSET` px past it, but never past the edges of MainMenuBar
+-- it sits in nor onto the XP, max-level or reputation bar.
+local SLOT_WING = art .. "Forever\\ActionBar-SlotWing"
+local WING_COORDS = { 8 / 128, 122 / 128, 6 / 128, 120 / 128 }
+local WING_OUTSET = 2
+local wings = {}
+
+-- Pure: how far (button units) the backdrop may reach past `rect` on each side. Rects are { l, r, b, t } in one
+-- space (screen px); `fences` are rects it must not cover; `bar` is the main bar rect it must stay inside when the
+-- button is inside it; `scale` converts screen px to button units.
+local function wingOutsets(rect, fences, bar, outset, scale)
+    local left, right, bottom, top = outset, outset, outset, outset
+    scale = (scale and scale > 0) and scale or 1
+    local function clamp(value, room) return math.max(0, math.min(value, room / scale)) end
+    for _, fence in ipairs(fences) do
+        local overlapsX = fence.l < rect.r + outset * scale and fence.r > rect.l - outset * scale
+        if overlapsX then
+            if fence.b >= rect.t - 0.01 then top = clamp(top, fence.b - rect.t) end
+            if fence.t <= rect.b + 0.01 then bottom = clamp(bottom, rect.b - fence.t) end
+        end
+    end
+    if bar then
+        if rect.t <= bar.t + 0.01 then top = clamp(top, bar.t - rect.t) end
+        if rect.b >= bar.b - 0.01 then bottom = clamp(bottom, rect.b - bar.b) end
+        if rect.l >= bar.l - 0.01 then left = clamp(left, rect.l - bar.l) end
+        if rect.r <= bar.r + 0.01 then right = clamp(right, bar.r - rect.r) end
+    end
+    return left, right, bottom, top
+end
+
+local function screenRect(frame)
+    if not frame or not frame.GetLeft then return nil end
+    local l, r, b, t = frame:GetLeft(), frame:GetRight(), frame:GetBottom(), frame:GetTop()
+    if not (l and r and b and t) then return nil end
+    local s = frame:GetEffectiveScale() or 1
+    return { l = l * s, r = r * s, b = b * s, t = t * s }
+end
+
+local function mainBarCount()
+    local layout = ui.Settings().editLayout
+    local config = type(layout) == "table" and layout.MainMenuBar
+    local count = type(config) == "table" and tonumber(config.count) or 12
+    return math.max(1, math.min(12, math.floor(count)))
+end
+
+layoutWings = function()
+    local enabled = ui.Settings().barSlotBackgrounds ~= false
+    local count = mainBarCount()
+    local fences = {}
+    for _, name in ipairs({ "MainMenuExpBar", "MainMenuBarMaxLevelBar", "ReputationWatchBar" }) do
+        local fence = _G[name]
+        local rect = fence and fence:IsShown() and screenRect(fence)
+        if rect then fences[#fences + 1] = rect end
+    end
+    local bar = screenRect(MainMenuBar)
+    for index = 1, 12 do
+        local button, wing = _G["ActionButton" .. index], wings[index]
+        if button and wing then
+            local rect = screenRect(button)
+            -- Unknown geometry (before the first layout): stay exactly on the button.
+            local left, right, bottom, top = 0, 0, 0, 0
+            if rect then
+                left, right, bottom, top = wingOutsets(rect, fences, bar, WING_OUTSET, button:GetEffectiveScale())
+            end
+            wing:ClearAllPoints()
+            wing:SetPoint("TOPLEFT", button, "TOPLEFT", -left, top)
+            wing:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", right, -bottom)
+            if enabled and index <= count then wing:Show() else wing:Hide() end
+        end
+    end
+end
+
+for index = 1, 12 do
+    local button = _G["ActionButton" .. index]
+    local parent = button and button:GetParent()
+    if parent then
+        local wing = parent:CreateTexture(nil, "BACKGROUND", nil, 1)
+        wing:SetTexture(SLOT_WING)
+        wing:SetTexCoord(unpack(WING_COORDS, 1, 4))
+        wing:SetAllPoints(button)
+        wings[index] = wing
+    end
+end
+ui.ActionBars.WingOutsets = wingOutsets
+ui.ActionBars.wings = wings
+ui.ActionBars.LayoutWings = layoutWings
+-- The XP and reputation bars come and go (level cap, watched faction); keep the backdrops off them.
+if ReputationWatchBar_Update then hooksecurefunc("ReputationWatchBar_Update", layoutWings) end
+events:RegisterEvent("PLAYER_ENTERING_WORLD")
 
 local function skinProgress(bar)
     if not bar then return end

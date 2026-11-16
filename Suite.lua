@@ -608,6 +608,45 @@ function Suite.UnitRole(unit)
     return nil
 end
 
+---------------------------------------------------------------------------------------------------
+-- Drinking: the "Drink" / "Food & Drink" buff of mana drinks (mage water included). Matched by the
+-- localized buff name first, then by spell id: UnitBuff of 3.3.5 returns the id as its 11th value,
+-- but some private clients return nil there, so the name alone must be enough.
+---------------------------------------------------------------------------------------------------
+Suite.drinkNames = { "Питье", "Питьё", "Потребление пищи и напитков", "Drink", "Food & Drink", "Refreshment" }
+-- Drink buffs of 3.3.5a: vendor and cooked drinks by tier, conjured mage water (Conjured Water up to
+-- Conjured Glacier Water, Mana Biscuit, Mana Pie and Strudel), festival drinks. Their names (resolved
+-- through GetSpellInfo) also join the name set, so another locale is covered automatically.
+Suite.drinkSpells = {
+    430, 431, 432, 1133, 1135, 1137, 10250, 22734, 24355, 25696, 26261, 26402, 26473, 26475, 27089, 29007,
+    34291, 43154, 43155, 43182, 43183, 43706, 44166, 45019, 45020, 46755, 57073, 61830, 64356, 72623,
+}
+local drinkByName, drinkById
+local function drinkTables()
+    if drinkByName then return drinkByName, drinkById end
+    drinkByName, drinkById = {}, {}
+    for _, name in ipairs(Suite.drinkNames) do drinkByName[name] = true end
+    for _, id in ipairs(Suite.drinkSpells) do
+        drinkById[id] = true
+        local name = GetSpellInfo and GetSpellInfo(id)
+        if name then drinkByName[name] = true end
+    end
+    return drinkByName, drinkById
+end
+Suite.ResetDrinkCache = function() drinkByName, drinkById = nil, nil end
+
+-- Returns name, icon, expiration, duration of the drink buff on the unit, or nil.
+function Suite.DrinkAura(unit)
+    if not unit or not UnitExists(unit) or not UnitBuff then return nil end
+    local names, ids = drinkTables()
+    for index = 1, 40 do
+        local name, _, icon, _, _, duration, expiration, _, _, _, spellId = UnitBuff(unit, index)
+        if not name then return nil end
+        if names[name] or (spellId and ids[spellId]) then return name, icon, expiration, duration end
+    end
+    return nil
+end
+
 function Suite.GroupType()
     if GetNumRaidMembers() > 0 then return "raid" end
     if GetNumPartyMembers() > 0 then return "party" end

@@ -89,10 +89,28 @@ assert(ui.UnitFrames.ApplyLayout, "ApplyLayout is exported")
 loader.scripts.OnEvent(loader, "ADDON_LOADED", "ForeverUI")
 
 
+-- Name accent (reaction gradient behind the target name): a little see-through in Classic, more in Retail.
+local gradients = {}
+function Proto:SetGradientAlpha(...) self.gradient = { ... }; gradients[#gradients + 1] = self end
+function Proto:SetHeight(h) self.h = h end
+function UnitExists() return true end
+function UnitIsDeadOrGhost() return false end
+function UnitSelectionColor() return 1, 0, 0 end
+TargetFrame.unit = "target"
+local function accentOf()
+    for i = #gradients, 1, -1 do if gradients[i].gradient then return gradients[i] end end
+end
+
 -- Classic stays as it was: no Retail pieces are shown.
 assert(settings.barLayout == "classic")
 ui.UnitFrames.ApplyLayout()
 local classicHealth = { unpack(PlayerFrameHealthBar.points[1], 1, 5) }
+ui.UnitFrames.ApplyBarFill() -- refreshes the target name accent
+local accent = accentOf()
+assert(accent and accent.gradient[5] == 0.9 and accent.gradient[9] == 0.1 and accent.shown,
+    "Classic accent: the Retail gradient, 0.9 at the bottom to 0.1 at the top")
+assert(math.abs(accent.gradient[2] - 165 / 255) < 1e-9, "Classic accent: the reaction colour at 60%")
+assert(accent.points[1][1] == "TOPLEFT" and accent.points[1][2] == TargetFrame, "Classic accent in the name slot")
 assert(classicHealth[1] == "TOPLEFT" and classicHealth[2] == PlayerFrame, "classic health keeps the chrome anchor")
 
 -- Switch to Retail: bars anchor to the portrait with DragonUI's offsets.
@@ -109,8 +127,19 @@ assert(t.points[1][1] == "RIGHT" and t.points[1][3] == "LEFT" and t.points[1][4]
 assert(TargetFramePortrait.points[1][1] == "TOPRIGHT" and TargetFramePortrait.w == 54, "target portrait")
 local m = TargetFrameManaBar
 assert(m.w == 133 and m.h == 9.5 and m.points[1][5] == -18.75, "target mana")
+local gr = accent.gradient
+assert(gr[5] == 0.9 and gr[9] == 0.1 and accent.shown, "Retail accent fades from 0.9 at the bottom to 0.1 at the top")
+assert(math.abs(gr[2] - 165 / 255) < 1e-9 and math.abs(gr[3] - 13 / 255) < 1e-9 and gr[6] == gr[2],
+    "Retail accent: the reaction colour at 65% (red target), same colour top and bottom")
+assert(accent.points[1][1] == "BOTTOMLEFT" and accent.points[1][2] == TargetFrameHealthBar
+    and accent.points[2][1] == "BOTTOMRIGHT" and accent.h == 17, "Retail accent on top of the health bar")
 local tn = TargetFrameTextureFrameName
-assert(tn.points[1][1] == "LEFT" and tn.points[1][3] == "TOPLEFT" and tn.points[1][4] == 4 and tn.justify == "LEFT", "target name")
+assert(tn.points[1][1] == "CENTER" and tn.points[1][2] == TargetFrameHealthBar and tn.points[1][3] == "TOP"
+    and tn.points[1][4] == 0 and tn.points[1][5] == 8 and tn.justify == "CENTER" and tn.w == 120, "target name centred")
+local pn = PlayerFrameTextureFrameName
+assert(pn.points[1][1] == "CENTER" and pn.points[1][2] == PlayerFrameHealthBar and pn.justify == "CENTER", "player name centred")
+local totName = TargetFrameToTTextureFrameName
+assert(totName.points[1][2] == TargetFrameToTHealthBar and totName.justify == "CENTER", "ToT name centred")
 local th = TargetFrameToTHealthBar
 assert(th.w == 70.5 and th.h == 10 and th.points[1][2] == TargetFrameToTPortrait, "ToT health")
 assert(TargetFrameToTPortrait.points[1][1] == "TOPLEFT" and TargetFrameToTPortrait.points[1][4] == 6
@@ -123,4 +152,54 @@ local back = PlayerFrameHealthBar.points[1]
 assert(back[1] == "TOPLEFT" and back[2] == PlayerFrame and back[4] == classicHealth[4] and back[5] == classicHealth[5],
     "classic health restored")
 assert(PlayerFramePortrait.w ~= 56, "classic portrait restored")
-print("UnitFramesRetail OK: live switch, player, target and ToT geometry, classic restore")
+assert(accent.gradient[5] == 0.9 and accent.points[1][1] == "TOPLEFT", "Classic accent back in the name slot")
+-- Frame border (unitBarBorder) on chromed frames: drawn on its own layer above the chrome, in the border colour;
+-- the bar panel keeps only the background. Hidden in Retail.
+local created = {}
+local plainCreate = CreateFrame
+function CreateFrame(...) local f = plainCreate(...); created[#created + 1] = f; return f end
+function Proto:SetBackdropBorderColor(...) self.edgeColor = { ... } end
+local levels = {}
+function Proto:SetFrameLevel(l) levels[self] = l end
+local BORDER = "Media/border/Ferous1"
+ui.MediaPath = function(kind) if kind == "border" then return BORDER end return "" end
+settings.ufBorderColor = { 0.2, 0.4, 0.6, 1 }
+ui.UnitFrames.ApplyPanelMedia()
+local edges = {}
+for _, f in ipairs(created) do
+    if f.backdrop and f.backdrop.edgeFile == BORDER then edges[#edges + 1] = f end
+end
+assert(#edges == 3, "a border on each chromed frame (player, target, ToT): " .. #edges)
+for _, e in ipairs(edges) do
+    assert(e.shown ~= false, "border shown")
+    assert(not e.backdrop.bgFile, "the border layer has no background")
+    assert(e.edgeColor[1] == 0.2 and e.edgeColor[3] == 0.6, "border colour applied")
+    assert(levels[e] == 6, "above the chrome layer (level 5 + 1)")
+    assert(e.parent == PlayerFrame or e.parent == TargetFrame or e.parent == TargetFrameToT, "on the unit frame")
+end
+-- A changed colour reaches the same layers, no new ones.
+settings.ufBorderColor = { 1, 0, 0, 1 }
+local count = #created
+ui.UnitFrames.ApplyPanelMedia()
+assert(#created == count and edges[1].edgeColor[1] == 1 and edges[1].edgeColor[2] == 0, "colour change applied")
+settings.barLayout = "retail"
+ui.UnitFrames.ApplyLayout()
+-- Retail: the same layers frame the health and power bars.
+for _, e in ipairs(edges) do
+    assert(e.shown ~= false, "border kept in Retail")
+    local unit = e.parent:GetName()
+    assert(e.points[1][1] == "TOPLEFT" and e.points[1][2] == _G[unit .. "HealthBar"]
+        and e.points[2][1] == "BOTTOMRIGHT" and e.points[2][2] == _G[unit .. "ManaBar"], "Retail border around the bars")
+    assert(e.points[1][4] < 0 and e.points[1][5] == -e.points[1][4] and e.points[2][4] == -e.points[1][4], "Retail border outset by the inset")
+end
+settings.barLayout = "classic"
+ui.UnitFrames.ApplyLayout()
+for _, e in ipairs(edges) do
+    assert(e.shown ~= false and e.points[1][1] == "ALL", "border back on the panel in Classic")
+end
+-- "None": no border anywhere.
+ui.MediaPath = function() return "" end
+ui.UnitFrames.ApplyPanelMedia()
+for _, e in ipairs(edges) do assert(e.shown == false, "no border with None") end
+
+print("UnitFramesRetail OK: live switch, player, target and ToT geometry, classic restore, name accent in both layouts, centred Retail names, border on chromed frames and in Retail, None")

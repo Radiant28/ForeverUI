@@ -13,9 +13,12 @@ ui.RegisterOptions("actionbars", {
         { title = L("Оформление", "Styling"), options = {
             { "toggle", "showGryphons", L("Грифоны по краям", "Gryphons at the ends"), default = true },
             { "color", "barArtColor", L("Оттенок панели и грифонов", "Bar and gryphon tint"), default = { 1, 0.84, 0.65 } },
-            { "toggle", "barStockArt", L("Фон штатной панели", "Stock bar background"), default = true },
+            { "toggle", "barStockTint", L("Оттенок на фоне штатной панели", "Tint the stock bar background"), default = false,
+                tooltip = L("Прежний вид: фон панели перекрашивается оттенком панели. Выключено — штатные цвета Blizzard.",
+                    "The former look: the bar background takes the bar tint. Off — the plain Blizzard colours.") },
             { "toggle", "barSlotEdges", L("Оправа ячеек", "Slot frames"), default = true },
-            { "toggle", "barSlotBackgrounds", L("Фон пустых ячеек", "Empty slot backgrounds"), default = true },
+            { "toggle", "barSlotBackgrounds", L("Фон ячеек с крыльями (основная панель)", "Winged slot backgrounds (main bar)"),
+                default = true },
             { "toggle", "barProgressBorder", L("Рамка полосы репутации", "Reputation bar border"), default = true },
         } },
         { title = L("Расположение", "Layout"), options = {

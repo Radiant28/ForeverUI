@@ -50,6 +50,9 @@ local DEFAULTS = {
     rfNameCustom = true, rfNameFont = 1, rfNameSize = 11, rfNameOutline = "OUTLINE", rfNameShadow = false,
     rfNameMaxLetters = 0, rfNameFit = true, rfNameColorMode = "custom", rfNameColor = { 1, 1, 1 },
     rfNameAnchor = "CENTER", rfNameX = 0, rfNameY = 1,
+    -- Drinking indicator: the label "Пьёт - - -" while the unit drinks out of combat (mana users only by default)
+    rfDrink = true, rfDrinkStyle = "text", rfDrinkManaOnly = true, rfDrinkAnchor = "BOTTOMLEFT", rfDrinkX = 2, rfDrinkY = 2,
+    rfDrinkScale = 1,
 }
 RF.defaults = DEFAULTS
 
@@ -99,6 +102,11 @@ function RF.MigrateExclusions(part)
     end
     if part.rfBuffTrack == nil then part.rfBuffTrack = DEFAULTS.rfBuffTrack end
     if part.rfDebuffHide == nil then part.rfDebuffHide = DEFAULTS.rfDebuffHide end
+    -- The drink mug became the label "Пьёт - - -" bottom left: the stored old defaults move along.
+    if part.rfDrinkStyle == "icon" then part.rfDrinkStyle = "text" end
+    if part.rfDrinkAnchor == "TOP" and (part.rfDrinkX or 0) == 0 and part.rfDrinkY == -2 then
+        part.rfDrinkAnchor, part.rfDrinkX, part.rfDrinkY = "BOTTOMLEFT", 2, 2
+    end
 end
 
 local function indicator(name, spell, point, color, extra)
@@ -384,6 +392,19 @@ local function createDeco(frame)
     deco.name = layer:CreateFontString(nil, "OVERLAY")
     deco.name:Hide()
 
+    -- Drinking: a text label "Пьёт - - -" (or "Пьёт 42%"), bottom left by default.
+    deco.drink = CreateFrame("Frame", nil, layer)
+    deco.drink:EnableMouse(false)
+    deco.drink:SetFrameLevel(layer:GetFrameLevel() + 2)
+    deco.drink:Hide()
+    -- Behind it a soft dark gradient from the start of the label to its end.
+    deco.drinkBack = deco.drink:CreateTexture(nil, "BACKGROUND")
+    deco.drinkBack:SetTexture(white)
+    deco.drinkBack:SetGradientAlpha("HORIZONTAL", 0, 0, 0, 0.75, 0, 0, 0, 0)
+    deco.drinkBack:SetAllPoints(deco.drink)
+    deco.drinkText = deco.drink:CreateFontString(nil, "OVERLAY")
+    deco.drinkText:SetPoint("LEFT", deco.drink, "LEFT", 2, 0)
+
     -- Hover: a light wash over the button and a 1 px edge. Target: a solid edge inside the button
     -- (the threat border sits 1 px outside, so both stay readable together).
     deco.hoverFill = layer:CreateTexture(nil, "ARTWORK")
@@ -653,6 +674,7 @@ applyStyle = function(deco)
         clientRole:SetAlpha(enabled and settings.rfRoleIcon and settings.rfRoleHideClient and 0 or 1)
     end
     deco.roleKey = nil
+    RF.StyleDrink(deco, settings)
     -- Our shield replaces the client's one (no glow): keep theirs updating but invisible.
     local ownShield = enabled and settings.rfShield
     for _, region in ipairs({ deco.clientAbsorb, deco.clientAbsorbOverlay }) do
@@ -1245,7 +1267,7 @@ local function refreshUnit(deco)
         byGUID[guid][deco] = true
     end
     deco.auraDirty, deco.healthDirty, deco.threatDirty = true, true, true
-    deco.nameDirty, deco.targetDirty = true, true
+    deco.nameDirty, deco.targetDirty, deco.drinkDirty = true, true, true
     RF.UpdateRole(deco)
     updateRange(deco)
 end
@@ -1260,6 +1282,7 @@ local function process()
             if deco.threatDirty then updateThreat(deco) end
             if deco.nameDirty then updateName(deco) end
             if deco.targetDirty then updateTarget(deco) end
+            if deco.drinkDirty then RF.UpdateDrink(deco) end
         end
     end
 end
@@ -1335,12 +1358,22 @@ end
 local events = CreateFrame("Frame")
 for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "UNIT_AURA", "UNIT_HEALTH", "UNIT_MAXHEALTH",
     "UNIT_THREAT_SITUATION_UPDATE", "UNIT_CONNECTION", "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE",
-    "UNIT_PET", "PLAYER_REGEN_ENABLED", "PLAYER_ROLES_ASSIGNED", "PLAYER_TARGET_CHANGED", "UNIT_NAME_UPDATE" }) do
+    "UNIT_PET", "PLAYER_REGEN_ENABLED", "PLAYER_ROLES_ASSIGNED", "PLAYER_TARGET_CHANGED", "UNIT_NAME_UPDATE",
+    "UNIT_FLAGS", "UNIT_MANA", "UNIT_MAXMANA", "UNIT_DISPLAYPOWER", "PLAYER_REGEN_DISABLED" }) do
     events:RegisterEvent(event)
 end
 events:SetScript("OnEvent", function(_, event, unit)
     if event == "UNIT_AURA" then
         markGUID(unit, "auraDirty")
+        markGUID(unit, "drinkDirty")
+    elseif event == "UNIT_FLAGS" or event == "UNIT_DISPLAYPOWER" then
+        -- UNIT_FLAGS also reports entering combat: the indicator goes at once.
+        markGUID(unit, "drinkDirty")
+    elseif event == "UNIT_MANA" or event == "UNIT_MAXMANA" then
+        if cfg().rfDrinkStyle == "mana" then markGUID(unit, "drinkDirty") end
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        for _, deco in ipairs(ordered) do deco.drinkDirty = true end
+        anyDirty = true
     elseif event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
         markGUID(unit, "healthDirty")
     elseif event == "UNIT_THREAT_SITUATION_UPDATE" then
@@ -1664,6 +1697,71 @@ function RF.UpdateRole(deco, forcedRole)
 end
 
 ---------------------------------------------------------------------------------------------------
+-- Drinking indicator: the label "Пьёт - - -" while the unit has a drink buff (Suite.DrinkAura:
+-- localized names, then spell ids), out of combat, by default only for mana users (UnitPowerType 0).
+-- Styles: "text" (Пьёт - - -) or "mana" (Пьёт 42%); the old "icon" value reads as "text". UNIT_AURA,
+-- UNIT_FLAGS (combat) and roster changes raise drinkDirty; UNIT_MANA matters only in the "mana" style.
+---------------------------------------------------------------------------------------------------
+local DRINK_SIZE = 9
+
+function RF.StyleDrink(deco, settings)
+    settings = settings or cfg()
+    local size = max(6, floor(DRINK_SIZE * (tonumber(settings.rfDrinkScale) or 1) + 0.5))
+    deco.drinkText:SetFont(Suite.art.font, size, "OUTLINE")
+    deco.drinkText:SetTextColor(0.55, 0.8, 1)
+    deco.drink:SetHeight(size + 4)
+    deco.drink:ClearAllPoints()
+    local point = settings.rfDrinkAnchor or "BOTTOMLEFT"
+    deco.drink:SetPoint(point, deco.health or deco.frame, point, settings.rfDrinkX or 0, settings.rfDrinkY or 0)
+    deco.drinkKey = nil
+    deco.drinkDirty = true
+end
+
+-- The label for a style and a mana percent (nil outside the "mana" style).
+function RF.DrinkLabel(style, pct)
+    if style == "mana" and pct then return L("Пьёт", "Drinking") .. " " .. pct .. "%" end
+    return L("Пьёт", "Drinking") .. " - - -"
+end
+
+-- What the indicator shows for a unit right now: nil, or the label.
+function RF.DrinkText(unit, settings)
+    settings = settings or cfg()
+    if not (settings.rfEnabled and settings.rfDrink) or not unit or not UnitExists(unit) then return nil end
+    if UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit) then return nil end
+    if UnitAffectingCombat and UnitAffectingCombat(unit) then return nil end
+    local mana = not UnitPowerType or UnitPowerType(unit) == 0
+    if settings.rfDrinkManaOnly and not mana then return nil end
+    if not Suite.DrinkAura(unit) then return nil end
+    local pct
+    if settings.rfDrinkStyle == "mana" and mana then
+        local most = UnitManaMax(unit) or 0
+        if most > 0 then pct = floor((UnitMana(unit) or 0) / most * 100 + 0.5) end
+    end
+    return RF.DrinkLabel(settings.rfDrinkStyle, pct)
+end
+
+function RF.DrawDrink(deco, text)
+    if not text then
+        if deco.drink:IsShown() then deco.drink:Hide() end
+        return
+    end
+    if deco.drinkKey ~= text then
+        deco.drinkKey = text
+        deco.drinkText:SetText(text)
+        deco.drink:SetWidth(max(1, (deco.drinkText:GetStringWidth() or 0) + 8))
+    end
+    if not deco.drink:IsShown() then deco.drink:Show() end
+end
+
+function RF.UpdateDrink(deco)
+    deco.drinkDirty = nil
+    if deco.preview then return end
+    local unit = deco.unit
+    if unit and UnitGUID(unit) ~= deco.guid then unit = nil end
+    RF.DrawDrink(deco, RF.DrinkText(unit))
+end
+
+---------------------------------------------------------------------------------------------------
 -- Sorting by role: the client's flow container sorts its unit tokens with container.flowSortFunc
 -- (Blizzard CompactRaidFrameContainer). Our function puts tanks, healers and damage dealers in the
 -- chosen order and keeps the client's own order inside each role. Protected layout: out of combat.
@@ -1956,7 +2054,7 @@ local previewVariants = {
     tank = { name = L("Танк", "Tank"), class = "WARRIOR", health = 0.92, heal = 0, absorb = 0.3, role = "TANK",
         threat = 3, deficit = "-1.2k" },
     healer = { name = L("Лекарь", "Healer"), class = "PRIEST", health = 0.62, heal = 0.15, absorb = 0, role = "HEALER",
-        deficit = "-9.5k", target = true },
+        deficit = "-9.5k", target = true, drink = true },
     dps = { name = L("Боец", "Damage"), class = "MAGE", health = 0.34, heal = 0.1, absorb = 0.08, role = "DAMAGER",
         deficit = "-16.8k", hover = true },
 }
@@ -2076,6 +2174,12 @@ function RF.BuildPreview(parent, width, height, variant)
             deco.border:Hide()
         end
         RF.UpdateRole(deco, data.role)
+        -- The healer drinks in the preview (the style decides the text, 42% mana in the "mana" style).
+        local drinkText
+        if data.drink and settings.rfEnabled and settings.rfDrink then
+            drinkText = RF.DrinkLabel(settings.rfDrinkStyle, 42)
+        end
+        RF.DrawDrink(deco, drinkText)
         updateName(deco)
         updateTarget(deco)
         drawHover(deco, data.hover)

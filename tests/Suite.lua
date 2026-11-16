@@ -1285,6 +1285,74 @@ do
     assert(container:IsShown(), "the client is in charge again")
 end
 
+---------------------------------------------------------------------------------------------------
+-- Drinking indicator on the raid frames
+---------------------------------------------------------------------------------------------------
+do
+    local d
+    RF.EachFrame(function(f, dd) if f == button then d = dd end end)
+    tick(0.05)
+    local unit = d.unit
+    assert(unit and auras[unit], "the decorated button has a mocked unit")
+    local inCombat, power = false, 0
+    UnitBuff = function(u, i) return UnitAura(u, i, "HELPFUL") end
+    UnitAffectingCombat = function() return inCombat end
+    UnitPowerType = function() return power end
+    UnitMana, UnitManaMax = function() return 42 end, function() return 100 end
+    local raid = Suite.Part("raid")
+    raid.rfDrink, raid.rfDrinkStyle, raid.rfDrinkManaOnly = true, "text", true
+    RF.Apply()
+    tick(0.05)
+    assert(not d.drink.shown, "no drink, no mug")
+    local list = auras[unit].HELPFUL
+    local drink = { name = "Питье", icon = "x", duration = 30, expiration = now + 20 }
+    list[#list + 1] = drink
+    fire("UNIT_AURA", unit)
+    tick(0.05)
+    assert(d.drink.shown and d.drinkText.text == "Пьёт - - -", "the label shows while drinking")
+    raid.rfDrinkStyle = "mana"
+    RF.Apply()
+    tick(0.05)
+    assert(d.drink.shown and d.drinkText.text == "Пьёт 42%", "the label with the mana percent")
+    raid.rfDrinkStyle = "text"
+    RF.Apply()
+    tick(0.05)
+    assert(d.drinkText.text == "Пьёт - - -", "back to the plain label")
+    inCombat = true
+    fire("UNIT_FLAGS", unit)
+    tick(0.05)
+    assert(not d.drink.shown, "combat hides it at once")
+    inCombat = false
+    fire("UNIT_FLAGS", unit)
+    tick(0.05)
+    assert(d.drink.shown)
+    power = 1
+    fire("UNIT_DISPLAYPOWER", unit)
+    tick(0.05)
+    assert(not d.drink.shown, "mana users only")
+    raid.rfDrinkManaOnly = false
+    RF.Apply()
+    tick(0.05)
+    assert(d.drink.shown, "everyone when the option is off")
+    power = 0
+    -- matched by spell id when the name is unknown (mage water on another locale)
+    drink.name, drink.id = "Unbekannt", 27089
+    fire("UNIT_AURA", unit)
+    tick(0.05)
+    assert(d.drink.shown, "spell id match")
+    table.remove(list)
+    fire("UNIT_AURA", unit)
+    tick(0.05)
+    assert(not d.drink.shown, "the buff ends, the mug goes")
+    raid.rfDrinkStyle, raid.rfDrinkManaOnly = "text", true
+    -- a profile with the old mug defaults moves to the label bottom left
+    local old = { rfDrinkStyle = "icon", rfDrinkAnchor = "TOP", rfDrinkX = 0, rfDrinkY = -2 }
+    RF.MigrateExclusions(old)
+    assert(old.rfDrinkStyle == "text" and old.rfDrinkAnchor == "BOTTOMLEFT" and old.rfDrinkX == 2 and old.rfDrinkY == 2)
+    UnitBuff, UnitAffectingCombat, UnitPowerType, UnitMana, UnitManaMax = nil, nil, nil, nil, nil
+    RF.Apply()
+end
+
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
     .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators, visibility, exclusions), "
     .. "option pages, action bar key binding, options window resizing; %d frames"):format(#objects))

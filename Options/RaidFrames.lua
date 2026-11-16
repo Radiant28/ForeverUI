@@ -562,6 +562,27 @@ ui.RegisterOptions("raidframes", {
                     { "HTD", L("Хилы, танки, ДД", "Healers, tanks, damage") },
                     { "TDH", L("Танки, ДД, хилы", "Tanks, damage, healers") } } },
         } },
+        { title = L("Питьё", "Drinking"),
+            description = L("Надпись «Пьёт - - -» внизу слева, пока игрок пьёт (бафф «Питье» или «Потребление пищи "
+                .. "и напитков», включая воду мага). Пропадает сразу, когда бафф спадает или игрок входит в бой. В "
+                .. "предпросмотре пьёт «Лекарь».", "The label “Drinking - - -” at the bottom left while the player "
+                .. "drinks (the “Drink” or “Food & Drink” buff, mage water included). It goes away at once when the "
+                .. "buff ends or the player enters combat. In the preview the “Healer” drinks."), options = {
+            { "toggle", "rfDrink", L("Индикатор питья", "Drinking indicator"), default = true },
+            { "select", "rfDrinkStyle", L("Вид", "Style"), default = "text", depends = "rfDrink", values = {
+                { "text", L("«Пьёт - - -»", "“Drinking - - -”") },
+                { "mana", L("«Пьёт» и % маны", "“Drinking” and mana %") } } },
+            { "toggle", "rfDrinkManaOnly", L("Только у классов с маной", "Mana users only"), default = true,
+                depends = "rfDrink", tooltip = L("Воины, разбойники и рыцари смерти (и друиды в облике кошки или "
+                    .. "медведя) не получают индикатор.", "Warriors, rogues and death knights (and druids in cat or "
+                    .. "bear form) get no indicator.") },
+            { "select", "rfDrinkAnchor", L("Позиция", "Position"), values = anchors, default = "BOTTOMLEFT",
+                depends = "rfDrink" },
+            { "range", "rfDrinkX", L("Смещение X", "Offset X"), min = -40, max = 40, step = 1, default = 2, depends = "rfDrink" },
+            { "range", "rfDrinkY", L("Смещение Y", "Offset Y"), min = -40, max = 40, step = 1, default = 2, depends = "rfDrink" },
+            { "range", "rfDrinkScale", L("Масштаб", "Scale"), min = 0.5, max = 2.5, step = 0.05, default = 1,
+                depends = "rfDrink" },
+        } },
         { title = L("Положение", "Position"), options = {
             { "toggle", "rfMoveContainer", L("Двигать контейнер якорем Edit Mode", "Move the container with the Edit Mode anchor"),
                 default = true, width = "full", protected = true, apply = function() if RF() then RF().ApplyLayout() end end,

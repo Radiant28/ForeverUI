@@ -823,7 +823,7 @@
 
 **07_HUD_And_Atlases/hud** (14)
 - [ ] `uiactionbar.tga` (256x1024)
-- [ ] `uiactionbar2xc60.tga` (1024x1024)
+- [x] `uiactionbar2xc60.tga` (1024x1024) — ячейка с крылом → `Art/Forever/ActionBar-SlotWing.tga` (фон ячеек основной панели)
 - [ ] `uiactionbarverticalc60.tga` (128x32)
 - [ ] `uicalendar.tga` (256x256)
 - [ ] `uideathknightrunes.tga` (512x256)

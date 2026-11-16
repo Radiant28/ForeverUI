@@ -19,7 +19,7 @@ ui.RegisterOptions("chat", {
             { "toggle", "chatGuildWindow", L("Гильдия", "Guild"), default = true },
             { "toggle", "chatLootWindow", L("Добыча", "Loot"), default = true },
             { "toggle", "chatLootRollsOnly", L("Во вкладке «Добыча» только броски", "Loot tab shows rolls only"),
-                default = true, depends = "chatLootWindow" },
+                default = false, depends = "chatLootWindow" },
         } },
     },
 })

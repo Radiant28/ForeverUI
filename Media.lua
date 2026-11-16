@@ -35,9 +35,11 @@ local builtins = {
             "Interface\\TargetingFrame\\UI-StatusBar" },
         mediaType = "statusbar",
     },
+    -- "None" is the first entry (and the default): saved value 1 used to be the WoW: Forever edge, which the unit
+    -- frames never drew while the bronze chrome was on, so those settings become "None".
     border = {
-        names = { "WoW: Forever" },
-        paths = { "Interface\\AddOns\\ForeverUI\\Art\\UnitFrame-Edge" },
+        names = { ru and "Нет" or "None", "WoW: Forever" },
+        paths = { "", "Interface\\AddOns\\ForeverUI\\Art\\UnitFrame-Edge" },
     },
 }
 

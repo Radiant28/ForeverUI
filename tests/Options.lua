@@ -172,6 +172,7 @@ ui.ActionBars = { Apply = recorder("bars") }
 ui.MicroMenu = { ApplyColors = recorder("micro"), ApplyLayout = recorder("microLayout") }
 ui.Chat = { Apply = recorder("chat") }
 ui.Tooltip = { Apply = recorder("tooltip") }
+ui.HealerMana = { Apply = recorder("healerMana"), Test = recorder("healerManaTest") }
 ui.EditMode = { Open = recorder("editOpen"), Apply = recorder("edit"), ApplyLayout = recorder("editLayout") }
 ui.CombatMeterLimits = { minWidth = 145, maxWidth = 600, minRows = 1, maxRows = 15 }
 ui.CombatMeter = { Apply = recorder("meter"), ResetWidth = recorder("meterWidth"), ResetDamageRows = recorder("rows"),
@@ -376,6 +377,9 @@ StaticPopupDialogs.FOREVERUI_RESET_ALL.OnAccept()
 assert(reloaded and db.bagsCellSize == 36 and db.castMidStyle == true)
 
 window:Hide()
+-- Frame border: "None" is the first entry and the default; WoW: Forever is the second.
+assert(ui.MediaPath("border", 1, true) == "" and ui.MediaPath("border", 2, true):find("UnitFrame%-Edge"), "border list")
+
 print(("Options OK: %d schemas, %d modules, %d frames; normalization, live apply, dependencies, combat queue, reload flag, "
     .. "split colours, bindings, every page and control, alpha picker, resets, legacy API"):format(#schemas,
     #ui.optionOrder, #objects))
