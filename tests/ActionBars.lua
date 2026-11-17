@@ -219,6 +219,53 @@ settings.barSlotBackgrounds = false
 AB.Apply()
 for i = 1, 12 do assert(not AB.wings[i].shown, "switched off " .. i) end
 
+-- Gryphons: each cap stretched over its own holder frame in the bar art (moved by Edit Mode).
+settings.barSlotBackgrounds = true
+settings.editLayout = {}
+local leftHolder, rightHolder = _G[ui.GryphonHolders[1]], _G[ui.GryphonHolders[2]]
+assert(leftHolder and rightHolder and leftHolder.parent == MainMenuBarArtFrame, "holders in the bar art")
+local function capOn(cap, holder)
+    local p1, r1, _, _, _ = cap:GetPoint(1)
+    local p2, r2 = cap:GetPoint(2)
+    return p1 == "TOPLEFT" and r1 == holder and p2 == "BOTTOMRIGHT" and r2 == holder
+end
+-- Classic: holders take the stock cap points, sized like the art.
+AB.Apply()
+assert(capOn(MainMenuBarLeftEndCap, leftHolder) and capOn(MainMenuBarRightEndCap, rightHolder), "caps on holders")
+local hp, hr = leftHolder:GetPoint(1)
+assert(hp == "BOTTOM" and hr == MainMenuBar, "Classic: stock point on the holder")
+assert(math.abs(leftHolder.w - 234 * 0.44) < 1e-6, "Classic holder sized like the art")
+-- Retail: left cap 2 px over the first slot, right 3 px over the last, both 24 px below.
+settings.barLayout = "retail"
+AB.Apply()
+local p, rel, rp, x, y = leftHolder:GetPoint(1)
+assert(p == "BOTTOMRIGHT" and rel == ActionButton1 and rp == "BOTTOMLEFT" and x == 2 and y == -24, "Retail left")
+p, rel, rp, x, y = rightHolder:GetPoint(1)
+assert(p == "BOTTOMLEFT" and rel == ActionButton12 and x == -3 and y == -24, "Retail right")
+assert(leftHolder.w == 104.5 and leftHolder.h == 98, "Retail holder size")
+-- A spot saved in Edit Mode wins: the holder already sits there and is not put back.
+local refreshed = 0
+ui.RefreshEditLayout = function() refreshed = refreshed + 1 end
+settings.editLayout[ui.GryphonHolders[1]] = { position = { -900, -700 } }
+leftHolder:ClearAllPoints()
+leftHolder:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -900, -700)
+AB.Apply()
+p, rel = leftHolder:GetPoint(1)
+assert(p == "TOPRIGHT" and rel == UIParent and leftHolder:GetNumPoints() == 1, "saved spot kept")
+assert(capOn(MainMenuBarLeftEndCap, leftHolder), "cap follows the moved holder")
+-- Saved but not placed yet: default points now, Edit Mode asked to move it.
+leftHolder:ClearAllPoints()
+AB.Apply()
+assert(refreshed > 0 and leftHolder:GetNumPoints() == 1, "Edit Mode refresh requested")
+-- Hidden by the Edit Mode "Show" switch: only that cap disappears.
+settings.editLayout[ui.GryphonHolders[1]].hidden = true
+AB.Apply()
+assert(MainMenuBarLeftEndCap.alpha == 0 and MainMenuBarRightEndCap.alpha == 1, "one cap hidden")
+settings.editLayout = {}
+settings.barLayout = "classic"
+AB.Apply()
+assert(MainMenuBarLeftEndCap.alpha == 1, "cap shown again")
+
 -- Pure function.
 local l, r, b, t = AB.WingOutsets({ l = 10, r = 46, b = 4, t = 40 }, {}, nil, 2, 1)
 assert(l == 2 and r == 2 and b == 2 and t == 2, "no fences")

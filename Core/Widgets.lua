@@ -1040,6 +1040,17 @@ function W.Input(parent, opt, access, width)
         self:SetBackdropBorderColor(rgba(S.border))
     end)
     bindTooltip(input, row)
+    row.input = input
+    -- opt.spellDrop = true | { list = true, items = true, as = "name" }: a spell dragged onto the box gives its ID
+    -- (SpellID.lua); the value is saved at once.
+    if opt.spellDrop and ui.SpellID then
+        local drop = type(opt.spellDrop) == "table" and opt.spellDrop or {}
+        ui.SpellID.Attach(input, { list = drop.list, items = drop.items, as = drop.as, commit = function(_, text)
+            if row.enabled == false then return end
+            access.set(text)
+            row:Refresh()
+        end })
+    end
     function row:OnEnabledChanged(enabled) input:EnableMouse(enabled) end
     function row:Refresh()
         if not input.focused then input:SetText(access.get() or "") end

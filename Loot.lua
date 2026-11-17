@@ -128,6 +128,30 @@ if art then
     end)
 end
 
+-- Items the character cannot use get a red icon (ItemUsability.lua); the client may reset the icon on
+-- every update, so it is painted again after each one.
+local function paintRow(index)
+    local U = ui.ItemUsability
+    local button = _G["LootButton" .. index]
+    local icon = _G["LootButton" .. index .. "IconTexture"]
+    if not (U and button and icon) then return end
+    local link = button:IsShown() and button.slot and GetLootSlotLink and GetLootSlotLink(button.slot)
+    local verdict = link and U.CannotUse(link)
+    if verdict == nil and link then
+        U.Retry("loot", function()
+            for i = 1, LOOTFRAME_NUMBUTTONS do paintRow(i) end
+        end)
+    end
+    U.Paint(icon, verdict == true)
+end
+if LootFrame_UpdateButton then hooksecurefunc("LootFrame_UpdateButton", paintRow) end
+if ui.ItemUsability then
+    ui.ItemUsability.OnChange(function()
+        if LootFrame:IsShown() then for i = 1, LOOTFRAME_NUMBUTTONS do paintRow(i) end end
+    end)
+end
+ui.Loot.PaintUnusable = paintRow
+
 local rows = {}
 local flyouts = {}
 local closedAt, lastFlyout, backgroundAlpha
@@ -235,6 +259,7 @@ local function captureRows()
                 rows[button.slot] = {
                     button = button, x = x, y = y, scale = button:GetEffectiveScale(),
                     icon = icon, text = text, count = count:IsShown() and count:GetText(),
+                    red = ui.ItemUsability and ui.ItemUsability.IsPainted(_G[prefix .. "IconTexture"]) or false,
                     quality = button.quality,
                 }
             end
@@ -283,6 +308,7 @@ local function play(row)
     local flyout = acquireFlyout()
     local name = flyout:GetName()
     _G[name .. "IconTexture"]:SetTexture(row.icon)
+    if ui.ItemUsability then ui.ItemUsability.Paint(_G[name .. "IconTexture"], row.red) end
     local text = _G[name .. "Text"]
     local quality = ITEM_QUALITY_COLORS[row.quality]
     text:SetText(row.text)

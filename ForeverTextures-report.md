@@ -24,8 +24,8 @@
 ### Партия 2 — сделано 12.11.2026
 - [x] Рамки группы, боссов, питомца, фокуса, цели цели — уже с оправой Forever: они рисуются стилями `player`/`target` в масштабе (компактный спрайт `uipartyframec60` не нужен)
 - [x] Руны рыцаря смерти — `uideathknightrunes` → `Art/Forever/Runes.tga` (хук `SetTexture` иконки руны)
-- [x] Фоны талантов по веткам, свои и при осмотре — `talentbackground*`, `talentsclassbackgrounddeathknight*` → `Art/Forever/Talents/` (`CharacterSkin.lua`; таланты питомца штатные)
-- [x] Штатные кнопки окон (UIPanelButtonTemplate) — `128-redbutton-*` → `Art/Forever/Panel-Button.tga` (при открытии окна из списка `CharacterSkin`)
+- [x] Фоны талантов по веткам, свои и при осмотре — `talentbackground*`, `talentsclassbackgrounddeathknight*` → `Art/Forever/Talents/` (`SkinExtras.lua`; таланты питомца штатные)
+- [x] Штатные кнопки окон (UIPanelButtonTemplate) — `128-redbutton-*` → `Art/Forever/Panel-Button.tga` (при открытии окна из списка `SkinExtras.lua`)
 - [x] Стрелки миникарты к цели и к трупу — `rotating-minimap*arrow` (если клиент поддерживает смену; стрелка игрока в 3.3.5 — модель)
 
 ### Нужна настройка по скриншотам

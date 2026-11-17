@@ -166,7 +166,7 @@ local function buildIndicators(parent, width)
     local grid = su.Grid(parent, 0, -top, width, 2)
     grid:Add({ "toggle", L("Включён", "Enabled") }, a("enabled", true), false, has)
     grid:Add({ "text", L("Подпись", "Label") }, a("name", ""), false, has)
-    grid:Add({ "text", L("Заклинания (ID или названия)", "Spells (ids or names)") }, a("spell", ""), false, has)
+    grid:Add({ "text", L("Заклинания (ID или названия)", "Spells (ids or names)"), spellDrop = { list = true } }, a("spell", ""), false, has)
     grid:Add({ "select", L("Показывать", "Show"), values = {
         { "aura", L("Когда бафф есть", "When the aura is up") }, { "missing", L("Когда баффа нет", "When the aura is missing") } } },
         a("kind", "aura"), false, has)
@@ -204,6 +204,10 @@ local function buildIndicators(parent, width)
         state.index = nil
         refresh()
     end, "RaidIndicatorOptions")
+    ui.RegisterCallback("RaidFramesKindChanged", function()
+        state.index = nil
+        refresh()
+    end, "RaidIndicatorKind")
     refresh()
     return top + grid:Height()
 end
@@ -268,6 +272,7 @@ local function exclusionEditor(key, hintText)
         end
         input:SetScript("OnEnterPressed", add)
         input:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        if ui.SpellID then ui.SpellID.Attach(input, { list = true }) end
         parent["input" .. key] = input
 
         local function button(text, fn, row)
@@ -319,9 +324,80 @@ local function exclusionEditor(key, hintText)
             state.index = nil
             refresh()
         end, "RaidExclusions" .. key)
+        ui.RegisterCallback("RaidFramesKindChanged", function()
+            state.index = nil
+            refresh()
+        end, "RaidExclusionsKind" .. key)
         refresh()
         return 7 * 22 + 8
     end
+end
+
+-- Which group type the page edits: party (5), raid (10) or raid (25), each tuned apart. Picking a type
+-- other than the live one shows its sample frames in place of the group; "Copy from" fills the edited
+-- type with the settings of another one. Leaving the page goes back to the live type.
+local function buildKinds(parent, width)
+    local rf, su = RF(), ui.SuiteUI
+    if not rf or not ui.Suite or not rf.layoutKinds then return su and su.Unavailable(parent, width) or 20 end
+    local refresh
+    local title = W.Text(parent, W.fonts.label)
+    title:SetPoint("TOPLEFT", 0, 0)
+    title:SetText(L("Профиль фреймов", "Frame profile"))
+    local buttons = {}
+    local gap = 8
+    local copyWidth = 150
+    local each = math.floor((width - copyWidth - gap * 3) / 3)
+    for index, kind in ipairs(rf.layoutKinds) do
+        local button = W.Button(parent, rf.kindLabels[kind], each, function()
+            rf.SetEditKind(kind == rf.LiveKind() and nil or kind)
+            refresh()
+        end, 24)
+        button:SetPoint("TOPLEFT", (index - 1) * (each + gap), -20)
+        buttons[kind] = button
+    end
+    local copy = W.Button(parent, L("Скопировать с…", "Copy from…"), copyWidth, function(self)
+        local target = rf.ViewKind()
+        local items = {}
+        for _, kind in ipairs(rf.layoutKinds) do
+            if kind ~= target then items[#items + 1] = { kind, rf.kindLabels[kind] } end
+        end
+        W.OpenList(self, items, nil, function(source)
+            local text = (L("Заменить настройки «%s» настройками «%s»?", "Replace the “%s” settings with the “%s” ones?"))
+                :format(rf.kindLabels[target], rf.kindLabels[source])
+            local function run()
+                rf.CopyKind(source, target)
+                refresh()
+            end
+            if su and su.Confirm then su.Confirm(text, run) else run() end
+        end, copyWidth)
+    end, 24)
+    copy:SetPoint("TOPLEFT", 3 * (each + gap), -20)
+    local note = W.Description(parent, "", width)
+    note:SetPoint("TOPLEFT", 0, -52)
+    refresh = function()
+        local view, live = rf.ViewKind(), rf.LiveKind()
+        for kind, button in pairs(buttons) do
+            local label = rf.kindLabels[kind] .. (kind == live and " •" or "")
+            button:SetText(label)
+            button.text:SetTextColor(W.rgba(kind == view and S.accentText or S.text))
+        end
+        local text = (L("Настраивается: %s. Сейчас действует: %s (• — текущий тип группы).",
+            "Editing: %s. In force now: %s (• marks the current group type)."))
+            :format(rf.kindLabels[view], rf.kindLabels[live])
+        if view ~= live then
+            text = text .. " " .. L("Пока открыта эта страница, на месте группы показаны шаблоны этого профиля.",
+                "While this page is open, sample frames of this profile stand in place of the group.")
+        end
+        -- W.Description is a row frame; its text is the font string in .label
+        note.label:SetText(text)
+        note:SetHeight(math.max(14, note.label:GetStringHeight() + 2))
+    end
+    parent:SetScript("OnShow", function() refresh() end)
+    parent:SetScript("OnHide", function() rf.SetEditKind(nil) end)
+    parent.refreshKinds = refresh
+    ui.RegisterCallback("RaidFramesKindChanged", function() refresh() end, "RaidKindOptions")
+    refresh()
+    return 52 + 30
 end
 
 ui.RegisterOptions("raidframes", {
@@ -333,12 +409,15 @@ ui.RegisterOptions("raidframes", {
     enable = "rfEnabled",
     db = function()
         local suite = ui.Suite
-        if suite and suite.ready then return suite.Part("raid") end
+        if suite and suite.ready and RF() then return RF().Settings() end
     end,
     apply = apply,
     sections = {
         { options = {
             { "toggle", "rfEnabled", L("Включить доработку фреймов", "Enable the frame extension"), default = true },
+            { "custom", build = buildKinds, refresh = function(holder)
+                if holder.refreshKinds then holder.refreshKinds() end
+            end },
             { "custom", build = buildPreview, refresh = function(holder)
                 for _, preview in ipairs(holder.previews or {}) do preview:Refresh() end
             end },
@@ -588,6 +667,17 @@ ui.RegisterOptions("raidframes", {
                 default = true, width = "full", protected = true, apply = function() if RF() then RF().ApplyLayout() end end,
                 tooltip = L("Сброс позиции якоря в режиме редактирования возвращает управление клиенту.",
                     "Resetting the anchor in Edit Mode hands the position back to the client.") },
+            { "toggle", "rfPetsUnder", L("Питомцы под владельцами (горизонтальный режим)", "Pets under their owners (horizontal layout)"),
+                default = true, width = "full", protected = true, apply = function() if RF() then RF().Apply() end end,
+                tooltip = L("Кнопка питомца встаёт под кнопкой хозяина вместо отдельного ряда в конце. Только вне боя.",
+                    "A pet button hangs under its owner instead of a separate row at the end. Out of combat only.") },
+            { "button", L("Показать / скрыть шаблоны на экране", "Show / hide sample frames on screen"), func = function()
+                if RF() then RF().ToggleTemplate() end
+            end },
+            { "toggle", "rfHandle", L("Ручка перетаскивания над группой", "Drag handle above the group"),
+                default = true, width = "full", depends = "rfMoveContainer",
+                tooltip = L("Метка «Группа» появляется при наведении на фреймы; перетащите её, чтобы сдвинуть группу без Edit Mode. В бою отключено.",
+                    "The \"Group\" label appears when you hover the frames; drag it to move the group without Edit Mode. Disabled in combat.") },
         } },
         { title = L("Индикаторы (HoT, щиты, баффы класса)", "Indicators (HoTs, shields, class buffs)"), options = {
             { "toggle", "rfIndicators", L("Показывать индикаторы", "Show indicators"), default = true },

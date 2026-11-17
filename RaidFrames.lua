@@ -9,7 +9,7 @@
 -- Events are mapped to frames by GUID and coalesced into one pass per rendered frame.
 local _, ui = ...
 local L, Suite = ui.L, ui.Suite
-local floor, max, min, format = math.floor, math.max, math.min, string.format
+local floor, max, min, abs, format = math.floor, math.max, math.min, math.abs, string.format
 local GetTime, UnitGUID, UnitAura = GetTime, UnitGUID, UnitAura
 
 local RF = {}
@@ -38,7 +38,7 @@ local DEFAULTS = {
     rfShield = true, rfShieldTexture = "WoW Forever Raid", rfShieldColor = { 0.85, 0.95, 1, 1 }, rfShieldAlpha = 0.7,
     rfShieldHeight = 0, rfShieldMode = "attached", rfShieldAlign = "BOTTOM", rfHideAbsorbGlow = true,
     rfIndicators = true, rfIndicatorTimer = true,
-    rfMoveContainer = true,
+    rfMoveContainer = true, rfHandle = true, rfPetsUnder = true,
     rfPartyShow = "client", rfRaidShow = "client",
     rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
     rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
@@ -182,8 +182,103 @@ Suite.RegisterProfilePart("raid", function(db)
     end
 end)
 
-local function cfg() return Suite.Part("raid") end
+---------------------------------------------------------------------------------------------------
+-- Settings per group type: "party" (5), "raid10" and "raid25" are tuned apart. The party settings are
+-- the "raid" part of the suite profile itself (old profiles keep working); the raid ones live in
+-- raid.kinds[kind] and start as a copy of the party ones. A few keys describe the module or the
+-- client frames as a whole and are shared by all three (RF.sharedKeys).
+---------------------------------------------------------------------------------------------------
+RF.layoutKinds = { "party", "raid10", "raid25" }
+RF.kindLabels = { party = L("Группа (5)", "Party (5)"), raid10 = L("Рейд (10)", "Raid (10)"),
+    raid25 = L("Рейд (25)", "Raid (25)") }
+RF.sharedKeys = { rfEnabled = true, rfPartyShow = true, rfRaidShow = true, rfMoveContainer = true, rfHandle = true,
+    kinds = true }
+local sharedKeys = RF.sharedKeys
+
+-- The group type the frames follow now: a raid of more than 10 is a raid of 25.
+function RF.LiveKind()
+    local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
+    if raid > 10 then return "raid25" end
+    if raid > 0 then return "raid10" end
+    return "party"
+end
+
+-- The settings shown: the one picked on the options page while it is open, else the live one.
+function RF.ViewKind() return RF.editKind or RF.LiveKind() end
+
+local function validKind(kind) return kind == "party" or kind == "raid10" or kind == "raid25" end
+RF.ValidKind = validKind
+
+local function copyOwn(source)
+    local out = {}
+    for key, value in pairs(source) do
+        if not sharedKeys[key] then out[key] = Suite.Copy(value) end
+    end
+    return out
+end
+
+local filled = setmetatable({}, { __mode = "k" })
+local proxies = setmetatable({}, { __mode = "k" })
+
+-- Raw table of one group type (no shared keys in it, except for the party one, which is the base).
+function RF.KindStore(kind)
+    local base = Suite.Part("raid")
+    if kind ~= "raid10" and kind ~= "raid25" then return base, base end
+    if type(base.kinds) ~= "table" then base.kinds = {} end
+    local store = base.kinds[kind]
+    if type(store) ~= "table" then
+        store = copyOwn(base)
+        base.kinds[kind] = store
+    end
+    if not filled[store] then
+        filled[store] = true
+        for key, value in pairs(DEFAULTS) do
+            if store[key] == nil and not sharedKeys[key] then store[key] = Suite.Copy(value) end
+        end
+        if type(store.indicators) ~= "table" then store.indicators = Suite.Copy(base.indicators or {}) end
+    end
+    return store, base
+end
+
+-- Settings table of one group type. Raid types get a proxy: shared keys go to the base table.
+function RF.KindSettings(kind)
+    local store, base = RF.KindStore(kind)
+    if store == base then return base end
+    local proxy = proxies[store]
+    if not proxy then
+        proxy = setmetatable({}, {
+            __index = function(_, key)
+                if sharedKeys[key] then return base[key] end
+                return store[key]
+            end,
+            __newindex = function(_, key, value)
+                if sharedKeys[key] then base[key] = value else store[key] = value end
+            end,
+        })
+        proxies[store] = proxy
+    end
+    return proxy
+end
+
+local function cfg() return RF.KindSettings(RF.ViewKind()) end
 RF.Settings = cfg
+
+-- Copies every own setting (bars, auras, indicators, name, ...) of one group type into another.
+function RF.CopyKind(source, target)
+    if not validKind(source) or not validKind(target) or source == target then return false end
+    local from = RF.KindStore(source)
+    local data = copyOwn(from)
+    local base = Suite.Part("raid")
+    if target == "party" then
+        for key in pairs(copyOwn(base)) do base[key] = nil end
+        for key, value in pairs(data) do base[key] = value end
+    else
+        if type(base.kinds) ~= "table" then base.kinds = {} end
+        base.kinds[target] = data
+    end
+    if RF.SettingsSwitched then RF.SettingsSwitched(true) end
+    return true
+end
 
 local function texturePath(name)
     return ui.MediaPath and ui.MediaPath("statusbar", name, true) or Suite.art.bar
@@ -576,6 +671,22 @@ end
 
 local applyStyle -- forward
 
+-- Path of the texture the health bar draws now (what the client reports back after SetStatusBarTexture).
+function RF.BarTexture(deco)
+    local bar = deco.health
+    if not bar or type(bar.GetStatusBarTexture) ~= "function" then return nil end
+    local texture = bar:GetStatusBarTexture()
+    if type(texture) == "table" and type(texture.GetTexture) == "function" then return texture:GetTexture() end
+    if type(texture) == "string" then return texture end
+    return nil
+end
+
+function RF.Restyle(deco)
+    applyStyle(deco)
+    deco.unitDirty = true
+    RF.MarkDirty()
+end
+
 decorate = function(frame)
     local deco = createDeco(frame)
     decos[frame] = deco
@@ -633,6 +744,7 @@ applyStyle = function(deco)
             deco.health:SetStatusBarTexture(texturePath(settings.rfHealthTexture))
         end
     end
+    deco.styledTexture = enabled and RF.BarTexture(deco) or nil
     if deco.power and deco.power.SetStatusBarTexture and enabled then
         deco.power:SetStatusBarTexture(texturePath(settings.rfPowerTexture))
     end
@@ -1336,10 +1448,17 @@ driver:SetScript("OnUpdate", function(_, elapsed)
         if hoveredDeco and MouseIsOver and not (hoveredDeco.frame:IsVisible() and MouseIsOver(hoveredDeco.frame)) then
             setHover(hoveredDeco, false)
         end
+        local enabled = cfg().rfEnabled
         for _, deco in ipairs(ordered) do
-            if deco.frame:IsVisible() and unitOf(deco.frame) ~= deco.unit then
-                deco.unitDirty = true
-                anyDirty = true
+            if deco.frame:IsVisible() then
+                if unitOf(deco.frame) ~= deco.unit then
+                    deco.unitDirty = true
+                    anyDirty = true
+                end
+                -- The client put its own bar texture back (setup outside the hooked functions): restyle.
+                if enabled and deco.styledTexture and RF.BarTexture(deco) ~= deco.styledTexture then
+                    RF.Restyle(deco)
+                end
             end
         end
     end
@@ -1372,6 +1491,7 @@ events:SetScript("OnEvent", function(_, event, unit)
     elseif event == "UNIT_MANA" or event == "UNIT_MAXMANA" then
         if cfg().rfDrinkStyle == "mana" then markGUID(unit, "drinkDirty") end
     elseif event == "PLAYER_REGEN_DISABLED" then
+        if RF.templateShown then RF.SetTemplate(false) end
         for _, deco in ipairs(ordered) do deco.drinkDirty = true end
         anyDirty = true
     elseif event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
@@ -1390,19 +1510,27 @@ events:SetScript("OnEvent", function(_, event, unit)
         for _, deco in ipairs(ordered) do deco.unitDirty = true end
         anyDirty = true
         if event == "PLAYER_LOGIN" then RF.Init() end
+        if event == "PLAYER_ENTERING_WORLD" then RF.Rehook() end
         if event ~= "PLAYER_REGEN_ENABLED" and event ~= "UNIT_PET" then RF.ApplySort(true) end
+        if event ~= "PLAYER_LOGIN" then RF.LayoutPets() end
     end
 end)
 
 ---------------------------------------------------------------------------------------------------
 -- Hooks into the client compact frame code (only those that exist on this client)
 ---------------------------------------------------------------------------------------------------
+-- Each client function is hooked once. installHooks runs again on PLAYER_ENTERING_WORLD and
+-- ADDON_LOADED, so functions the client defines after PLAYER_LOGIN are still hooked.
+local hookedGlobals = {}
 local function hookGlobal(name, fn)
+    if hookedGlobals[name] then return true end
     if type(_G[name]) == "function" then
         hooksecurefunc(name, fn)
+        hookedGlobals[name] = true
         return true
     end
 end
+RF.hookedGlobals = hookedGlobals
 
 local function installHooks()
     local function adopt(frame)
@@ -1415,8 +1543,22 @@ local function installHooks()
             anyDirty = true
         end
     end
-    for _, name in ipairs({ "CompactUnitFrame_SetUpFrame", "CompactUnitFrame_SetUnit", "DefaultCompactUnitFrameSetup",
-        "DefaultCompactMiniFrameSetup", "CompactUnitFrame_UpdateAll" }) do
+    -- The client setup (DefaultCompactUnitFrameSetup) puts its own bar textures and background back,
+    -- for example when its frame profile loads after login or the group is rebuilt. A frame that is
+    -- already decorated gets the ForeverUI style again right after it.
+    local function setUp(frame)
+        if type(frame) ~= "table" then return end
+        local deco = decos[frame]
+        if deco then
+            RF.Restyle(deco)
+        else
+            register(frame)
+        end
+    end
+    for _, name in ipairs({ "CompactUnitFrame_SetUpFrame", "DefaultCompactUnitFrameSetup", "DefaultCompactMiniFrameSetup" }) do
+        hookGlobal(name, setUp)
+    end
+    for _, name in ipairs({ "CompactUnitFrame_SetUnit", "CompactUnitFrame_UpdateAll" }) do
         hookGlobal(name, adopt)
     end
     hookGlobal("CompactUnitFrame_UpdateHealthColor", function(frame)
@@ -1448,7 +1590,14 @@ local function installHooks()
             if cfg().rfHideAbsorbGlow then hideGlows(deco) end
         end
     end)
-    hookGlobal("CompactRaidFrameContainer_LayoutFrames", function() RF.MarkDirty() RF.SyncAnchor() end)
+    hookGlobal("CompactRaidFrameContainer_LayoutFrames", function()
+        RF.MarkDirty()
+        RF.SyncAnchor()
+        RF.LayoutPets()
+    end)
+    for _, name in ipairs({ "CompactPartyFrame_UpdateLayout", "CompactPartyFrame_Generate" }) do
+        hookGlobal(name, function() RF.LayoutPets() end)
+    end
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -1538,6 +1687,56 @@ local function buttonBounds()
     return left, bottom, right, top
 end
 
+-- Saved position = offset of the anchor's TOPRIGHT corner from UIParent's (Edit Mode format).
+-- When the number of shown buttons changes, so does the width: keep the LEFT edge where it was, so the
+-- group grows and shrinks to the right instead of drifting.
+function RF.LeftPinnedOffset(left, width, parentRight)
+    return left + width - parentRight
+end
+
+-- The left edge comes from the SAVED position and the width it was saved with (config.width, screen
+-- units), never from where the anchor stands now: after /reload the anchor sits at its default place
+-- (left, next to the chat) until Edit Mode applies the saved one, and measuring it there overwrote
+-- the saved position with that default place.
+local function finite(value) return type(value) == "number" and abs(value) < math.huge end
+
+function RF.ResizeAnchor(width, height)
+    local entry = editEntry()
+    local config = entry and entry.config
+    local position = savedPosition() and config.position
+    anchor:SetWidth(width)
+    anchor:SetHeight(height)
+    if not position then return end
+    local ratio = anchor:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    local savedWidth, parentRight = config.width, UIParent:GetRight()
+    config.width, config.height = width * ratio, height * ratio
+    -- No width saved with the position (saved by an older version): keep the right corner as it is.
+    if not (finite(savedWidth) and parentRight and finite(position[1])) then return end
+    if abs(savedWidth - width * ratio) <= 0.5 then return end
+    local left = parentRight + position[1] - savedWidth
+    local x = RF.LeftPinnedOffset(left, width * ratio, parentRight)
+    position[1] = x
+    attaching = true
+    anchor:ClearAllPoints()
+    anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x / ratio, (position[2] or 0) / ratio)
+    attaching = nil
+    return x
+end
+
+-- At login: the anchor takes its saved size and place at once, before anything measures it.
+function RF.RestoreAnchor()
+    local entry = editEntry()
+    local config = entry and entry.config
+    if not (config and savedPosition()) then return end
+    local position = config.position
+    if not (finite(position[1]) and finite(position[2])) then return end
+    local ratio = anchor:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    if finite(config.width) and config.width > 20 then anchor:SetWidth(config.width / ratio) end
+    if finite(config.height) and config.height > 20 then anchor:SetHeight(config.height / ratio) end
+    anchor:ClearAllPoints()
+    anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", position[1] / ratio, position[2] / ratio)  -- hook attaches
+end
+
 -- Puts the anchor over the shown buttons (when the user never moved it) and sizes it like them.
 -- Everything is measured before the anchor moves: the container may hang on the anchor, and clearing
 -- the anchor's points leaves the container (and its buttons) without a position until the next layout.
@@ -1552,8 +1751,7 @@ function RF.SyncAnchor()
         if source then left, bottom, right, top = screenRect(source) end
     end
     if left and right - left > 20 and top - bottom > 20 then
-        anchor:SetWidth(right - left)
-        anchor:SetHeight(top - bottom)
+        RF.ResizeAnchor(right - left, top - bottom)
         if not savedPosition() then
             attaching = true
             anchor:ClearAllPoints()
@@ -1585,12 +1783,154 @@ function RF.AttachContainer()
     attaching = nil
 end
 
+---------------------------------------------------------------------------------------------------
+-- Drag handle: a small label above the shown buttons while the cursor is over them. Dragging it moves
+-- the anchor (same saved position as Edit Mode) without opening Edit Mode. Not in combat.
+---------------------------------------------------------------------------------------------------
+local handle = CreateFrame("Button", "ForeverStockUIRaidHandle", UIParent)
+handle:SetWidth(84)
+handle:SetHeight(16)
+handle:SetFrameStrata("HIGH")
+handle:SetClampedToScreen(true)
+handle:EnableMouse(true)
+handle:Hide()
+RF.handle = handle
+handle.back = handle:CreateTexture(nil, "BACKGROUND")
+handle.back:SetAllPoints(handle)
+handle.back:SetTexture(0, 0, 0, 0.55)
+handle.icon = handle:CreateTexture(nil, "OVERLAY")
+handle.icon:SetTexture("Interface\\CURSOR\\UI-Cursor-Move")
+handle.icon:SetWidth(12)
+handle.icon:SetHeight(12)
+handle.icon:SetPoint("LEFT", handle, "LEFT", 2, 0)
+handle.text = handle:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+handle.text:SetPoint("LEFT", handle.icon, "RIGHT", 2, 0)
+handle.text:SetText(L("Группа", "Group"))
+local dragging
+
+-- Keeps the right-corner offset (x, y; both <= 0) inside the screen for an anchor of that size.
+function RF.ClampPosition(x, y, width, height, parentWidth, parentHeight)
+    return max(width - parentWidth, min(0, x)), max(height - parentHeight, min(0, y))
+end
+
+function RF.HandleEnabled()
+    local settings = cfg()
+    return settings.rfEnabled and settings.rfHandle and settings.rfMoveContainer and not InCombatLockdown()
+        and not (ForeverStockUIEditMode and ForeverStockUIEditMode:IsShown())
+end
+
+-- Cursor over the shown buttons or the strip just above them (where the handle sits)?
+function RF.CursorOverGroup(cx, cy)
+    local left, bottom, right, top = buttonBounds()
+    if not left then return false end
+    return cx >= left and cx <= right and cy >= bottom and cy <= top + 20
+end
+
+local function cursor()
+    local x, y = GetCursorPosition()
+    local scale = UIParent:GetEffectiveScale()
+    return x / scale, y / scale
+end
+
+local function stopHandleDrag()
+    if not dragging then return end
+    dragging = nil
+    handle:SetScript("OnUpdate", nil)
+    if ui.RefreshEditLayout then ui.RefreshEditLayout() end
+    ui.RunOutOfCombat("rfAttach", RF.AttachContainer)
+    RF.SyncAnchor()
+end
+
+-- One drag step: the cursor offset since the start moves the saved position.
+function RF.DragStep(entry, cx, cy)
+    local d = dragging
+    if not (d and entry and entry.config) then return end
+    local ratio = anchor:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    local width, height = anchor:GetWidth() * ratio, anchor:GetHeight() * ratio
+    local x, y = RF.ClampPosition(d.x + cx - d.cx, d.y + cy - d.cy, width, height,
+        UIParent:GetRight(), UIParent:GetTop())
+    entry.config.position = { x, y }
+    entry.config.width, entry.config.height = width, height   -- the size the position belongs to
+    anchor:ClearAllPoints()
+    anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x / ratio, y / ratio)   -- the hook re-attaches the container
+    -- the handle rides on the group while it moves
+    handle:ClearAllPoints()
+    handle:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 2)
+end
+
+function RF.StartHandleDrag()
+    local entry = editEntry()
+    if not RF.HandleEnabled() or not (entry and entry.config) then return end
+    RF.SyncAnchor()
+    local position = entry.config.position
+    if type(position) ~= "table" or type(position[1]) ~= "number" or type(position[2]) ~= "number" then
+        local right, top = anchor:GetRight(), anchor:GetTop()
+        if not (right and top and UIParent:GetRight() and UIParent:GetTop()) then return end
+        local ratio = anchor:GetEffectiveScale() / UIParent:GetEffectiveScale()
+        position = { right * ratio - UIParent:GetRight(), top * ratio - UIParent:GetTop() }
+    end
+    local cx, cy = cursor()
+    dragging = { x = position[1], y = position[2], cx = cx, cy = cy }
+    handle:SetScript("OnUpdate", function()
+        if not RF.HandleEnabled() then
+            stopHandleDrag()
+            return
+        end
+        RF.DragStep(editEntry(), cursor())
+    end)
+end
+
+function RF.IsHandleDragging() return dragging ~= nil end
+
+handle:SetScript("OnMouseDown", function(_, button)
+    if button == "LeftButton" then RF.StartHandleDrag() end
+end)
+handle:SetScript("OnMouseUp", stopHandleDrag)
+handle:SetScript("OnHide", stopHandleDrag)
+
+local function placeHandle()
+    local left, _, _, top = buttonBounds()
+    if not left then return false end
+    handle:ClearAllPoints()
+    handle:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left, top + 2)
+    return true
+end
+
+-- Hover poll (4 times a second): shows the handle over the group, hides it shortly after the cursor leaves.
+local poll, pollElapsed, lastOver = CreateFrame("Frame"), 0, 0
+function RF.UpdateHandle(now)
+    if dragging then return end
+    if not RF.HandleEnabled() then
+        if handle:IsShown() then handle:Hide() end
+        return
+    end
+    local cx, cy = cursor()
+    if RF.CursorOverGroup(cx, cy) or MouseIsOver(handle) then lastOver = now end
+    if now - lastOver < 0.6 then
+        if placeHandle() and not handle:IsShown() then handle:Show() end
+    elseif handle:IsShown() then
+        handle:Hide()
+    end
+end
+poll:SetScript("OnUpdate", function(_, elapsed)
+    pollElapsed = pollElapsed + elapsed
+    if pollElapsed < 0.25 then return end
+    pollElapsed = 0
+    RF.UpdateHandle(GetTime())
+end)
+poll:RegisterEvent("PLAYER_REGEN_DISABLED")
+poll:SetScript("OnEvent", function()
+    stopHandleDrag()
+    handle:Hide()
+end)
+
 hooksecurefunc(anchor, "SetPoint", function()
     if attaching then return end
     RF.AttachContainer()
 end)
 
 function RF.Init()
+    RF.initialized = true
     installHooks()
     local raid, party = containers()
     hookContainer(raid)
@@ -1599,8 +1939,12 @@ function RF.Init()
         local entry = ui.RegisterEditFrame(anchor, L("Фреймы группы и рейда", "Party and raid frames"), "raidframes")
         if entry then
             entry.onRightClick = function() ui.OpenOptions("raidframes") end
-            entry.resetPosition = function() RF.SyncAnchor() end
+            entry.resetPosition = function()
+                if entry.config then entry.config.width, entry.config.height = nil, nil end
+                RF.SyncAnchor()
+            end
             anchor.editEntry = entry
+            RF.RestoreAnchor()
         end
     end
     rebuildIndicatorLookup()
@@ -1624,6 +1968,22 @@ function RF.Init()
     RF.AttachContainer()
     if RF.ApplyVisibility then RF.ApplyVisibility() end
 end
+
+-- Late client code: the compact frame functions and containers may appear after PLAYER_LOGIN (a client
+-- addon loaded later, frames generated on the first group). Hook what is new and pick up its frames.
+function RF.Rehook()
+    installHooks()
+    local raid, party = containers()
+    hookContainer(raid)
+    hookContainer(party)
+    RF.Scan()
+end
+
+local lateEvents = CreateFrame("Frame")
+lateEvents:RegisterEvent("ADDON_LOADED")
+lateEvents:SetScript("OnEvent", function(_, _, name)
+    if name ~= "ForeverUI" and RF.initialized then RF.Rehook() end
+end)
 
 if ForeverStockUIEditMode then
     ForeverStockUIEditMode:HookScript("OnShow", function()
@@ -1840,6 +2200,101 @@ function RF.ApplySort(onlyIfActive)
 end
 
 ---------------------------------------------------------------------------------------------------
+-- Pets under their owners (horizontal layout). The client flow layout puts the pet buttons in their
+-- own row after all the players; here each one is hung under its owner's button instead. Out of
+-- combat only (the buttons are protected). Turning it off hands the layout back to the client.
+---------------------------------------------------------------------------------------------------
+local PET_GAP = 2
+
+-- Owner token of a pet token ("partypet2" -> "party2", "pet" -> "player"); nil for anything else.
+function RF.PetOwner(unit)
+    if type(unit) ~= "string" then return end
+    if unit == "pet" then return "player" end
+    local n = unit:match("^partypet(%d+)$")
+    if n then return "party" .. n end
+    n = unit:match("^raidpet(%d+)$")
+    if n then return "raid" .. n end
+end
+
+local function isPetDeco(deco)
+    if RF.PetOwner(deco.unit) then return true end
+    local name = deco.frame.GetName and deco.frame:GetName()
+    return name ~= nil and name:match("^CompactPartyFramePet%d+$") ~= nil
+end
+
+-- Owner deco of a pet deco: by unit token, else CompactPartyFramePetN under CompactPartyFrameMemberN.
+local function ownerOf(deco, byUnit)
+    local owner = RF.PetOwner(deco.unit)
+    if owner and byUnit[owner] then return byUnit[owner] end
+    local name = deco.frame.GetName and deco.frame:GetName()
+    local n = name and name:match("^CompactPartyFramePet(%d+)$")
+    if n then
+        local frame = _G["CompactPartyFrameMember" .. n]
+        return frame and decos[frame]
+    end
+end
+
+-- Horizontal = at least two shown player buttons side by side (same top, different left).
+function RF.IsHorizontal()
+    local first
+    for _, deco in ipairs(ordered) do
+        if deco.frame:IsVisible() and not isPetDeco(deco) then
+            local l, _, _, t = screenRect(deco.frame)
+            if l then
+                if not first then
+                    first = { l, t }
+                elseif abs(t - first[2]) < 2 and abs(l - first[1]) > 2 then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local petsMoved
+function RF.LayoutPets()
+    if InCombatLockdown() then
+        ui.RunOutOfCombat("rfPets", RF.LayoutPets)
+        return
+    end
+    local settings = cfg()
+    if not (settings.rfEnabled and settings.rfPetsUnder) then
+        if petsMoved then
+            petsMoved = nil
+            for _, container in ipairs({ _G.CompactRaidFrameContainer, _G.CompactPartyFrame }) do
+                if container then
+                    if type(_G.CompactRaidFrameContainer_TryUpdate) == "function" and container == _G.CompactRaidFrameContainer then
+                        pcall(_G.CompactRaidFrameContainer_TryUpdate, container)
+                    elseif type(_G.CompactRaidFrameContainer_LayoutFrames) == "function" then
+                        pcall(_G.CompactRaidFrameContainer_LayoutFrames, container)
+                    end
+                end
+            end
+        end
+        return
+    end
+    if not RF.IsHorizontal() then return end
+    local byUnit = {}
+    for _, deco in ipairs(ordered) do
+        if deco.unit and deco.frame:IsVisible() and not isPetDeco(deco) then byUnit[deco.unit] = deco end
+    end
+    attaching = true
+    for _, deco in ipairs(ordered) do
+        if deco.frame:IsVisible() and isPetDeco(deco) then
+            local owner = ownerOf(deco, byUnit)
+            if owner then
+                deco.frame:ClearAllPoints()
+                deco.frame:SetPoint("TOPLEFT", owner.frame, "BOTTOMLEFT", 0, -PET_GAP)
+                petsMoved = true
+            end
+        end
+    end
+    attaching = nil
+    RF.SyncAnchor()
+end
+
+---------------------------------------------------------------------------------------------------
 -- Live apply from the options
 ---------------------------------------------------------------------------------------------------
 RF.styleVersion = 0
@@ -1847,6 +2302,8 @@ function RF.Apply()
     RF.styleVersion = RF.styleVersion + 1
     rebuildIndicatorLookup()
     RF.ApplySort()
+    RF.LayoutPets()
+    if RF.templateShown then RF.LayoutTemplate() end
     for _, deco in ipairs(ordered) do
         for _, widget in pairs(deco.indicators) do widget.stamp = nil end
         applyStyle(deco)
@@ -2032,12 +2489,51 @@ for _, event in ipairs({ "PLAYER_ENTERING_WORLD", "PARTY_MEMBERS_CHANGED", "RAID
 end
 visibilityEvents:SetScript("OnEvent", function() RF.ApplyVisibility() end)
 
-ui.RegisterCallback("SuiteProfileChanged", function()
+-- Another settings table is in force (profile switch, group type change, the options page picked
+-- another group type, a copy): everything is drawn again from it.
+function RF.SettingsSwitched(kindChanged)
     if ui.NormalizeModule then ui.NormalizeModule("raidframes") end
     RF.Apply()
     RF.ApplyLayout()
     RF.ApplyVisibility()
-end, "RaidFramesProfile")
+    if kindChanged then
+        ui.Fire("RaidFramesKindChanged", RF.ViewKind())
+        ui.Fire("OptionsRefresh", "raidframes")
+    end
+end
+ui.RegisterCallback("SuiteProfileChanged", function() RF.SettingsSwitched(false) end, "RaidFramesProfile")
+
+-- The options page picks which group type it edits (nil = the live one). Another type than the live
+-- one shows its sample frames in place of the group, so what is edited is what is seen.
+function RF.SetEditKind(kind)
+    if not validKind(kind) then kind = nil end
+    if kind == RF.editKind then return end
+    RF.editKind = kind
+    if kind and kind ~= RF.LiveKind() then
+        if not RF.templateShown and not InCombatLockdown() then
+            RF.SetTemplate(true)
+            RF.autoTemplate = true
+        end
+    elseif RF.autoTemplate then
+        RF.autoTemplate = nil
+        if RF.templateShown then RF.SetTemplate(false) end
+    end
+    RF.SettingsSwitched(true)
+end
+
+-- Joining, growing or leaving a raid switches the settings table.
+local lastLiveKind
+local kindEvents = CreateFrame("Frame")
+for _, event in ipairs({ "PLAYER_ENTERING_WORLD", "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE" }) do
+    kindEvents:RegisterEvent(event)
+end
+kindEvents:SetScript("OnEvent", function()
+    local kind = RF.LiveKind()
+    if kind == lastLiveKind then return end
+    lastLiveKind = kind
+    if RF.editKind or not Suite.ready then return end
+    RF.SettingsSwitched(true)
+end)
 ui.RegisterCallback("SuiteSpellsChanged", function()
     for _, deco in ipairs(ordered) do deco.auraDirty = true end
     anyDirty = true
@@ -2057,6 +2553,7 @@ local previewVariants = {
         deficit = "-9.5k", target = true, drink = true },
     dps = { name = L("Боец", "Damage"), class = "MAGE", health = 0.34, heal = 0.1, absorb = 0.08, role = "DAMAGER",
         deficit = "-16.8k", hover = true },
+    pet = { name = L("Питомец", "Pet"), class = "HUNTER", health = 0.8, heal = 0, absorb = 0, deficit = "", noRole = true },
 }
 RF.previewOrder = { "tank", "healer", "dps" }
 RF.previews = {}
@@ -2116,9 +2613,16 @@ local function demoAuras(list, now)
 end
 
 -- Live preview for the options page: a mock unit button decorated by the same code.
-function RF.BuildPreview(parent, width, height, variant)
+-- `override` (optional) replaces fields of the variant for this cell: name, class, role, health.
+function RF.BuildPreview(parent, width, height, variant, override)
     width, height = width or 120, height or 48
     local data = previewVariants[variant or "healer"] or previewVariants.healer
+    if override then
+        local merged = {}
+        for key, value in pairs(data) do merged[key] = value end
+        for key, value in pairs(override) do merged[key] = value end
+        data = merged
+    end
     local frame = CreateFrame("Frame", nil, parent)
     frame:SetWidth(width)
     frame:SetHeight(height)
@@ -2173,7 +2677,7 @@ function RF.BuildPreview(parent, width, height, variant)
         else
             deco.border:Hide()
         end
-        RF.UpdateRole(deco, data.role)
+        if data.noRole then deco.role:Hide() else RF.UpdateRole(deco, data.role) end
         -- The healer drinks in the preview (the style decides the text, 42% mana in the "mana" style).
         local drinkText
         if data.drink and settings.rfEnabled and settings.rfDrink then
@@ -2195,10 +2699,271 @@ function RF.BuildPreview(parent, width, height, variant)
 end
 
 ---------------------------------------------------------------------------------------------------
+-- Template preview: fills the group frame's place with decorated sample buttons (tank, healer,
+-- damage dealers, pets), so the layout can be judged without a group. Plain non-clickable frames.
+---------------------------------------------------------------------------------------------------
+RF.templateKinds = { party = 5, raid10 = 10, raid25 = 25 }
+local TEMPLATE_GAP, TEMPLATE_ROW = 2, 5
+local DEFAULT_W, DEFAULT_H = 150, 55   -- used while no real button is shown
+
+-- Who stands in each sample group: role variant, class (for class colours) and the pet of hunters
+-- (1, wolf) and warlocks (2, imp). Groups of five, as the client lays them out.
+local T, H, D = "tank", "healer", "dps"
+RF.templateRoster = {
+    party = { { T, "WARRIOR" }, { H, "PRIEST" }, { D, "MAGE" }, { D, "HUNTER", pet = 1 }, { D, "WARLOCK", pet = 2 } },
+    raid10 = {
+        { T, "WARRIOR" }, { T, "PALADIN" }, { H, "PRIEST" }, { H, "SHAMAN" }, { H, "DRUID" },
+        { D, "MAGE" }, { D, "ROGUE" }, { D, "HUNTER", pet = 1 }, { D, "WARLOCK", pet = 2 }, { D, "DEATHKNIGHT" },
+    },
+    raid25 = {
+        { T, "WARRIOR" }, { T, "PALADIN" }, { H, "PRIEST" }, { H, "SHAMAN" }, { D, "MAGE" },
+        { H, "DRUID" }, { H, "PALADIN" }, { D, "ROGUE" }, { D, "HUNTER", pet = 1 }, { D, "DEATHKNIGHT" },
+        { D, "MAGE" }, { D, "WARLOCK", pet = 2 }, { D, "DEATHKNIGHT" }, { D, "SHAMAN" }, { D, "ROGUE" },
+        { D, "HUNTER", pet = 1 }, { D, "MAGE" }, { D, "WARLOCK", pet = 2 }, { D, "DRUID" }, { D, "WARRIOR" },
+        { H, "PRIEST" }, { D, "ROGUE" }, { D, "MAGE" }, { D, "SHAMAN" }, { D, "DEATHKNIGHT" },
+    },
+}
+-- Health of the sample members in turn, so the group does not look like one frame copied.
+local templateHealth = { 1, 0.86, 0.62, 1, 0.45, 0.93, 1, 0.71, 0.34, 1, 0.8, 0.55 }
+
+-- What one sample cell shows. Each state (threat, target, drinking, shield, incoming heals) is on one
+-- cell only: a template where every healer looked targeted and every damage dealer hovered did not
+-- read as a group.
+function RF.TemplateMember(kind, index)
+    local roster = RF.templateRoster[kind] or RF.templateRoster.party
+    local member = roster[index]
+    if not member then return end
+    local names = { tank = L("Танк", "Tank"), healer = L("Лекарь", "Healer"), dps = L("Боец", "Damage") }
+    local health = templateHealth[(index - 1) % #templateHealth + 1]
+    local data = {
+        name = names[member[1]] .. (#roster > TEMPLATE_ROW and (" " .. index) or ""),
+        class = member[2], health = health, heal = 0, absorb = 0,
+        deficit = health >= 1 and "" or ("-%.1fk"):format((1 - health) * 25),
+        threat = false, target = false, drink = false, hover = false,
+    }
+    local firstOf, secondHealer = {}, nil
+    for i, other in ipairs(roster) do
+        local role = other[1]
+        if not firstOf[role] then
+            firstOf[role] = i
+        elseif role == "healer" and not secondHealer then
+            secondHealer = i
+        end
+    end
+    if index == firstOf.tank then data.threat, data.absorb = 3, 0.3 end
+    if index == firstOf.healer then data.target = true end
+    if index == (secondHealer or firstOf.healer) then data.drink = true end
+    if index == firstOf.dps then data.heal, data.absorb = 0.15, 0.08 end
+    return member[1], data, member.pet
+end
+
+-- Size of the sample buttons: the real ones (in UIParent units), so the sample is true to scale.
+-- Pets: the real pet button when one is shown, else half the height of a player button.
+function RF.TemplateMetrics()
+    local w, h, petW, petH
+    for _, deco in ipairs(ordered) do
+        local frame = deco.frame
+        if frame:IsVisible() and frame:GetWidth() and frame:GetHeight() then
+            local ratio = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+            local fw, fh = floor(frame:GetWidth() * ratio + 0.5), floor(frame:GetHeight() * ratio + 0.5)
+            if fw >= 20 and fh >= 10 then
+                if isPetDeco(deco) then
+                    petW, petH = petW or fw, petH or fh
+                else
+                    w, h = w or fw, h or fh
+                end
+            end
+        end
+    end
+    w, h = w or DEFAULT_W, h or DEFAULT_H
+    return w, h, petW or w, petH or max(12, floor(h / 2))
+end
+
+-- Positions (x right, y down from the top-left corner) of member cells and pet cells.
+-- hasPet[i] = member i has a pet. Horizontal: each group of perRow is a row; petsUnder hangs a pet
+-- under its owner, otherwise the pets form their own rows after all the players (like the client).
+-- Vertical: each group is a column, the pets stand in their own column(s) to the right.
+function RF.TemplateLayout(hasPet, perRow, w, h, petH, gap, petsUnder, vertical)
+    local out = { cells = {}, pets = {}, width = 0, height = 0 }
+    local count = #hasPet
+    if count == 0 then return out end
+    if vertical then
+        local groups = math.ceil(count / perRow)
+        for i = 1, count do
+            local group, slot = floor((i - 1) / perRow), (i - 1) % perRow
+            out.cells[i] = { group * (w + gap), -slot * (h + gap) }
+        end
+        local columnHeight = min(count, perRow) * (h + gap) - gap
+        local perColumn = max(1, floor((columnHeight + gap) / (petH + gap)))
+        local x, k = groups * (w + gap), 0
+        for i = 1, count do
+            if hasPet[i] then
+                out.pets[#out.pets + 1] = { owner = i, x = x + floor(k / perColumn) * (w + gap),
+                    y = -(k % perColumn) * (petH + gap) }
+                k = k + 1
+            end
+        end
+        out.width = (groups + math.ceil(k / perColumn)) * (w + gap) - gap
+        out.height = max(columnHeight, min(k, perColumn) * (petH + gap) - gap)
+        return out
+    end
+    local y = 0
+    for first = 1, count, perRow do
+        local rowPet
+        for i = first, min(first + perRow - 1, count) do
+            local x = (i - first) * (w + gap)
+            out.cells[i] = { x, -y }
+            if hasPet[i] and petsUnder then
+                out.pets[#out.pets + 1] = { owner = i, x = x, y = -(y + h + gap) }
+                rowPet = true
+            end
+        end
+        y = y + h + gap + (rowPet and (petH + gap) or 0)
+    end
+    if not petsUnder then
+        local k = 0
+        for i = 1, count do
+            if hasPet[i] then
+                out.pets[#out.pets + 1] = { owner = i, x = (k % perRow) * (w + gap), y = -(y + floor(k / perRow) * (petH + gap)) }
+                k = k + 1
+            end
+        end
+        y = y + math.ceil(k / perRow) * (petH + gap)
+    end
+    out.width = min(count, perRow) * (w + gap) - gap
+    out.height = y - gap
+    return out
+end
+
+-- Whether the client lays this group type out in rows. Read from the real buttons whenever at least
+-- two players are shown and remembered per group type (ForeverStockUIDB.rfSeenHorizontal).
+function RF.TemplateHorizontal(kind)
+    local settings = ui.Settings()
+    if type(settings.rfSeenHorizontal) ~= "table" then settings.rfSeenHorizontal = {} end
+    local seen = settings.rfSeenHorizontal
+    local players = 0
+    for _, deco in ipairs(ordered) do
+        if deco.frame:IsVisible() and not isPetDeco(deco) then players = players + 1 end
+    end
+    if players >= 2 and not RF.templateFaded then seen[RF.LiveKind()] = RF.IsHorizontal() end
+    local value = seen[kind]
+    if value == nil then value = seen.party end
+    return value ~= false
+end
+
+local templateFrame
+local function getTemplateFrame()
+    if templateFrame then return templateFrame end
+    templateFrame = CreateFrame("Frame", "ForeverStockUIRaidTemplate", UIParent)
+    templateFrame:SetFrameStrata("HIGH")
+    templateFrame:EnableMouse(false)
+    templateFrame:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+    templateFrame:SetWidth(DEFAULT_W)
+    templateFrame:SetHeight(DEFAULT_H)
+    templateFrame.cells, templateFrame.pets, templateFrame.pools = {}, {}, {}
+    templateFrame:Hide()
+    RF.template = templateFrame
+    return templateFrame
+end
+
+-- Cells are built once per group type and size: each keeps its member (class colour, role, state).
+local function placeCell(frame, list, index, variant, w, h, data, x, y)
+    local cell = list[index]
+    if not cell then
+        cell = RF.BuildPreview(frame, w, h, variant, data)
+        list[index] = cell
+    end
+    cell:ClearAllPoints()
+    cell:SetPoint("TOPLEFT", frame, "TOPLEFT", x, y)
+    cell:Show()
+end
+
+-- While the sample frames are shown, the real group frames under them are made invisible (alpha only,
+-- which is allowed in combat too), so the two do not overlap.
+local fadedFrames = {}
+local function fadeClientFrames(on)
+    for _, name in ipairs({ "CompactPartyFrame", "CompactRaidFrameContainer" }) do
+        local frame = _G[name]
+        if frame and frame.SetAlpha then
+            if on and fadedFrames[frame] == nil then
+                fadedFrames[frame] = frame.GetAlpha and frame:GetAlpha() or 1
+                frame:SetAlpha(0)
+            elseif not on and fadedFrames[frame] ~= nil then
+                frame:SetAlpha(fadedFrames[frame])
+                fadedFrames[frame] = nil
+            end
+        end
+    end
+    RF.templateFaded = on or nil
+end
+RF.FadeClientFrames = fadeClientFrames
+
+function RF.LayoutTemplate()
+    local frame = getTemplateFrame()
+    local settings = cfg()
+    local kind = RF.ViewKind()
+    local count = RF.templateKinds[kind] or 5
+    local hasPet, members = {}, {}
+    for i = 1, count do
+        local variant, data, pet = RF.TemplateMember(kind, i)
+        members[i] = { variant, data, pet }
+        hasPet[i] = pet ~= nil
+    end
+    -- measured before the real frames fade (they stay measurable: alpha does not hide them)
+    local w, h, petW, petH = RF.TemplateMetrics()
+    local vertical = not RF.TemplateHorizontal(kind)
+    local key = kind .. "/" .. w .. "x" .. h .. "/" .. petW .. "x" .. petH
+    if frame.poolKey ~= key then
+        for _, list in ipairs({ frame.cells, frame.pets }) do
+            for _, cell in ipairs(list) do cell:Hide() end
+        end
+        frame.pools[key] = frame.pools[key] or { cells = {}, pets = {} }
+        frame.cells, frame.pets, frame.poolKey = frame.pools[key].cells, frame.pools[key].pets, key
+    end
+    local layout = RF.TemplateLayout(hasPet, TEMPLATE_ROW, w, h, petH, TEMPLATE_GAP, settings.rfPetsUnder ~= false, vertical)
+    for i = 1, count do
+        placeCell(frame, frame.cells, i, members[i][1], w, h, members[i][2], layout.cells[i][1], layout.cells[i][2])
+    end
+    for i = count + 1, #frame.cells do frame.cells[i]:Hide() end
+    local petNames = { L("Волк", "Wolf"), L("Бес", "Imp") }
+    for k, pet in ipairs(layout.pets) do
+        local which = members[pet.owner][3] or 1
+        placeCell(frame, frame.pets, k, "pet", petW, petH,
+            { name = petNames[which], class = which == 2 and "WARLOCK" or "HUNTER" }, pet.x, pet.y)
+    end
+    for k = #layout.pets + 1, #frame.pets do frame.pets[k]:Hide() end
+    frame:SetWidth(max(layout.width, 1))
+    frame:SetHeight(max(layout.height, 1))
+    return layout
+end
+
+function RF.SetTemplate(on)
+    RF.templateShown = on and true or nil
+    if not on then RF.autoTemplate = nil end
+    local frame = getTemplateFrame()
+    if on then
+        RF.LayoutTemplate()
+        frame:Show()
+    else
+        frame:Hide()
+    end
+    fadeClientFrames(on and true or false)
+end
+
+function RF.ToggleTemplate()
+    RF.SetTemplate(not RF.templateShown)
+    return RF.templateShown
+end
+
+---------------------------------------------------------------------------------------------------
 -- Diagnostics: /fuiraid lists the client buttons found and the fields this module uses
 ---------------------------------------------------------------------------------------------------
 SLASH_FOREVERUIRAID1 = "/fuiraid"
 SlashCmdList.FOREVERUIRAID = function(input)
+    if (input or ""):lower():match("preview") then
+        RF.ToggleTemplate()
+        return
+    end
     RF.Scan()
     if (input or ""):lower():match("aura") then
         -- What each frame believes: its unit, whose GUID that is, and which auras it draws.

@@ -2,7 +2,7 @@
 ## Title: Forever UI
 ## Notes: WoW: Forever styling and equipment labels for the stock interface.
 ## Notes-ruRU: Оформление штатного интерфейса в стиле WoW: Forever и подписи экипировки.
-## Version: 1.3.5
+## Version: 1.3.6
 ## SavedVariables: ForeverStockUIDB, ForeverUI_NameplatesDB
 
 Libs\LibStub\LibStub.lua
@@ -30,6 +30,7 @@ EditLayouts.lua
 EditMode.lua
 Performance.lua
 Chat.lua
+ItemUsability.lua
 Loot.lua
 LootRolls.lua
 Minimap.lua
@@ -38,7 +39,8 @@ MicroMenu.lua
 Bags.lua
 Merchant.lua
 Enchanting.lua
-CharacterSkin.lua
+SkinExtras.lua
+WindowSkin.lua
 CastBarOptions.lua
 CombatMeterData.lua
 CombatMeter.lua
@@ -46,10 +48,12 @@ CombatText.lua
 Cursor.lua
 CursorOptions.lua
 Tooltip.lua
+SpellID.lua
 RaidFrames.lua
 ClickCast.lua
 CooldownManager.lua
 HealerMana.lua
+PersonalResource.lua
 KeyBinder.lua
 
 # Declarative option schemas, one file per module
@@ -68,12 +72,13 @@ Options\Bags.lua
 Options\Equipment.lua
 Options\Merchant.lua
 Options\Enchanting.lua
-Options\CharacterSkin.lua
+Options\Skins.lua
 Options\Chat.lua
 Options\Tooltip.lua
 Options\SuiteWidgets.lua
 Options\CooldownManager.lua
 Options\RaidFrames.lua
 Options\HealerMana.lua
+Options\PersonalResource.lua
 Options\ClickCast.lua
 Options\Profiles.lua

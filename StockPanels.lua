@@ -27,14 +27,16 @@ local function setClassicCap(cap, mirrored)
             cap:SetTexCoord(0, 482 / 1024, 0, 282 / 1024)
         end
         cap:SetSize(104, 61)
-        return
+        return 104, 61
     end
     local cell = classicCaps[style]
     local left, right = cell[1] / 512, cell[2] / 512
     if mirrored then left, right = right, left end
     cap:SetTexture(foreverCaps)
     cap:SetTexCoord(left, right, cell[3] / 512, cell[4] / 512)
-    cap:SetSize((cell[2] - cell[1]) * CAP_SCALE, (cell[4] - cell[3]) * CAP_SCALE)
+    local width, height = (cell[2] - cell[1]) * CAP_SCALE, (cell[4] - cell[3]) * CAP_SCALE
+    cap:SetSize(width, height)
+    return width, height
 end
 -- The caps get their art at login (ui.ApplyGryphons): the saved style is not loaded while this file runs.
 MainMenuBarLeftEndCap:SetVertexColor(1, 0.84, 0.65)
@@ -79,6 +81,50 @@ local retailCaps = {
     Horde = { art .. "ActionBar\\Retail-EndCaps-Horde", { 1, 357, 1, 335 }, { 1, 357, 337, 671 } },
 }
 local stockCapPoints, stockCapLook
+-- Each cap is stretched over its own holder frame, which Edit Mode moves (`ForeverStockUILeftGryphon`,
+-- `ForeverStockUIRightGryphon`, registered in EditMode.lua). The holder sits in MainMenuBarArtFrame, so it hides
+-- with the bar (vehicles) and follows its scale; the texture stays in the bar art. The holder takes the computed
+-- spot below unless the player saved one for the current layout (EditMode.lua keeps one per layout).
+ui.GryphonHolders = { "ForeverStockUILeftGryphon", "ForeverStockUIRightGryphon" }
+local holders = {}
+local function capConfig(index)
+    local layout = ui.Settings().editLayout
+    local config = type(layout) == "table" and layout[ui.GryphonHolders[index]]
+    return type(config) == "table" and config or nil
+end
+local function capAlpha(index)
+    local config = capConfig(index)
+    if ui.Settings().showGryphons == false or (config and config.hidden == true) then return 0 end
+    return 1
+end
+local function refreshCapAlpha()
+    MainMenuBarLeftEndCap:SetAlpha(capAlpha(1))
+    MainMenuBarRightEndCap:SetAlpha(capAlpha(2))
+end
+for index, name in ipairs(ui.GryphonHolders) do
+    local holder = CreateFrame("Frame", name, MainMenuBarArtFrame or MainMenuBar)
+    holder:SetSize(104.5, 98)
+    -- Edit Mode's "Show" switch parks the holder under a hidden parent; the texture follows through its alpha.
+    holder:SetScript("OnShow", refreshCapAlpha)
+    holder:SetScript("OnHide", refreshCapAlpha)
+    holders[index] = holder
+end
+-- Puts the holder on its default points, unless Edit Mode already holds it at a saved position.
+-- The size is passed in, not read from the cap: once stretched over a scaled holder, the cap reports that size.
+local function placeHolder(index, cap, width, height, place)
+    local holder = holders[index]
+    holder:SetSize(width, height)
+    local config = capConfig(index)
+    local saved = config and type(config.position) == "table"
+    local point, relative = holder:GetPoint(1)
+    if not (saved and point == "TOPRIGHT" and relative == UIParent) then
+        holder:ClearAllPoints()
+        place(holder)
+        if saved and ui.RefreshEditLayout then ui.RefreshEditLayout() end
+    end
+    cap:ClearAllPoints()
+    cap:SetAllPoints(holder)
+end
 local function placeGryphons()
     local caps = { MainMenuBarLeftEndCap, MainMenuBarRightEndCap }
     if not stockCapPoints then
@@ -104,32 +150,35 @@ local function placeGryphons()
             local cell = retail[index + 1]
             cap:SetTexture(retail[1])
             cap:SetTexCoord(cell[1] / 512, cell[2] / 512, cell[3] / 1024, cell[4] / 1024)
-            cap:SetSize(104.5, 98)
             cap:SetVertexColor(1, 1, 1)
-            cap:ClearAllPoints()
         end
-        -- Retail puts the caps 9 px over the first slot and 6 px over the last, 24 px below the slot row.
-        MainMenuBarLeftEndCap:SetPoint("BOTTOMRIGHT", ActionButton1, "BOTTOMLEFT", 9, -24)
-        MainMenuBarRightEndCap:SetPoint("BOTTOMLEFT", last, "BOTTOMRIGHT", -6, -24)
+        -- 24 px below the slot row. Retail's 9 and 6 px (measured from its larger slot rings) put the caps under
+        -- the end slots here. The left art keeps ~3 px of transparent margin on its inner side, so it overlaps the
+        -- first slot by 2 px; the right art has none, it overlaps the last slot by 3 px (set by eye in the game).
+        placeHolder(1, MainMenuBarLeftEndCap, 104.5, 98, function(holder)
+            holder:SetPoint("BOTTOMRIGHT", ActionButton1, "BOTTOMLEFT", 2, -24)
+        end)
+        placeHolder(2, MainMenuBarRightEndCap, 104.5, 98, function(holder)
+            holder:SetPoint("BOTTOMLEFT", last, "BOTTOMRIGHT", -3, -24)
+        end)
     else
         for index, cap in ipairs(caps) do
             -- The faction is known by now (it may not be when the file loads).
-            setClassicCap(cap, index == 2)
-            cap:ClearAllPoints()
+            local width, height = setClassicCap(cap, index == 2)
             local cell = classicCaps[gryphonStyle()]
             local drop = cell and cell.drop or 0
-            for _, point in ipairs(stockCapPoints[index]) do
-                local p, relative, relativePoint, x, y = unpack(point, 1, 5)
-                cap:SetPoint(p, relative, relativePoint, x, (y or 0) - drop)
-            end
+            placeHolder(index, cap, width, height, function(holder)
+                for _, point in ipairs(stockCapPoints[index]) do
+                    local p, relative, relativePoint, x, y = unpack(point, 1, 5)
+                    holder:SetPoint(p, relative, relativePoint, x, (y or 0) - drop)
+                end
+            end)
         end
     end
 end
 
 function ui.ApplyGryphons()
-    local alpha = ui.Settings().showGryphons == false and 0 or 1
-    MainMenuBarLeftEndCap:SetAlpha(alpha)
-    MainMenuBarRightEndCap:SetAlpha(alpha)
+    refreshCapAlpha()
     placeGryphons()
     -- Edit Mode calls this after it lays out the main bar grid: the slot backdrops follow the buttons.
     if layoutWings then layoutWings() end

@@ -822,8 +822,11 @@ end
 
 -- The Retail look hides the stock bar art; the gryphons move to the button row. The winged slot backdrops of
 -- the main bar stay in both layouts.
+local swapGryphonSpots -- defined with the gryphon entries below
 local function setBarArt(classic)
+    local previous = settings.barLayout == "retail" and "retail" or "classic"
     settings.barLayout = classic and "classic" or "retail"
+    if swapGryphonSpots and previous ~= settings.barLayout then swapGryphonSpots(previous) end
     settings.showGryphons = true
     settings.barSlotBackgrounds = true
     if ui.ActionBars then ui.ActionBars.Apply() end
@@ -1014,6 +1017,52 @@ if micro then
         if ui.MicroMenu and ui.MicroMenu.Centre then ui.MicroMenu.Centre() end
     end
 end
+-- Gryphons: each end cap moves on its own (holder frames from StockPanels.lua). Classic and Retail keep separate
+-- spots in config.positions.classic/retail; config.position is the spot of the current layout (swapGryphonSpots).
+local gryphonEntries = {}
+local function barLayoutKey()
+    return settings and settings.barLayout == "retail" and "retail" or "classic"
+end
+local function gryphonSpots(entry)
+    if type(entry.config.positions) ~= "table" then entry.config.positions = {} end
+    return entry.config.positions
+end
+for index, name in ipairs(ui.GryphonHolders or {}) do
+    local entry = _G[name] and add(name, index == 1 and "Левый грифон" or "Правый грифон",
+        index == 1 and "Left gryphon" or "Right gryphon")
+    if entry then
+        entry.resetPosition = function() if ui.ApplyGryphons then ui.ApplyGryphons() end end
+        entry.beforeResetPosition = function()
+            if entry.config then gryphonSpots(entry)[barLayoutKey()] = nil end
+        end
+        entry.onDragStop = function()
+            local position = entry.config and entry.config.position
+            if type(position) == "table" then gryphonSpots(entry)[barLayoutKey()] = { position[1], position[2] } end
+        end
+        gryphonEntries[#gryphonEntries + 1] = entry
+    end
+end
+-- Called once settings.barLayout holds the new layout, before the caps are placed for it.
+swapGryphonSpots = function(previous)
+    for _, entry in ipairs(gryphonEntries) do
+        local config = entry.config
+        if config then
+            local spots = gryphonSpots(entry)
+            -- Spots saved before the per-layout table existed belong to the layout they were made in.
+            if type(config.position) == "table" and spots[previous] == nil then
+                spots[previous] = { config.position[1], config.position[2] }
+            end
+            local spot = spots[barLayoutKey()]
+            if type(spot) == "table" and number(spot[1]) and number(spot[2]) then
+                config.position = { spot[1], spot[2] }
+            else
+                config.position = nil
+                restorePoints(entry)
+            end
+        end
+    end
+end
+
 add("MainMenuBarBackpackButton", "Кнопки сумок", "Bag buttons", {
     "CharacterBag0Slot", "CharacterBag1Slot", "CharacterBag2Slot", "CharacterBag3Slot",
 })

@@ -135,6 +135,9 @@ local settings = {}
 local ui = { russian = true, Settings = function() return settings end }
 function ui.Checkbox(parent) return new("CheckButton", nil, parent) end
 ui.Slider = ui.Checkbox
+-- Gryphon holders (StockPanels.lua creates them before EditMode.lua loads).
+ui.GryphonHolders = { "ForeverStockUILeftGryphon", "ForeverStockUIRightGryphon" }
+for _, name in ipairs(ui.GryphonHolders) do new("Frame", name, UIParent) end
 assert(loadfile("EditLayouts.lua"))("ForeverUI", ui)
 assert(loadfile("EditMode.lua"))("ForeverUI", ui)
 for frame in pairs(eventFrames) do
@@ -238,5 +241,18 @@ local lookAt
 ui.ActionBars = { Apply = function() lookAt = lookAt or settings.barLayout end }
 assert(ui.ApplyEditLayout("retail"), "Retail layout started")
 assert(settings.barLayout == "retail" and lookAt == "retail", "Retail look applied before measuring")
+
+-- Gryphons: own overlays, one saved spot per layout.
+assert(overlayFor("Левый грифон") and overlayFor("Правый грифон"), "each gryphon has its own overlay")
+local leftSpot = settings.editLayout.ForeverStockUILeftGryphon
+leftSpot.position = { -800, -600 } -- dragged in Retail before per-layout spots existed
+ui.ApplyEditLayout("classic")
+assert(leftSpot.position == nil, "Classic has no saved spot: default place")
+assert(leftSpot.positions.retail[1] == -800 and leftSpot.positions.retail[2] == -600, "Retail spot kept")
+leftSpot.position, leftSpot.positions.classic = { -100, -900 }, { -100, -900 }
+ui.ApplyEditLayout("retail")
+assert(leftSpot.position[1] == -800 and leftSpot.position[2] == -600, "Retail spot back")
+ui.ApplyEditLayout("classic")
+assert(leftSpot.position[1] == -100, "Classic spot back")
 
 print("EditModeFrames OK: Retail look before measuring, pet and totem grids, buff and debuff grids, row limit, hiding auras, Show switch, popup sliders")

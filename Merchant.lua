@@ -91,6 +91,49 @@ local function updateButton()
     placeButton()
 end
 
+-- Items the character cannot use are red, like in the stock client: icon and slot border (r, 0, 0).
+-- The stock verdict (isUsable of GetMerchantItemInfo) is kept; the tooltip check (ui.ItemUsability)
+-- adds what it misses (an item the client had not cached yet, the buyback page). Runs after every
+-- stock update, so a new page, a buyback tab and a MERCHANT_UPDATE are covered.
+local function itemIcon(itemButton)
+    local name = itemButton:GetName()
+    return (name and _G[name .. "IconTexture"]) or itemButton.icon or itemButton.Icon
+end
+
+local function paintMerchant()
+    local U = ui.ItemUsability
+    if not U or not MerchantFrame or not MerchantFrame:IsShown() then return end
+    local buyback = MerchantFrame.selectedTab == 2
+    local perPage = buyback and (BUYBACK_ITEMS_PER_PAGE or 12) or (MERCHANT_ITEMS_PER_PAGE or 10)
+    local page = MerchantFrame.page or 1
+    local waiting = false
+    for i = 1, perPage do
+        local itemButton = _G["MerchantItem" .. i .. "ItemButton"]
+        if itemButton and itemButton:IsShown() then
+            local link, usable, available = nil, true, nil
+            if buyback then
+                link = GetBuybackItemLink and GetBuybackItemLink(i)
+            else
+                local index = (page - 1) * perPage + i
+                local _, _, _, _, numAvailable, isUsable = GetMerchantItemInfo(index)
+                link = GetMerchantItemLink(index)
+                usable, available = isUsable and true or false, numAvailable
+            end
+            local cannot = U.CannotUse(link)
+            if cannot == nil and link then waiting = true end
+            local red = link ~= nil and (not usable or cannot == true)
+            local shade = available == 0 and 0.5 or 0.9
+            U.Paint(itemIcon(itemButton), red, shade)
+            U.Paint(itemButton.GetNormalTexture and itemButton:GetNormalTexture(), red, shade)
+            -- name plate and slot of the row, as the client does (1, 0, 0; 0.5 when sold out)
+            local plateShade = available == 0 and 0.5 or 1
+            U.Paint(_G["MerchantItem" .. i .. "NameFrame"], red, plateShade)
+            U.Paint(_G["MerchantItem" .. i .. "SlotTexture"], red, plateShade)
+        end
+    end
+    if waiting then U.Retry("merchant", paintMerchant) end
+end
+
 -- Repair, guild-bank and durability data reach the client after the window opens (most visibly right after a
 -- dungeon), and the stock code re-lays the repair buttons then; check the button again a little later.
 local recheck = CreateFrame("Frame")
@@ -129,7 +172,7 @@ events:RegisterEvent("PLAYER_LOGIN")
 events:SetScript("OnEvent", function(self, event)
     if event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
         if event == "MERCHANT_UPDATE" then
-            if MerchantFrame:IsShown() then updateButton() end
+            if MerchantFrame:IsShown() then updateButton() paintMerchant() end
             return
         end
         scheduleRecheck()
@@ -154,10 +197,15 @@ events:SetScript("OnEvent", function(self, event)
         updateButton()
     end)
     MerchantFrame:HookScript("OnShow", updateButton)
+    for _, name in ipairs({ "MerchantFrame_UpdateMerchantInfo", "MerchantFrame_UpdateBuybackInfo", "MerchantFrame_Update" }) do
+        if _G[name] then hooksecurefunc(name, paintMerchant) end
+    end
+    if ui.ItemUsability then ui.ItemUsability.OnChange(paintMerchant) end
     updateButton()
 end)
 
 ui.Merchant = {
     Apply = function() if settings then updateButton() end end,
     Sell = function() if settings then sellJunk() end end,
+    PaintUnusable = paintMerchant,
 }

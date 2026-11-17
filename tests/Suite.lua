@@ -78,6 +78,7 @@ function methods:SetVertexColor(...) self.color = { ... } end
 function methods:SetTexture(t) self.texture = t end
 function methods:GetTexture() return self.texture end
 function methods:SetStatusBarTexture(t) self.barTexture = t end
+function methods:GetStatusBarTexture() local bar = self return { GetTexture = function() return bar.barTexture end } end
 function methods:SetStatusBarColor(...) self.barColor = { ... } end
 function methods:SetBackdropBorderColor(...) self.borderColor = { ... } end
 function methods:GetName() return self.name end
@@ -118,6 +119,7 @@ RAID_CLASS_COLORS = { PRIEST = { r = 1, g = 1, b = 1 } }
 local combat, now = false, 100
 local printed = {}
 function InCombatLockdown() return combat end
+function GetCursorPosition() return 0, 0 end
 function GetTime() return now end
 function GetLocale() return "ruRU" end
 function GetAddOnMetadata() return "1.3.0" end
@@ -1353,6 +1355,374 @@ do
     RF.Apply()
 end
 
+---------------------------------------------------------------------------------------------------
+-- Raid anchor: left edge stays put when the width changes; drag handle moves the saved position
+---------------------------------------------------------------------------------------------------
+do
+    local anchor, raid = RF.anchor, Suite.Part("raid")
+    assert(RF.LeftPinnedOffset(100, 300, 1000) == -600, "right-corner offset for a left-pinned anchor")
+    local x, y = RF.ClampPosition(50, -9999, 200, 100, 1000, 800)
+    assert(x == 0 and y == 100 - 800, "clamped inside the screen")
+    x = RF.ClampPosition(-5000, 0, 200, 100, 1000, 800)
+    assert(x == 200 - 1000)
+
+    local entry = { config = { position = { -700, -50 }, width = 200 } }
+    anchor.editEntry = entry
+    anchor.GetLeft = function() return 100 end
+    UIParent.GetRight = function() return 1000 end
+    UIParent.GetTop = function() return 800 end
+    anchor:SetWidth(200)
+    RF.ResizeAnchor(300, 100)      -- more players: wider, left edge stays at 100
+    assert(entry.config.position[1] == -600 and entry.config.position[2] == -50, "grows to the right")
+    local point, _, _, px, py = anchor:GetPoint()
+    assert(point == "TOPRIGHT" and px == -600 and py == -50)
+    RF.ResizeAnchor(150, 100)      -- players left: narrower, left edge still 100
+    assert(entry.config.position[1] == -750, "shrinks to the right")
+    RF.ResizeAnchor(150.2, 100)
+    assert(entry.config.position[1] == -750, "no change below half a pixel")
+    assert(entry.config.width == 150.2 and entry.config.height == 100, "the size is saved with the position")
+    -- /reload: the anchor still stands at its default place (left, by the chat) with its default size
+    -- when the buttons are measured; the saved position must survive that
+    entry.config.position, entry.config.width = { -600, -50 }, 300
+    anchor.GetLeft = function() return 22 end
+    anchor:SetWidth(220)
+    RF.ResizeAnchor(300, 100)
+    assert(entry.config.position[1] == -600 and entry.config.position[2] == -50, "same size: the saved place stays")
+    RF.ResizeAnchor(500, 100)
+    assert(entry.config.position[1] == -400, "wider: the left edge of the SAVED place stays (100), not the default one")
+    -- a position saved by an older version (no width): the right corner is kept, the width recorded
+    entry.config.position, entry.config.width = { -600, -50 }, nil
+    RF.ResizeAnchor(250, 100)
+    assert(entry.config.position[1] == -600 and entry.config.width == 250, "old saves keep their place")
+    -- login: the anchor takes the saved size and place before anything measures it
+    entry.config.position, entry.config.width, entry.config.height = { -480, -120 }, 360, 90
+    anchor:ClearAllPoints()
+    anchor:SetWidth(220)
+    RF.RestoreAnchor()
+    local rp, rrel, rrp, rx, ry = anchor:GetPoint()
+    assert(anchor:GetWidth() == 360 and anchor:GetHeight() == 90 and rp == "TOPRIGHT" and rrel == UIParent
+        and rrp == "TOPRIGHT" and rx == -480 and ry == -120, "saved size and place restored at login")
+    anchor.GetLeft = function() return 100 end
+    entry.config.position, entry.config.width, entry.config.height = nil, nil, nil
+    RF.ResizeAnchor(400, 100)
+    assert(entry.config.position == nil and anchor:GetWidth() == 400, "no saved position: nothing is written")
+    RF.RestoreAnchor()
+
+    -- drag handle
+    raid.rfEnabled, raid.rfHandle, raid.rfMoveContainer = true, true, true
+    entry.config.position = { -500, -100 }
+    cursorX, cursorY = 300, 400
+    RF.StartHandleDrag()
+    assert(RF.IsHandleDragging(), "drag started")
+    cursorX, cursorY = 340, 380
+    RF.handle.scripts.OnUpdate(RF.handle)
+    assert(entry.config.position[1] == -460 and entry.config.position[2] == -120, "position follows the cursor")
+    assert(entry.config.width == anchor:GetWidth() and entry.config.height == anchor:GetHeight(),
+        "the drag saves the size with the position")
+    local hp, hrel, hrp = RF.handle:GetPoint()
+    assert(hp == "BOTTOMLEFT" and hrel == anchor and hrp == "TOPLEFT", "the handle rides on the group while dragging")
+    cursorX, cursorY = 9999, -9999
+    RF.handle.scripts.OnUpdate(RF.handle)
+    assert(entry.config.position[1] == 0 and entry.config.position[2] == 100 - 800, "clamped on screen")
+    combat = true
+    RF.handle.scripts.OnUpdate(RF.handle)
+    assert(not RF.IsHandleDragging(), "combat ends the drag")
+    local saved = entry.config.position[1]
+    RF.StartHandleDrag()
+    assert(not RF.IsHandleDragging() and entry.config.position[1] == saved, "no drag in combat")
+    combat = false
+    raid.rfHandle = false
+    RF.StartHandleDrag()
+    assert(not RF.IsHandleDragging(), "handle can be turned off")
+    raid.rfHandle = true
+end
+
+---------------------------------------------------------------------------------------------------
+-- Pets under owners, sample frames, profiles bound to the group type
+---------------------------------------------------------------------------------------------------
+do
+    assert(RF.PetOwner("partypet2") == "party2" and RF.PetOwner("raidpet11") == "raid11" and RF.PetOwner("pet") == "player"
+        and RF.PetOwner("party2") == nil and RF.PetOwner(nil) == nil, "pet tokens map to owners")
+
+    -- sample layout: 5 players in a row, pets of players 4 and 5
+    local has = { false, false, false, true, true }
+    local under = RF.TemplateLayout(has, 5, 100, 40, 22, 2, true)
+    assert(under.cells[1][1] == 0 and under.cells[2][1] == 102 and under.cells[5][1] == 408 and under.cells[5][2] == 0)
+    assert(#under.pets == 2 and under.pets[1].owner == 4 and under.pets[1].x == under.cells[4][1]
+        and under.pets[1].y == -42 and under.pets[2].x == under.cells[5][1], "pets hang under their owners")
+    assert(under.width == 508 and under.height == 40 + 2 + 22, "size with the pet row")
+    local apart = RF.TemplateLayout(has, 5, 100, 40, 22, 2, false)
+    assert(apart.pets[1].x == 0 and apart.pets[2].x == 102 and apart.pets[1].y == -42, "pets in their own row at the end")
+    local two = RF.TemplateLayout({ false, false, false, false, false, false }, 5, 100, 40, 22, 2, true)
+    assert(two.cells[6][1] == 0 and two.cells[6][2] == -42 and two.height == 82, "second row of players")
+    assert(RF.TemplateLayout({}, 5, 100, 40, 22, 2, true).height == 0)
+
+    -- real buttons: owners side by side, the client put the pet at the end of the row
+    local raid = Suite.Part("raid")
+    raid.rfEnabled, raid.rfPetsUnder = true, true
+    local function make(name, unit, left)
+        local f = CreateFrame("Button", name, UIParent)
+        f.healthBar = CreateFrame("StatusBar", nil, f)
+        f.attributes.unit = unit
+        f.GetLeft = function() return left end
+        f.GetRight = function() return left + 100 end
+        f.GetTop = function() return 600 end
+        f.GetBottom = function() return 560 end
+        f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", left, -100)
+        return f
+    end
+    local owner1 = make("FuiTestOwner1", "raid1", 0)
+    local owner2 = make("FuiTestOwner2", "raid2", 102)
+    local pet = make("FuiTestPet", "raidpet2", 204)
+    for _, frame in ipairs({ owner1, owner2, pet }) do RF.Register(frame) end
+    fire("RAID_ROSTER_UPDATE")
+    tick(0.05)
+    RF.LayoutPets()
+    local point, relative, relativePoint, x, y = pet:GetPoint()
+    assert(point == "TOPLEFT" and relative == owner2 and relativePoint == "BOTTOMLEFT" and x == 0 and y == -2,
+        "the pet is hung under its owner")
+    -- off: the client lays it out again (nothing is moved by us)
+    local before = pet.points[1]
+    raid.rfPetsUnder = false
+    RF.LayoutPets()
+    assert(pet.points[1] == before, "turned off: no more moves")
+    -- vertical layout: nothing is moved
+    raid.rfPetsUnder = true
+    owner2.GetLeft = function() return 0 end
+    owner2.GetTop = function() return 560 end
+    pet:ClearAllPoints()
+    RF.LayoutPets()
+    assert(pet:GetNumPoints() == 0, "vertical layout: the client keeps the pets")
+    -- combat: queued, not moved
+    owner2.GetLeft = function() return 102 end
+    owner2.GetTop = function() return 600 end
+    combat = true
+    RF.LayoutPets()
+    assert(pet:GetNumPoints() == 0 and ui.HasCombatQueue(), "no move in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(pet:GetNumPoints() == 1 and select(2, pet:GetPoint()) == owner2, "moved after combat")
+
+    -- sample frames take the size of the real buttons
+    owner1.width, owner1.height, owner2.width, owner2.height = 165, 62, 165, 62
+    pet.width, pet.height = 165, 24
+    RF.EachFrame(function(f) if f ~= owner1 and f ~= owner2 and f ~= pet then f.shown = false end end)
+    local mw, mh, mpw, mph = RF.TemplateMetrics()
+    assert(mw == 165 and mh == 62 and mpw == 165 and mph == 24, "metrics follow the real buttons")
+    RF.SetEditKind(nil)
+    RF.SetTemplate(true)
+    local template = RF.template
+    assert(template:IsShown() and RF.templateShown and #template.cells == 5 and #template.pets == 2)
+    assert(template.cells[1].shown and not template.cells[6], "five players")
+    assert(template.cells[1].width == 165 and template.cells[1].height == 62 and template.pets[1].height == 24,
+        "sample cells have the real size")
+    owner1.width, owner1.height = 90, 36
+    owner2.width, owner2.height = 90, 36
+    RF.LayoutTemplate()
+    assert(template.cells[1].width == 90 and template.cells[1].height == 36, "a new size gets new cells")
+    -- one state per cell: one target, one hovered (none), one drinking, one threat
+    do
+        local targets, hovered, drinking, threat = 0, 0, 0, 0
+        for i = 1, 25 do
+            local _, data = RF.TemplateMember("raid25", i)
+            if data.target then targets = targets + 1 end
+            if data.hover then hovered = hovered + 1 end
+            if data.drink then drinking = drinking + 1 end
+            if data.threat then threat = threat + 1 end
+        end
+        assert(targets == 1 and hovered == 0 and drinking == 1 and threat == 1, "each state on one sample cell only")
+    end
+    RF.editKind = "raid25"
+    RF.LayoutTemplate()
+    assert(#template.cells == 25 and template.cells[25].shown and #template.pets == 4, "raid of 25 with four pets")
+    RF.editKind = nil
+    RF.LayoutTemplate()
+    assert(template.cells[5].shown and #template.cells == 5 and #template.pets == 2, "party again: its own cells")
+    -- vertical client layout: groups become columns, pets a column to the right
+    local vert = RF.TemplateLayout({ false, false, false, true, true, false, false, false, false, false },
+        5, 100, 40, 22, 2, true, true)
+    assert(vert.cells[2][1] == 0 and vert.cells[2][2] == -42 and vert.cells[6][1] == 102 and vert.cells[6][2] == 0,
+        "vertical: groups are columns")
+    assert(vert.pets[1].x == 204 and vert.pets[1].y == 0 and vert.pets[2].y == -24 and vert.width == 304
+        and vert.height == 5 * 42 - 2, "vertical: pets in a column of their own")
+    fire("PLAYER_REGEN_DISABLED")
+    assert(not template:IsShown() and not RF.templateShown, "combat hides the sample frames")
+    assert(RF.ToggleTemplate() and template:IsShown())
+    RF.SetTemplate(false)
+    assert(not template:IsShown())
+
+    -- profiles bound to the group type
+    assert(Suite.NewProfile("Raider", Suite.ActiveProfileName()) and Suite.NewProfile("Dungeon", Suite.ActiveProfileName()))
+    Suite.SetSpecProfile(2, "")
+    Suite.SetProfile(Suite.DEFAULT_PROFILE)
+    Suite.SetGroupProfile("raid10", "Raider")
+    Suite.SetGroupProfile("party", "Dungeon")
+    assert(Suite.ActiveProfileName() == Suite.DEFAULT_PROFILE, "solo: nothing switches")
+    local realRaid, realParty = GetNumRaidMembers, GetNumPartyMembers
+    GetNumPartyMembers = function() return 4 end
+    fire("PARTY_MEMBERS_CHANGED")
+    assert(Suite.ActiveProfileName() == "Dungeon", "a party takes the dungeon profile")
+    GetNumRaidMembers = function() return 10 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(Suite.ActiveProfileName() == "Raider", "a raid takes the raid profile")
+    GetNumRaidMembers = function() return 20 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(Suite.ActiveProfileName() == "Raider" or Suite.ActiveProfileName() == "Dungeon"
+        or Suite.ActiveProfileName() == Suite.DEFAULT_PROFILE, "raid 25 without a binding")
+    Suite.SetGroupProfile("raid25", "Dungeon")
+    assert(Suite.ActiveProfileName() == "Dungeon", "a raid of 20 takes the raid 25 profile")
+    Suite.SetGroupProfile("raid25", "")
+    GetNumRaidMembers = function() return 10 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(Suite.ActiveProfileName() == "Raider")
+    GetNumRaidMembers = realRaid
+    combat = true
+    fire("PARTY_MEMBERS_CHANGED")
+    assert(Suite.ActiveProfileName() == "Raider" and ui.HasCombatQueue(), "no switch in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(Suite.ActiveProfileName() == "Dungeon", "after combat the party profile")
+    GetNumPartyMembers = realParty
+    fire("PARTY_MEMBERS_CHANGED")
+    assert(Suite.ActiveProfileName() == Suite.DEFAULT_PROFILE, "leaving the group brings the earlier profile back")
+    assert(Suite.RenameProfile("Raider", "Raid25") and Suite.GroupProfile("raid10") == "Raid25", "rename follows the binding")
+    assert(Suite.DeleteProfile("Raid25") and Suite.GroupProfile("raid10") == nil, "delete clears the binding")
+    -- the old single raid binding counts for both raid sizes
+    Suite.CharDB().groupProfiles.raid = Suite.DEFAULT_PROFILE
+    assert(Suite.GroupProfile("raid10") == Suite.DEFAULT_PROFILE and Suite.GroupProfile("raid25") == Suite.DEFAULT_PROFILE
+        and Suite.CharDB().groupProfiles.raid == nil, "old raid binding migrates")
+    Suite.SetGroupProfile("raid10", "")
+    Suite.SetGroupProfile("raid25", "")
+    Suite.SetGroupProfile("party", "")
+    assert(Suite.DeleteProfile("Dungeon"))
+end
+
+---------------------------------------------------------------------------------------------------
+-- Raid frame settings per group type (party, raid 10, raid 25) and copying between them
+---------------------------------------------------------------------------------------------------
+do
+    local base = Suite.Part("raid")
+    base.rfNameSize, base.rfEnabled, base.rfPartyShow = 11, true, "client"
+    assert(RF.LiveKind() == "party" and RF.Settings() == base, "solo and party use the base table")
+    local r10 = RF.KindSettings("raid10")
+    assert(r10.rfNameSize == 11 and type(base.kinds.raid10) == "table", "raid 10 starts as a copy of the party")
+    assert(base.kinds.raid10.rfEnabled == nil and base.kinds.raid10.kinds == nil, "shared keys are not copied")
+    r10.rfNameSize = 14
+    assert(base.rfNameSize == 11 and base.kinds.raid10.rfNameSize == 14, "tuned apart")
+    r10.rfPartyShow = "always"
+    assert(base.rfPartyShow == "always" and base.kinds.raid10.rfPartyShow == nil, "shared keys go to the base")
+    base.rfPartyShow = "client"
+    r10.indicators[#r10.indicators + 1] = { name = "Only in raid 10", spell = "139", enabled = true }
+    local function has(list, name)
+        for _, entry in ipairs(list) do if entry.name == name then return true end end
+    end
+    assert(not has(base.indicators, "Only in raid 10"), "indicators are per group type too")
+    -- the live type follows the raid size
+    local realRaid = GetNumRaidMembers
+    GetNumRaidMembers = function() return 8 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(RF.LiveKind() == "raid10" and RF.Settings().rfNameSize == 14, "a raid of 8 uses the raid 10 settings")
+    GetNumRaidMembers = function() return 18 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(RF.LiveKind() == "raid25" and RF.Settings().rfNameSize == 11, "a raid of 18 uses the raid 25 settings")
+    -- the options page edits another type: its sample frames show, the real ones fade
+    local partyFrame = CompactPartyFrame or CreateFrame("Frame", "CompactPartyFrame", UIParent)
+    partyFrame:SetAlpha(1)
+    local kindEvents = 0
+    ui.RegisterCallback("RaidFramesKindChanged", function() kindEvents = kindEvents + 1 end, "TestKind")
+    RF.SetEditKind("raid10")
+    assert(RF.ViewKind() == "raid10" and RF.Settings().rfNameSize == 14 and kindEvents == 1)
+    assert(RF.templateShown and RF.autoTemplate and #RF.template.cells == 10, "editing another type shows its samples")
+    assert(partyFrame:GetAlpha() == 0, "the real frames fade under the samples")
+    assert(ui.GetOption("raidframes", "rfNameSize") == 14, "the options page reads the edited type")
+    ui.SetOption("raidframes", "rfNameSize", 15)
+    assert(base.kinds.raid10.rfNameSize == 15 and base.rfNameSize == 11, "the options page writes the edited type")
+    -- copy from: raid 25 takes the raid 10 settings
+    RF.SetEditKind("raid25")
+    assert(not RF.templateShown or RF.ViewKind() == "raid25")
+    assert(RF.CopyKind("raid10", "raid25") and RF.Settings().rfNameSize == 15 and has(RF.Settings().indicators, "Only in raid 10"),
+        "copy from raid 10")
+    assert(base.kinds.raid25.indicators ~= base.kinds.raid10.indicators, "a copy, not the same table")
+    assert(not RF.CopyKind("raid25", "raid25") and not RF.CopyKind("nope", "party"), "bad copies are refused")
+    assert(RF.CopyKind("raid10", "party") and base.rfNameSize == 15 and base.rfEnabled == true and type(base.kinds) == "table",
+        "copy into the party keeps the shared keys and the other types")
+    base.rfNameSize = 11
+    RF.SetEditKind(nil)
+    assert(RF.ViewKind() == "raid25" and not RF.editKind, "back to the live type")
+    assert(not RF.templateShown and partyFrame:GetAlpha() == 1, "the auto samples go, the real frames come back")
+    -- profile copies, exports and resets carry the group types
+    local text = Suite.Export({ raid = true })
+    local name = Suite.Import(text)
+    assert(name and Suite.DB().profiles[name].raid.kinds.raid10.rfNameSize == 15, "export keeps the group types")
+    Suite.DeleteProfile(name)
+    GetNumRaidMembers = realRaid
+    fire("RAID_ROSTER_UPDATE")
+    base.kinds = nil
+end
+
+---------------------------------------------------------------------------------------------------
+-- Party frames at login: client code defined late, frames generated after login, the client setup
+-- putting its own texture back, and a reset nobody hooks (restored by the sweep)
+---------------------------------------------------------------------------------------------------
+do
+    local CLIENT_BAR = "Interface\\RaidFrame\\Raid-Bar-Hp-Fill"
+    local raid = Suite.Part("raid")
+    raid.rfEnabled = true
+    assert(not RF.hookedGlobals.DefaultCompactUnitFrameSetup, "the mock client has no setup function at login")
+    function DefaultCompactUnitFrameSetup(frame) frame.healthBar:SetStatusBarTexture(CLIENT_BAR) end
+    function CompactUnitFrame_SetUpFrame(frame, func) func(frame) end
+    fire("ADDON_LOADED", "Blizzard_CompactRaidFrames")
+    assert(RF.hookedGlobals.DefaultCompactUnitFrameSetup and RF.hookedGlobals.CompactUnitFrame_SetUpFrame,
+        "client functions defined after login are hooked")
+    fire("PLAYER_ENTERING_WORLD")
+    local party = CompactPartyFrame or CreateFrame("Frame", "CompactPartyFrame", UIParent)
+    local partyWasShown = party.shown
+    party.shown = true
+    local function decoOf(frame)
+        local found
+        RF.EachFrame(function(f, d) if f == frame then found = d end end)
+        return found
+    end
+    local function newMember(name)
+        local member = CreateFrame("Button", name, party)
+        member.healthBar = CreateFrame("StatusBar", nil, member)
+        member.healthBar.width, member.healthBar.height = 70, 30
+        member.attributes.unit = "player"
+        return member
+    end
+    local member = newMember("ForeverTestPartyMember1")
+    CompactUnitFrame_SetUpFrame(member, DefaultCompactUnitFrameSetup)
+    local styled = member.healthBar.barTexture
+    assert(decoOf(member) and styled and styled ~= CLIENT_BAR, "a party frame generated after login is styled")
+    -- the client frame profile loads later and runs the setup again on the decorated frame
+    CompactUnitFrame_SetUpFrame(member, DefaultCompactUnitFrameSetup)
+    assert(member.healthBar.barTexture == styled, "the client setup does not leave its own texture")
+    DefaultCompactUnitFrameSetup(member)
+    assert(member.healthBar.barTexture == styled, "nor does the setup function alone")
+    -- a reset through a path that is not hooked: the half-second sweep restyles
+    member.healthBar:SetStatusBarTexture(CLIENT_BAR)
+    tick(0.6)
+    assert(member.healthBar.barTexture == styled, "the sweep puts the ForeverUI texture back")
+    -- entering the world in combat: the frame is styled once combat ends
+    combat = true
+    local late = newMember("ForeverTestPartyMember2")
+    CompactUnitFrame_SetUpFrame(late, DefaultCompactUnitFrameSetup)
+    assert(not decoOf(late) and late.healthBar.barTexture == CLIENT_BAR, "nothing is decorated in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(decoOf(late) and late.healthBar.barTexture == styled, "decorated and styled after combat")
+    -- the ForeverUI style off: the sweep leaves the client texture alone
+    raid.rfEnabled = false
+    RF.Apply()
+    member.healthBar:SetStatusBarTexture(CLIENT_BAR)
+    tick(0.6)
+    assert(member.healthBar.barTexture == CLIENT_BAR, "no restyle while the style is off")
+    raid.rfEnabled = true
+    RF.Apply()
+    for _, frame in ipairs({ member, late }) do frame.shown = false end
+    party.shown = partyWasShown
+end
+
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
     .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators, visibility, exclusions), "
-    .. "option pages, action bar key binding, options window resizing; %d frames"):format(#objects))
+    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets under owners, sample frames, group type profiles, frame settings per group type and copy; %d frames"):format(#objects))

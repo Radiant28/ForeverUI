@@ -508,7 +508,8 @@ local function buildManager(parent, width)
     itemList:SetPoint("TOPLEFT", 0, y)
 
     local right, rightWidth = 276, width - 276
-    local addSpell = W.Create(parent, { type = "text", label = L("ID, название, item:ID или slot:13", "ID, name, item:ID or slot:13") },
+    local addSpell = W.Create(parent, { type = "text", label = L("ID, название, item:ID или slot:13", "ID, name, item:ID or slot:13"),
+        spellDrop = { items = true } },
         su.Access(function() return state.add end, "spell", nil, nil), rightWidth)
     addSpell:SetPoint("TOPLEFT", right, y)
     local addKind
@@ -627,7 +628,7 @@ local function buildManager(parent, width)
     local itemGrid = hinted(su.Grid(parent, 0, y, width, 2))
     itemGrid:Header(L("Выбранный элемент", "Selected entry"))
     itemGrid:Add({ "select", L("Тип отслеживания", "Tracking type"), values = cdm.kinds }, it("kind"), false, hasItem)
-    itemGrid:Add({ "text", L("Заклинание / предмет", "Spell / item") }, su.Access(selectedItem, "spell", "", function(key, value)
+    itemGrid:Add({ "text", L("Заклинание / предмет", "Spell / item"), spellDrop = { items = true } }, su.Access(selectedItem, "spell", "", function(key, value)
         local entry = selectedItem()
         if entry then entry.spell = tonumber(value) or value end
         itemChanged(key)
@@ -643,16 +644,16 @@ local function buildManager(parent, width)
         it("duration"), false, itemKind("icd", "summon"))
     itemGrid:Add({ "range", L("Предупреждение до спадания, с", "Warn before it fades, s"), min = 0, max = 15, step = 0.5 },
         it("warn"), false, itemKind("debuff"))
-    itemGrid:Add({ "text", L("Подсветка при баффе-проке", "Glow while this proc buff is up") }, it("procAura", ""),
+    itemGrid:Add({ "text", L("Подсветка при баффе-проке", "Glow while this proc buff is up"), spellDrop = true }, it("procAura", ""),
         false, itemKind("cooldown"))
     itemGrid:Add({ "select", L("Категория", "Category"), values = categoryValues }, it("category", ""), false, itemKind("cooldown"))
     itemGrid:Add({ "toggle", L("Показывать активный эффект", "Show the active effect"),
         tooltip = hints.showActive }, it("showActive"), false, itemKind("cooldown"))
-    itemGrid:Add({ "text", L("Бафф активного эффекта", "Buff of the active effect") }, it("activeAura", ""), false,
+    itemGrid:Add({ "text", L("Бафф активного эффекта", "Buff of the active effect"), spellDrop = true }, it("activeAura", ""), false,
         itemKind("cooldown"))
     itemGrid:Add({ "toggle", L("Подсветка, когда доступно", "Glow when usable") }, it("glowUsable"), false, itemKind("cooldown"))
     itemGrid:Add({ "toggle", L("Скрывать неизученное", "Hide unlearned") }, it("hideUnknown"), false, itemKind("cooldown"))
-    itemGrid:Add({ "text", L("Требует заклинание / талант", "Requires spell / talent") }, it("requires", ""), false, hasItem)
+    itemGrid:Add({ "text", L("Требует заклинание / талант", "Requires spell / talent"), spellDrop = true }, it("requires", ""), false, hasItem)
     itemGrid:Add({ "select", L("Только для класса", "Class only"), values = classValues }, it("class", ""), false, hasItem)
     itemGrid:Add({ "select", L("Только для ветки талантов", "Talent tree only"), values = function()
         local entry = selectedItem()

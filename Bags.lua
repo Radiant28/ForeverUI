@@ -19,19 +19,8 @@ local backpackInset = {
 local lastBag = NUM_BAG_SLOTS or 4
 local settings, inventory, bank
 local relayout
-local equipmentTooltip
-local requirementsByLink = {}
 local automatic
 local poorColor = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[0] and ITEM_QUALITY_COLORS[0].hex or "|cff9d9d9d"
-local requirementPrefixes = {}
-for _, template in pairs({
-    ITEM_CLASSES_ALLOWED, ITEM_RACES_ALLOWED, ITEM_MIN_LEVEL, ITEM_LEVEL_RANGE, ITEM_LEVEL_RANGE_CURRENT,
-    ITEM_MIN_SKILL, ITEM_REQ_SKILL, ITEM_REQ_REPUTATION,
-}) do
-    local prefix = template:match("^(.-)%%") or template
-    if prefix ~= "" then requirementPrefixes[#requirementPrefixes + 1] = prefix end
-end
-
 local cyrillicLower = { ["Ё"] = "ё" }
 for index = 0, 31 do
     cyrillicLower[string.char(208, 144 + index)] = string.char(index < 16 and 208 or 209,
@@ -65,42 +54,16 @@ local function updateHighlight(button, isQuest, quality)
     end
 end
 
-local function isRedRequirement(line, subtype, slotName)
-    if not line then return false end
-    local text = line:GetText()
-    if not text then return false end
-    local r, g, b = line:GetTextColor()
-    if r <= 0.65 or g >= 0.30 or b >= 0.30 then return false end
-    if text == subtype or text == slotName then return true end
-    for _, prefix in ipairs(requirementPrefixes) do
-        if text:find(prefix, 1, true) == 1 then return true end
+-- Unusable items (armour or weapon type, class, level, skill, reputation, a known recipe): the shared tooltip
+-- check of ItemUsability.lua. nil while the client has no data yet: the bag is looked at again shortly.
+local function cannotUse(link)
+    local U = ui.ItemUsability
+    if not U or not link then return false end
+    local verdict = U.CannotUse(link)
+    if verdict == nil then
+        U.Retry("bags", function() if ui.Bags and ui.Bags.Refresh then ui.Bags.Refresh() end end)
     end
-    return false
-end
-
-local function cannotEquip(link, requiredLevel, subtype, equipSlot)
-    if requiredLevel and requiredLevel > UnitLevel("player") then return true end
-    local cached = requirementsByLink[link]
-    if cached ~= nil then return cached end
-
-    local tooltip = equipmentTooltip
-    tooltip:SetOwner(UIParent, "ANCHOR_NONE")
-    tooltip:ClearLines()
-    tooltip:SetHyperlink(link)
-    local lines = tooltip:NumLines()
-    local restricted = false
-    local name = tooltip:GetName()
-    local slotName = _G[equipSlot]
-    for index = 2, lines do
-        if isRedRequirement(_G[name .. "TextLeft" .. index], subtype, slotName)
-            or isRedRequirement(_G[name .. "TextRight" .. index], subtype, slotName) then
-            restricted = true
-            break
-        end
-    end
-    tooltip:Hide()
-    if lines > 1 then requirementsByLink[link] = restricted end
-    return restricted
+    return verdict == true
 end
 
 local function refreshBag(bag, query)
@@ -140,7 +103,7 @@ local function refreshBag(bag, query)
         end
         updateHighlight(button, isQuestItem, quality)
         local gear = equipSlot and equipSlot ~= ""
-        if gear and cannotEquip(link, requiredLevel, subtype, equipSlot) then
+        if link and cannotUse(link) then
             button.unusable:Show()
         else
             button.unusable:Hide()
@@ -630,7 +593,9 @@ local function createInventory(panel, isBank)
         divider:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT")
         divider:SetHeight(1)
 
-        local portraitFrame = CreateFrame("Frame", nil, window)
+        -- Named so the window skin (WindowSkin.lua, "Skins" page) can hide this ring and lift the title when it
+        -- dresses the bag window in the WoW Forever frame.
+        local portraitFrame = CreateFrame("Frame", name .. "PortraitFrame", window)
         portraitFrame:SetFrameLevel(window:GetFrameLevel() + 1)
         portraitFrame:SetSize(66, 66)
         portraitFrame:SetPoint("CENTER", window, "TOPLEFT", 17, -20 - headerExtra / 2)
@@ -643,7 +608,7 @@ local function createInventory(panel, isBank)
         portrait:SetSize(44, 44)
         portrait:SetPoint("CENTER", portraitFrame, "CENTER")
 
-        local title = window:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        local title = window:CreateFontString(name .. "TitleText", "OVERLAY", "GameFontNormalLarge")
         title:SetFont(STANDARD_TEXT_FONT, 14)
         title:SetPoint("LEFT", header, "LEFT", 44, 0)
         title:SetPoint("RIGHT", header, "RIGHT", -44, 0)
@@ -719,7 +684,6 @@ local function createInventory(panel, isBank)
             bags[id] = bag
         end
         window:SetScript("OnShow", function()
-            requirementsByLink = {}
             layout()
             refresh()
             if not isBank then setChecked(true) end
@@ -835,16 +799,12 @@ local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
 events:SetScript("OnEvent", function(self, event)
     if event ~= "PLAYER_LOGIN" then
-        if event == "PLAYER_LEVEL_UP" or event == "SKILL_LINES_CHANGED" or event == "UPDATE_FACTION"
-            or event == "PLAYER_EQUIPMENT_CHANGED" then requirementsByLink = {} end
         if event == "DISPLAY_SIZE_CHANGED" then relayout() else refresh() end
         return
     end
     self:UnregisterEvent(event)
     settings = ui.Settings()
     if IsAddOnLoaded("Bagnon") or settings.bagsEnabled == false then return end
-    equipmentTooltip = CreateFrame("GameTooltip", "ForeverStockInventoryEquipmentTooltip", UIParent, "GameTooltipTemplate")
-    equipmentTooltip:Hide()
     if ui.RegisterEditFrame then ui.RegisterEditFrame(MainMenuBarBackpackButton, nil, "bags") end
     inventory = createInventory(nil, false)
     connectBank(nil)

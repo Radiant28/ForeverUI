@@ -121,6 +121,36 @@ local function build(parent, width)
     specNote:SetPoint("TOPLEFT", 0, y)
     y = y - 44
 
+    local groupHeader = W.Header(parent, L("Привязка к типу группы", "Bind to group type"), width)
+    groupHeader:SetPoint("TOPLEFT", 0, y)
+    y = y - 30
+    local groupRows = {}
+    local third = math.floor((width - 2 * 16) / 3)
+    local groupLabels = { party = L("Группа (5)", "Party (5)"), raid10 = L("Рейд (10)", "Raid (10)"),
+        raid25 = L("Рейд (25)", "Raid (25)") }
+    for index, kind in ipairs({ "party", "raid10", "raid25" }) do
+        local row = W.Create(parent, { type = "select", label = groupLabels[kind], values = specValues }, {
+            get = function() return suite.GroupProfile(kind) or "" end,
+            set = function(value)
+                suite.SetGroupProfile(kind, value)
+                refresh()
+            end,
+        }, third)
+        row:SetPoint("TOPLEFT", (index - 1) * (third + 16), y)
+        groupRows[index] = row
+    end
+    y = y - 52
+    local groupNote = W.Description(parent, L("Профиль включается, когда вы входите в группу из 5 человек, в рейд до 10 "
+        .. "или в рейд больше 10 человек, и имеет приоритет над привязкой к талантам. Когда вы покидаете группу, "
+        .. "возвращается прежний профиль. Смена идёт вне боя. Настройки фреймов группы, рейда 10 и рейда 25 внутри "
+        .. "одного профиля разделены — их выбор на странице «Фреймы группы и рейда».", "The profile turns on when you "
+        .. "join a 5-man party, a raid of up to 10 or a raid of more than 10 and wins over the talent binding. When you "
+        .. "leave the group the earlier profile returns. Switching happens out of combat. Inside one profile the party, "
+        .. "raid 10 and raid 25 frame settings are kept apart: pick them on the “Party and raid frames” page."),
+        width)
+    groupNote:SetPoint("TOPLEFT", 0, y)
+    y = y - 44
+
     local exportHeader = W.Header(parent, L("Экспорт", "Export"), width)
     exportHeader:SetPoint("TOPLEFT", 0, y)
     y = y - 30
@@ -182,6 +212,7 @@ local function build(parent, width)
     refresh = function()
         active:Refresh()
         for _, row in ipairs(specRows) do row:Refresh() end
+        for _, row in ipairs(groupRows) do row:Refresh() end
         charText:SetText((L("Персонаж: %s\nАктивный набор талантов: %d", "Character: %s\nActive talent spec: %d")):format(
             suite.CharKey(), suite.TalentGroup()))
     end

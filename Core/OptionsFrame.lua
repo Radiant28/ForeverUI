@@ -756,6 +756,10 @@ ui.RegisterCallback("ModuleReset", function(id)
     if pages[id] and window and window:IsShown() then pages[id]:Refresh() end
     if tabs[id] then paintTab(tabs[id]) end
 end, "OptionsFrameReset")
+-- A module switched the table its page reads (e.g. raid frames: another group type): redraw it.
+ui.RegisterCallback("OptionsRefresh", function(id)
+    if pages[id] and window and window:IsShown() then pages[id]:Refresh() end
+end, "OptionsFrameRefresh")
 ui.RegisterCallback("ReloadPending", updateFooter, "OptionsFrameReload")
 ui.RegisterCallback("CombatQueued", updateFooter, "OptionsFrameCombat")
 ui.RegisterCallback("CombatQueueFlushed", updateFooter, "OptionsFrameFlush")
