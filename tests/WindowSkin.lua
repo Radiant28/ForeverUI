@@ -428,6 +428,38 @@ assert(friendsCloseArt.alpha == 0 and fs.closeFace.shown, "Forever close button"
 assert(fs.chrome.level > friendsList.level, "chrome above the inner frames")
 assert(addFriend.level > fs.chrome.level, "bottom buttons drawn above the frame's bottom edge")
 assert(fs.ground.sublevel == -8, "ground under everything")
+-- Guild bank: the money row sits right above the bottom tabs, so the bottom edge goes 10 px into the tabs (behind
+-- it); the side tabs are drawn over the chrome; its close button has no usual name and is found among the children.
+local gbank = CreateFrame("Frame", "GuildBankFrame", UIParent)
+gbank.w, gbank.h, gbank.level, gbank.top, gbank.bottom = 769, 512, 3, 612, 100
+local gbTab = CreateFrame("Button", "GuildBankFrameTab1", gbank); gbTab.level = 5; gbTab.top = 112
+local gbSide = CreateFrame("Frame", "GuildBankTab1", gbank); gbSide.level = 4
+local gbClose = CreateFrame("Button", "GuildBankFrameXCloseButton", gbank)
+gbank.shown = true
+fire("ADDON_LOADED", "Blizzard_GuildBankUI")
+local gst = WS.skins[gbank]
+assert(gst and gst.active, "guild bank skinned")
+assert(gst.chrome.points[2][5] == (112 - 100) - 10, "bottom edge 10 px into the tabs: clear of the money row")
+assert(gst.chrome.level > gbTab.level, "bottom tabs behind the bottom edge")
+assert(gbSide.level > gst.chrome.level, "side tabs over the chrome")
+assert(gst.closeButton == gbClose and gbClose.level > gst.chrome.level and gst.closeFace.shown,
+    "close button found among the children, WoW Forever face, over the chrome")
+assert(not WS.Recipes.AuctionFrame, "no auction house skin")
+-- A window without any close button gets one of its own; it goes with the chrome.
+local noClose = CreateFrame("Frame", "PetitionFrame", UIParent)
+noClose.w, noClose.h, noClose.level = 384, 512, 3
+noClose.shown = true
+fire("ADDON_LOADED", "Blizzard_Anything")
+local nst = WS.skins[noClose]
+assert(nst and nst.ownClose and nst.closeButton == nst.ownClose and nst.ownClose.shown, "own close button")
+local hidden
+HideUIPanel = function(frame) hidden = frame end
+nst.ownClose.scripts.OnClick(nst.ownClose)
+assert(hidden == noClose, "it closes the window")
+db.skinPetitionFrame = false
+WS.Apply()
+assert(not nst.ownClose.shown, "gone with the chrome")
+db.skinPetitionFrame = nil
 -- Its checkbox off: everything back.
 db.skinFriendsFrame = false
 WS.Apply()

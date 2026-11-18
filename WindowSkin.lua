@@ -245,7 +245,12 @@ local WINDOWS = {
     { "ItemTextFrame", "Книги и записки", "Books and notes", rect = { 11, -12, -32, 76 } },
     { "MacroFrame", "Макросы", "Macros", rect = { 11, -12, -32, 76 } },
     { "ItemSocketingFrame", "Инкрустация", "Socketing", rect = { 11, -12, -2, 31 } },
-    { "GuildBankFrame", "Гильдейский банк", "Guild bank", rect = { 11, -12, 0, 8 } },
+    -- The money row sits right above the bottom tabs: the bottom edge goes 10 px into the tabs (tabOverlap; 20 was
+    -- 10 px too low, checked in game), the tabs stay behind it; the side tabs of the bank (GuildBankTabN, right of the
+    -- window) stay above the right edge.
+    { "GuildBankFrame", "Гильдейский банк", "Guild bank", rect = { 11, -12, 0, 8 }, tabOverlap = 10,
+        above = { "GuildBankTab1", "GuildBankTab2", "GuildBankTab3", "GuildBankTab4", "GuildBankTab5", "GuildBankTab6",
+            "GuildBankTab7", "GuildBankTab8" } },
     { "LFRParentFrame", "Поиск рейда", "Raid browser", rect = { 11, -12, -3, 4 } },
     { "PVPParentFrame", "PvP", "PvP", rect = { 11, -12, -32, 76 } },
     { "BattlefieldFrame", "Поля боя", "Battlegrounds", rect = { 11, -12, -32, 76 } },
@@ -272,7 +277,7 @@ for _, w in ipairs(WINDOWS) do
     local recipe = { key = "skin" .. name, label = { w[2], w[3] }, generic = true, rect = w.rect, above = w.above,
         headerButtons = w.headerButtons, headerShare = w.headerShare, headerArt = w.headerArt, ground = w.ground,
         portrait = w.portrait, portraitScale = w.portraitScale, portraitWhole = w.portraitWhole, tabs = w.tabs,
-        icons = w.icons,
+        icons = w.icons, tabsOver = w.tabsOver, tabOverlap = w.tabOverlap,
         icon = w.icon, hide = w.hide }
     if w.slots then
         recipe.slots = {}
@@ -314,6 +319,7 @@ end
 
 local function restore(st)
     st.active = false                        -- first, so the model's OnShow hook lets it show again
+    if st.ownClose then st.ownClose:Hide() end  -- a close button of our own goes with the chrome
     for region, alpha in pairs(st.alpha) do region:SetAlpha(alpha) end
     for region, wasShown in pairs(st.shown) do
         if wasShown then region:Show() end
@@ -389,6 +395,49 @@ end
 
 -- Close button: every texture of the client (its states and the red CloseButton2X_Apply art) is made
 -- transparent and the WoW Forever button is drawn instead; pressing shows the pressed state, hovering the glow.
+-- The window's close button: by name first; else a child button named "...Close..." or showing the stock cross
+-- (the guild bank on Nozdor has none by the usual names, and its cross stayed hidden under the chrome). A window
+-- without any gets a close button of its own (it hides the window, the way the stock cross does).
+-- Strict on purpose: a wrong match is moved to the corner with its art faded (an icon button would lose its icon).
+local CLOSE_ART = { "ui%-panel%-minimizebutton%-up" }
+local function findCloseIn(frame, depth)
+    if depth > 2 or not frame.GetChildren then return end
+    for _, child in ipairs({ frame:GetChildren() }) do
+        if child.GetObjectType and child:GetObjectType() == "Button" then
+            local childName = child.GetName and child:GetName()
+            if childName and childName:find("CloseButton$") then return child end
+            local normal = child.GetNormalTexture and child:GetNormalTexture()
+            local path = normal and normal.GetTexture and normal:GetTexture()
+            if type(path) == "string" then
+                path = path:lower()
+                for _, art in ipairs(CLOSE_ART) do
+                    if path:find(art) then return child end
+                end
+            end
+        end
+        local found = findCloseIn(child, depth + 1)
+        if found then return found end
+    end
+end
+
+local function findClose(st, window, name)
+    local close = window.CloseButton or (name and _G[name .. "CloseButton"])
+    if close then return close end
+    -- Only the old 3.3.5 windows (rect recipes) are searched or get a close button of their own; the metal windows
+    -- of Nozdor carry theirs in the client's chrome.
+    if not (st.recipe and st.recipe.rect) then return nil end
+    close = findCloseIn(window, 0)
+    if close then return close end
+    if not st.ownClose then
+        st.ownClose = CreateFrame("Button", name and (name .. "ForeverClose") or nil, window)
+        st.ownClose:SetScript("OnClick", function()
+            if HideUIPanel then HideUIPanel(window) else window:Hide() end
+        end)
+    end
+    st.ownClose:Show()
+    return st.ownClose
+end
+
 local function skinClose(st, button)
     if not button or not button.CreateTexture then return end
     st.closeButton = button
@@ -1101,6 +1150,8 @@ local function updatePortrait(st)
     end
 end
 
+local portraitRetry = CreateFrame("Frame")
+
 local function create(window, recipe)
     local st = { window = window, recipe = recipe, tex = {}, alpha = {}, shown = {}, levels = {}, own = {}, rims = {},
         panels = {}, headers = {}, moved = {}, statPanels = {}, statHeaders = {}, parents = {}, stratas = {} }
@@ -1126,6 +1177,10 @@ local function create(window, recipe)
         end
     end
     skins[window] = st
+    -- Each time the window opens its ring portrait is drawn again (a portrait drawn before a loading screen is blank).
+    if window.HookScript then
+        window:HookScript("OnShow", function() if st.active then updatePortrait(st) end end)
+    end
     return st
 end
 
@@ -1187,7 +1242,7 @@ local function applyWindow(window, recipe)
             local tabTop = tab:IsShown() and tab:GetTop()
             if tabTop and (not edge or tabTop - baseBottom > edge) then edge = tabTop - baseBottom end
         end
-        return edge and edge - TAB_OVERLAP
+        return edge and edge - (recipe.tabOverlap or TAB_OVERLAP)
     end
     if metal or not recipe.rect then
         -- The new chrome follows the client's metal chrome: most windows have it all over the window, the merchant's
@@ -1212,7 +1267,8 @@ local function applyWindow(window, recipe)
         local r = recipe.rect
         local bottom = r[4] - RECT_BOTTOM
         local edge = tabEdge(window)
-        if edge and edge > 0 then bottom = edge end
+        -- A window with its own tabOverlap may take the edge below the window's own bottom.
+        if edge and (edge > 0 or recipe.tabOverlap) then bottom = edge end
         chrome:SetPoint("TOPLEFT", window, "TOPLEFT", r[1] - RECT_SIDE, r[2] + raiseTop)
         chrome:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", r[3] + RECT_SIDE, bottom)
         -- The old window art (border, background, its painted inner frames) goes, like ElvUI's StripTextures:
@@ -1224,7 +1280,7 @@ local function applyWindow(window, recipe)
 
     -- The new chrome lies above everything inside the window (inner panels reach the window's edges), and the
     -- client's chrome (its title) and the close button are lifted just above it.
-    local close = window.CloseButton or (name and _G[name .. "CloseButton"])
+    local close = findClose(st, window, name)
     -- The chrome's level, as an offset above the window, worked out once: the character window takes it above
     -- every inner frame (its stats panel reaches the bottom edge); a metal window takes the level of the
     -- client's own chrome, as the client does; an old window goes just above its first two layers of frames.
@@ -1243,14 +1299,15 @@ local function applyWindow(window, recipe)
             top = topLevel(window, skip, 0, windowLevel, 1) + 1
         end
         -- The tabs hang behind the bottom edge (checked in game on the merchant): the chrome goes above them.
-        if name then
+        -- A window with tabsOver keeps its tabs over the edge instead (lifted below).
+        if name and not recipe.tabsOver then
             for _, tab in ipairs(windowTabs(name, recipe)) do
                 if tab.GetFrameLevel then top = math.max(top, tab:GetFrameLevel() + 1) end
             end
         end
         st.chromeOffset = math.max(top - windowLevel, 1)
     end
-    st.tabs = (name and not recipe.topLevel) and windowTabs(name, recipe) or {}
+    st.tabs = (name and not recipe.topLevel and not recipe.tabsOver) and windowTabs(name, recipe) or {}
     local level = windowLevel + st.chromeOffset
     chrome:SetFrameLevel(level)
     -- Frames that stay above the chrome, with their place relative to it (relevel() puts them back there).
@@ -1270,6 +1327,9 @@ local function applyWindow(window, recipe)
     lift(close, 1)
     skinClose(st, close)
     for _, n in ipairs(recipe.above or {}) do lift(_G[n], 0) end
+    if recipe.tabsOver and name then
+        for _, tab in ipairs(windowTabs(name, recipe)) do lift(tab, 0) end
+    end
     local left = close
     for _, n in ipairs(recipe.headerButtons or {}) do
         local button = _G[n]
@@ -1835,8 +1895,21 @@ events:SetScript("OnEvent", function(self, event, unit)
         hookWindows()
         lateTimer:Show()
     else
+        -- Unit portraits drawn by the client go blank after a loading screen (hearthstone, instance) until drawn
+        -- again: the player's portrait in the ring of windows without their own (talents) included.
         for _, st in pairs(skins) do
-            if st.active and (event == "PLAYER_ENTERING_WORLD" or unit == st.recipe.unit) then updatePortrait(st) end
+            local u = st.recipe.unit or st.ownUnit
+            if st.active and (event == "PLAYER_ENTERING_WORLD" or (u and unit == u)) then updatePortrait(st) end
+        end
+        if event == "PLAYER_ENTERING_WORLD" then
+            -- The portrait may not be ready yet at this event: drawn once more a second later.
+            local waited = 0
+            portraitRetry:SetScript("OnUpdate", function(self, elapsed)
+                waited = waited + elapsed
+                if waited < 1 then return end
+                self:SetScript("OnUpdate", nil)
+                for _, st in pairs(skins) do if st.active then updatePortrait(st) end end
+            end)
         end
     end
 end)

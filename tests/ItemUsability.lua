@@ -205,6 +205,11 @@ tips.mailBelt = { line("Mail belt"), line("Пояс", WHITE, "Кольчуга",
 check(U.CannotUse("mailBelt") == true, "verdict cached per link")
 fire("SKILL_LINES_CHANGED")
 check(changed == 1, "a change of the character tells the windows")
+fire("PLAYER_ENTERING_WORLD")
+check(changed == 1, "a loading screen does not recheck at once (tooltips still empty)")
+tick(2.1)
+check(changed == 2, "every window is checked again 2 s after a loading screen")
+changed = 1
 check(U.CannotUse("mailBelt") == false, "cache dropped when the character changes")
 tips.mailBelt = { line("Mail belt"), line("Пояс", WHITE, "Кольчуга", RED) }
 fire("PLAYER_LEVEL_UP")

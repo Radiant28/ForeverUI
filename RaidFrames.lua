@@ -1712,28 +1712,43 @@ end
 -- (left, next to the chat) until Edit Mode applies the saved one, and measuring it there overwrote
 -- the saved position with that default place.
 
+-- width, height: screen (UIParent) units, as measured from the shown buttons.
+-- The place is computed from a pinned point, not by adding to the last place: the middle (growth from the centre)
+-- or the left edge ("corner"), in screen units from UIParent's left (config.pinX). One wrong measure (the client
+-- container before its buttons show) then only lasts until the next right one, instead of shifting the group for
+-- good (checked in game after /reload). The pin is taken again from the saved spot whenever someone else wrote it
+-- (a drag, Edit Mode, the setup wizard): then the spot is no longer the one written here last (config.lastX).
 function RF.ResizeAnchor(width, height)
     local entry = editEntry()
     local config = entry and entry.config
     local position = savedPosition() and config.position
-    anchor:SetWidth(width)
-    anchor:SetHeight(height)
-    if not position then return end
     local ratio = anchor:GetEffectiveScale() / UIParent:GetEffectiveScale()
-    local savedWidth, savedHeight = config.width, config.height
-    local w, h = width * ratio, height * ratio
+    if ratio <= 0 then ratio = 1 end
+    anchor:SetWidth(width / ratio)
+    anchor:SetHeight(height / ratio)
+    if not position then return end
+    local savedWidth = config.width
+    local w, h = width, height
     config.width, config.height = w, h
+    local parentRight = UIParent:GetRight()
     -- No size saved with the position (saved by an older version): keep the right corner as it is.
-    if not (finite(savedWidth) and finite(position[1]) and finite(position[2])) then return end
-    if not finite(savedHeight) then savedHeight = nil end
-    if abs(savedWidth - w) <= 0.5 and (not savedHeight or abs(savedHeight - h) <= 0.5) then return end
-    local x, y = RF.GrowOffset(position[1], position[2], savedWidth, savedHeight, w, h, cfg().rfGrowth)
-    position[1], position[2] = x, y
+    if not (finite(savedWidth) and finite(position[1]) and finite(position[2]) and parentRight) then return end
+    local mode = cfg().rfGrowth == "corner" and "corner" or "center"
+    if config.pinMode ~= mode or not finite(config.pinX) or not finite(config.lastX)
+        or abs(config.lastX - position[1]) > 0.5 then
+        local left = parentRight + position[1] - savedWidth
+        config.pinX, config.pinMode = mode == "corner" and left or left + savedWidth / 2, mode
+    end
+    local left = mode == "corner" and config.pinX or config.pinX - w / 2
+    local x = RF.LeftPinnedOffset(left, w, parentRight)
+    config.lastX = x
+    if abs(x - position[1]) <= 0.5 then return end
+    position[1] = x
     attaching = true
     anchor:ClearAllPoints()
-    anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x / ratio, y / ratio)
+    anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x / ratio, position[2] / ratio)
     attaching = nil
-    return x, y
+    return x, position[2]
 end
 
 -- At login: the anchor takes its saved size and place at once, before anything measures it.
@@ -1759,7 +1774,9 @@ function RF.SyncAnchor()
     hookContainer(raid)
     hookContainer(party)
     local left, bottom, right, top = buttonBounds()
-    if not left then
+    -- No button shown yet (right after /reload): the client container keeps the size of a full raid. It may size
+    -- an anchor that has no saved place; a saved place is never re-centred on that size.
+    if not left and not savedPosition() then
         local source = (raid and raid:IsShown() and raid) or (party and party:IsShown() and party)
         if source then left, bottom, right, top = screenRect(source) end
     end

@@ -1425,6 +1425,17 @@ do
     assert(entry.config.position[1] == -650, "shrinks towards the middle")
     RF.ResizeAnchor(200, 300)      -- vertical: more players inside the groups
     assert(entry.config.position[1] == -650 and entry.config.position[2] == -50, "the top stays, players grow down")
+    -- /reload: one wrong measure (the full-raid client container before the buttons show) does not stay.
+    entry.config.position, entry.config.width = { -600, -50 }, 300
+    RF.ResizeAnchor(300, 100)
+    RF.ResizeAnchor(900, 400)
+    assert(entry.config.position[1] == -300, "the wrong measure moves it for a moment")
+    RF.ResizeAnchor(300, 100)
+    assert(entry.config.position[1] == -600, "the next right measure puts it back exactly")
+    -- A spot written by someone else (a drag, Edit Mode) becomes the new middle.
+    entry.config.position = { -300, -50 }
+    RF.ResizeAnchor(500, 100)
+    assert(entry.config.position[1] == -200, "re-pinned on the dragged spot, then grows from its middle")
     RF.ResizeAnchor(200, 100)      -- the size the drag handle checks below expect
     entry.config.position, entry.config.width, entry.config.height = nil, nil, nil
     raid.rfGrowth = nil

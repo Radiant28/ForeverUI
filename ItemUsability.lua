@@ -164,7 +164,8 @@ function U.Retry(key, fn)
         entry.fn = fn
         return
     end
-    retries[key] = { fn = fn, left = 6 }
+    -- Up to ~6 s: right after a loading screen the client answers item tooltips late.
+    retries[key] = { fn = fn, left = 15 }
     retryWait = 0
     retryFrame:Show()
 end
@@ -224,4 +225,22 @@ for _, event in ipairs({ "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED", "UPDATE_FACTI
     "CHARACTER_POINTS_CHANGED", "PLAYER_TALENT_UPDATE" }) do
     pcall(events.RegisterEvent, events, event)
 end
-events:SetScript("OnEvent", U.Reset)
+events:RegisterEvent("PLAYER_ENTERING_WORLD")
+-- After a loading screen (hearthstone, instance) tooltips come back empty for a while and the red was lost: every
+-- window is checked again 2 s later.
+local reloadWait = CreateFrame("Frame")
+reloadWait:Hide()
+reloadWait:SetScript("OnUpdate", function(self, elapsed)
+    self.left = (self.left or 0) - elapsed
+    if self.left > 0 then return end
+    self:Hide()
+    U.Reset()
+end)
+events:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_ENTERING_WORLD" then
+        reloadWait.left = 2
+        reloadWait:Show()
+        return
+    end
+    U.Reset()
+end)
