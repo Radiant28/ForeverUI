@@ -667,6 +667,19 @@ ui.RegisterOptions("raidframes", {
                 default = true, width = "full", protected = true, apply = function() if RF() then RF().ApplyLayout() end end,
                 tooltip = L("Сброс позиции якоря в режиме редактирования возвращает управление клиенту.",
                     "Resetting the anchor in Edit Mode hands the position back to the client.") },
+            { "select", "rfGrowth", L("Рост группы", "Group growth"), default = "center", width = "full",
+                depends = "rfMoveContainer", values = {
+                    { "center", L("От центра в обе стороны", "From the centre to both sides") },
+                    { "corner", L("От левого верхнего угла", "From the top-left corner") },
+                },
+                tooltip = L("Когда игроки приходят и уходят, группа держит середину по ширине: в горизонтальном режиме "
+                    .. "влево и вправо расходятся игроки, в вертикальном — группы (колонки), а игроки внутри группы "
+                    .. "растут вниз. Верх группы стоит на месте. Работает, когда позиция группы сохранена в режиме "
+                    .. "редактирования; в бою — после боя.",
+                    "When players join and leave, the group keeps its horizontal middle: horizontally the players "
+                    .. "spread left and right, vertically the groups (columns) do, and players inside a group grow "
+                    .. "downwards. The top stays. Works once the group position is saved in Edit Mode; in combat, "
+                    .. "after combat.") },
             { "toggle", "rfPetsUnder", L("Питомцы под владельцами (горизонтальный режим)", "Pets under their owners (horizontal layout)"),
                 default = true, width = "full", protected = true, apply = function() if RF() then RF().Apply() end end,
                 tooltip = L("Кнопка питомца встаёт под кнопкой хозяина вместо отдельного ряда в конце. Только вне боя.",

@@ -255,4 +255,44 @@ assert(leftSpot.position[1] == -800 and leftSpot.position[2] == -600, "Retail sp
 ui.ApplyEditLayout("classic")
 assert(leftSpot.position[1] == -100, "Classic spot back")
 
-print("EditModeFrames OK: Retail look before measuring, pet and totem grids, buff and debuff grids, row limit, hiding auras, Show switch, popup sliders")
+-- Setup wizard API: a spot by point, a layout loaded in place, the stock spot back for frames without a position.
+local function runUpdates()
+    for _ = 1, 2 do
+        for frame in pairs(eventFrames) do
+            local update = frame.scripts.OnUpdate
+            if update then update(frame, 0.02) end
+        end
+    end
+end
+UIParent.w, UIParent.h = 1024, 768
+local EM = ui.EditMode
+local playerConfig = settings.editLayout.PlayerFrame
+PlayerFrame.points = { { "TOPLEFT", UIParent, "TOPLEFT", -19, -4 } }
+assert(EM.Place("PlayerFrame", "RIGHT", "CENTER", -170, -120), "player placed")
+-- 30 x 30 frame, its right edge 170 left of the centre, its middle 120 under it: TOPRIGHT offset -682, -489.
+assert(playerConfig.position[1] == -682 and playerConfig.position[2] == -489, "spot in Edit Mode format")
+local px, py = ui.ComputeEditPosition("TOPLEFT", "TOPLEFT", 20, -200, 220, 160, 1024, 768)
+assert(px == 20 + 220 - 1024 and py == -200, "top-left spot")
+px, py = ui.ComputeEditPosition("BOTTOMRIGHT", "BOTTOMRIGHT", -8, 108, 300, 120, 1024, 768)
+assert(px == -8 and py == 108 + 120 - 768, "bottom-right spot")
+runUpdates()
+assert(PlayerFrame:GetPoint(1) == "TOPRIGHT", "frame moved to the spot")
+
+local leftGryphon = settings.editLayout.ForeverStockUILeftGryphon
+EM.LoadLayout({ PlayerFrame = { position = { -500, -300 }, scale = 1.2 }, SomeTracker = { position = { 1, 2 } } },
+    function(name) return name == "ForeverStockUILeftGryphon" end)
+assert(settings.editLayout.PlayerFrame == playerConfig, "layout loaded in place: modules keep their table")
+assert(playerConfig.position[1] == -500 and playerConfig.scale == 1.2, "saved values copied")
+assert(settings.editLayout.SomeTracker.position[2] == 2, "new frames added")
+assert(settings.editLayout.ForeverStockUILeftGryphon == leftGryphon and leftGryphon.positions, "skipped entry untouched")
+assert(next(settings.editLayout.PetActionBarFrame) == nil, "frames missing from the layout lose their settings")
+runUpdates()
+assert(PlayerFrame.scale == 1.2, "scale applied")
+EM.LoadLayout({})
+assert(playerConfig.position == nil, "no position")
+assert(PlayerFrame:GetPoint(1) == "TOPLEFT" and select(4, PlayerFrame:GetPoint(1)) == -19, "stock spot back")
+assert(PlayerFrame.scale == 1, "stock scale back")
+assert(EM.SetBarStyle("retail") and settings.barLayout == "retail", "bar look without moving bars")
+EM.SetBarStyle("classic")
+
+print("EditModeFrames OK: Retail look before measuring, pet and totem grids, buff and debuff grids, row limit, hiding auras, Show switch, popup sliders, setup API (place, load in place, stock spots back)")

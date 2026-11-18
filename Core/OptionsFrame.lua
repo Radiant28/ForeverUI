@@ -804,6 +804,11 @@ SlashCmdList.FOREVERUI = function(input)
         StaticPopup_Show("FOREVERUI_RESET_ALL")
         return
     end
+    -- The setup wizard (Setup/Wizard.lua): /fui install, /fui copy.
+    if (command == "install" or command == "setup" or command == "copy") and ui.Setup and ui.Setup.Open then
+        ui.Setup.Open(command == "copy" and "copy" or "full")
+        return
+    end
     ui.ToggleOptions(command ~= "" and command or nil)
 end
 

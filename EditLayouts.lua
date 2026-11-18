@@ -7,6 +7,19 @@ local _, ui = ...
 -- Result out[key]: left/bottom = frame position, width/height = frame size; resizeWidth for the XP bars.
 local GAP, MARGIN, SIDE = 4, 6, 10
 
+-- The saved Edit Mode position (offset of the frame's TOPRIGHT corner from UIParent's) that puts `point` of a
+-- w x h frame at `relativePoint` of a parentW x parentH UIParent, shifted by x, y. Used by the setup wizard's layouts.
+local pointShare = {
+    TOPLEFT = { 0, 1 }, TOP = { 0.5, 1 }, TOPRIGHT = { 1, 1 }, LEFT = { 0, 0.5 }, CENTER = { 0.5, 0.5 },
+    RIGHT = { 1, 0.5 }, BOTTOMLEFT = { 0, 0 }, BOTTOM = { 0.5, 0 }, BOTTOMRIGHT = { 1, 0 },
+}
+function ui.ComputeEditPosition(point, relativePoint, x, y, w, h, parentW, parentH)
+    local p, r = pointShare[point] or pointShare.CENTER, pointShare[relativePoint] or pointShare.CENTER
+    local left = r[1] * parentW + x - p[1] * w
+    local bottom = r[2] * parentH + y - p[2] * h
+    return left + w - parentW, bottom + h - parentH
+end
+
 -- Retail arrangement: XP bar at the very bottom, the main bar and the two bottom bars stacked above it and
 -- centred, stance/pet/totem bars on top of the stack, the micro menu in the bottom-right corner with the bags above it.
 function ui.ComputeRetailLayout(m, screenWidth)

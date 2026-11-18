@@ -1179,6 +1179,96 @@ local function openEditor()
     editor:Show()
 end
 
+-- Setup wizard and per-character layouts (Setup/Profile.lua) -----------------------------------------------------
+-- Every entry is put back on its saved spot, or on the stock spot when it has none (a layout loaded in place may
+-- have dropped the position the frame stands on now).
+local function reapplyAll()
+    if InCombatLockdown() or not settings then return false end
+    stopDrag(true)
+    for _, entry in ipairs(entries) do
+        if entry.config and not entry.removed and not entry.docked and not held(entry) then
+            if not getPosition(entry) and entry.points then
+                restorePoints(entry)
+                if entry.resetPosition then entry.resetPosition() end
+            end
+            if not entry.slider and not number(entry.config.scale) and entry.defaultScale
+                and not entry.castOwner then
+                setScale(entry, entry.defaultScale)
+            end
+        end
+    end
+    if UIParent_ManageFramePositions then UIParent_ManageFramePositions() end
+    schedule()
+    return true
+end
+
+-- Copies a saved layout into the live table in place: every module keeps its reference to layout[name].
+-- skip(name) leaves an entry as it is (the Cooldown Manager swaps its own spots per talent tree).
+local function deepCopy(value)
+    if type(value) ~= "table" then return value end
+    local result = {}
+    for k, v in pairs(value) do result[k] = deepCopy(v) end
+    return result
+end
+
+local function loadLayout(source, skip)
+    if not settings then return false end
+    if type(settings.editLayout) ~= "table" then settings.editLayout = {} end
+    local live = settings.editLayout
+    source = type(source) == "table" and source or {}
+    for name, config in pairs(live) do
+        if type(config) == "table" and not (skip and skip(name)) and type(source[name]) ~= "table" then
+            for key in pairs(config) do config[key] = nil end
+        end
+    end
+    for name, config in pairs(source) do
+        if type(config) == "table" and not (skip and skip(name)) then
+            if type(live[name]) ~= "table" then live[name] = {} end
+            local target = live[name]
+            for key in pairs(target) do target[key] = nil end
+            for key, value in pairs(config) do target[key] = deepCopy(value) end
+        end
+    end
+    layout = live
+    for _, entry in ipairs(entries) do
+        if type(layout[entry.name]) ~= "table" then layout[entry.name] = {} end
+        entry.config = layout[entry.name]
+    end
+    return reapplyAll()
+end
+
+-- Size of a frame as Edit Mode measures it (UIParent units), members included.
+local function entrySize(entry)
+    local left, bottom, width, height = rect(entry.frame)
+    if not left then
+        local ratio = screenScale(entry.frame)
+        return (entry.frame:GetWidth() or 0) * ratio, (entry.frame:GetHeight() or 0) * ratio
+    end
+    local right, top = left + width, bottom + height
+    local function include(member)
+        if not member:IsShown() then return end
+        local x, y, w, h = rect(member)
+        if not x then return end
+        left, bottom = math.min(left, x), math.min(bottom, y)
+        right, top = math.max(right, x + w), math.max(top, y + h)
+    end
+    groupMembers(entry.members, include)
+    return right - left, top - bottom
+end
+
+-- Saves a spot for the named frame and moves it there on the next pass. size = { w, h } overrides the measure.
+local function place(name, point, relativePoint, x, y, size)
+    local entry = byName[name]
+    if not entry or not entry.config or not settings then return false end
+    local w, h = entrySize(entry)
+    if size then w, h = size[1] or w, size[2] or h end
+    local px, py = ui.ComputeEditPosition(point, relativePoint, x, y, w, h, UIParent:GetWidth(), UIParent:GetHeight())
+    -- The "Show" switch stays as the player left it.
+    entry.config.position = { px, py }
+    schedule()
+    return true
+end
+
 ui.EditMode = {
     Open = openEditor,
     ApplyLayout = function(name) return ui.ApplyEditLayout(name) end,
@@ -1188,6 +1278,24 @@ ui.EditMode = {
             if entry.overlay then entry.overlay.paint(false) end
         end
     end,
+    -- Switches the bar look (Classic / Retail art) without moving the bars.
+    SetBarStyle = function(style)
+        if not settings then return false end
+        setBarArt(style ~= "retail")
+        schedule()
+        return true
+    end,
+    LoadLayout = loadLayout,
+    Reapply = reapplyAll,
+    Place = place,
+    Size = function(name)
+        local entry = byName[name]
+        if entry then return entrySize(entry) end
+    end,
+    Entry = function(name) return byName[name] end,
+    Entries = function() return entries end,
+    IsOpen = function() return editor:IsShown() end,
+    Close = function() editor:Hide() end,
 }
 
 local menu = CreateFrame("Button", "ForeverStockUIEditModeButton", GameMenuFrame, "GameMenuButtonTemplate")

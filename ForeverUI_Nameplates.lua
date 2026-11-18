@@ -1662,6 +1662,8 @@ driver:SetScript("OnEvent", function(self, event, unit, ...)
     if event == "PLAYER_LOGIN" then
         self:UnregisterEvent(event)
         if IsAddOnLoaded("!!RefinedBlizzPlates") then return end
+        -- Switched off in the setup wizard or on the General page (account-wide, applies after /reload).
+        if ui.Settings and ui.Settings().nameplatesEnabled == false then return end
         LoadConfig()
         wfn.CreateOptions(ApplyCVars, defaults)
         wfn.RegisterSlash()

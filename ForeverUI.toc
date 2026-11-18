@@ -2,7 +2,7 @@
 ## Title: Forever UI
 ## Notes: WoW: Forever styling and equipment labels for the stock interface.
 ## Notes-ruRU: Оформление штатного интерфейса в стиле WoW: Forever и подписи экипировки.
-## Version: 1.3.6
+## Version: 1.4.0
 ## SavedVariables: ForeverStockUIDB, ForeverUI_NameplatesDB
 
 Libs\LibStub\LibStub.lua
@@ -82,3 +82,8 @@ Options\HealerMana.lua
 Options\PersonalResource.lua
 Options\ClickCast.lua
 Options\Profiles.lua
+
+# Setup wizard: per-character role, style, scale, layout and module switches
+Setup\Layouts.lua
+Setup\Profile.lua
+Setup\Wizard.lua

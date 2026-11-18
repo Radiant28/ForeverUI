@@ -1368,6 +1368,7 @@ do
 
     local entry = { config = { position = { -700, -50 }, width = 200 } }
     anchor.editEntry = entry
+    raid.rfGrowth = "corner"       -- the previous behaviour: the left edge stays
     anchor.GetLeft = function() return 100 end
     UIParent.GetRight = function() return 1000 end
     UIParent.GetTop = function() return 800 end
@@ -1407,6 +1408,26 @@ do
     RF.ResizeAnchor(400, 100)
     assert(entry.config.position == nil and anchor:GetWidth() == 400, "no saved position: nothing is written")
     RF.RestoreAnchor()
+
+    -- Growth from the centre (default): the horizontal middle stays, the top never moves.
+    local gx, gy = RF.GrowOffset(-600, -50, 300, 100, 500, 100, "center")
+    assert(gx == -500 and gy == -50, "half of the extra width to each side")
+    gx, gy = RF.GrowOffset(-600, -50, 300, 100, 500, 100, "corner")
+    assert(gx == -400 and gy == -50, "corner: all of it to the right")
+    gx, gy = RF.GrowOffset(-600, -50, 300, 100, 300, 180, "center")
+    assert(gx == -600 and gy == -50, "taller (more players in a group): the top stays")
+    raid.rfGrowth = "center"
+    assert(RF.defaults.rfGrowth == "center" and RF.sharedKeys.rfGrowth, "default and shared by party and raids")
+    entry.config.position, entry.config.width, entry.config.height = { -600, -50 }, 300, 100
+    RF.ResizeAnchor(500, 100)      -- horizontal: two more players / vertical: one more group column
+    assert(entry.config.position[1] == -500 and entry.config.position[2] == -50, "spreads left and right evenly")
+    RF.ResizeAnchor(200, 100)      -- players or a group left
+    assert(entry.config.position[1] == -650, "shrinks towards the middle")
+    RF.ResizeAnchor(200, 300)      -- vertical: more players inside the groups
+    assert(entry.config.position[1] == -650 and entry.config.position[2] == -50, "the top stays, players grow down")
+    RF.ResizeAnchor(200, 100)      -- the size the drag handle checks below expect
+    entry.config.position, entry.config.width, entry.config.height = nil, nil, nil
+    raid.rfGrowth = nil
 
     -- drag handle
     raid.rfEnabled, raid.rfHandle, raid.rfMoveContainer = true, true, true

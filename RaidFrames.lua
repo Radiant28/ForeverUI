@@ -38,7 +38,7 @@ local DEFAULTS = {
     rfShield = true, rfShieldTexture = "WoW Forever Raid", rfShieldColor = { 0.85, 0.95, 1, 1 }, rfShieldAlpha = 0.7,
     rfShieldHeight = 0, rfShieldMode = "attached", rfShieldAlign = "BOTTOM", rfHideAbsorbGlow = true,
     rfIndicators = true, rfIndicatorTimer = true,
-    rfMoveContainer = true, rfHandle = true, rfPetsUnder = true,
+    rfMoveContainer = true, rfHandle = true, rfPetsUnder = true, rfGrowth = "center",
     rfPartyShow = "client", rfRaidShow = "client",
     rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
     rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
@@ -192,7 +192,7 @@ RF.layoutKinds = { "party", "raid10", "raid25" }
 RF.kindLabels = { party = L("Группа (5)", "Party (5)"), raid10 = L("Рейд (10)", "Raid (10)"),
     raid25 = L("Рейд (25)", "Raid (25)") }
 RF.sharedKeys = { rfEnabled = true, rfPartyShow = true, rfRaidShow = true, rfMoveContainer = true, rfHandle = true,
-    kinds = true }
+    rfGrowth = true, kinds = true }
 local sharedKeys = RF.sharedKeys
 
 -- The group type the frames follow now: a raid of more than 10 is a raid of 25.
@@ -1690,15 +1690,27 @@ end
 -- Saved position = offset of the anchor's TOPRIGHT corner from UIParent's (Edit Mode format).
 -- When the number of shown buttons changes, so does the width: keep the LEFT edge where it was, so the
 -- group grows and shrinks to the right instead of drifting.
+local function finite(value) return type(value) == "number" and abs(value) < math.huge end
+
 function RF.LeftPinnedOffset(left, width, parentRight)
     return left + width - parentRight
+end
+
+-- New saved offset (x, y of the TOPRIGHT corner) when the group changes from savedW x savedH to w x h.
+--   center - the horizontal middle stays: players of a row (horizontal layout) or whole groups, one column each
+--            (vertical layout), spread left and right evenly; the top stays, so a group's players grow downwards
+--   corner - the top-left corner stays: it grows to the right and downwards
+-- The top never moves; savedH is kept for the signature (and older saves without it).
+function RF.GrowOffset(x, y, savedW, savedH, w, h, mode)
+    local dx = finite(savedW) and (w - savedW) or 0
+    if mode == "corner" then return x + dx, y end
+    return x + dx / 2, y
 end
 
 -- The left edge comes from the SAVED position and the width it was saved with (config.width, screen
 -- units), never from where the anchor stands now: after /reload the anchor sits at its default place
 -- (left, next to the chat) until Edit Mode applies the saved one, and measuring it there overwrote
 -- the saved position with that default place.
-local function finite(value) return type(value) == "number" and abs(value) < math.huge end
 
 function RF.ResizeAnchor(width, height)
     local entry = editEntry()
@@ -1708,19 +1720,20 @@ function RF.ResizeAnchor(width, height)
     anchor:SetHeight(height)
     if not position then return end
     local ratio = anchor:GetEffectiveScale() / UIParent:GetEffectiveScale()
-    local savedWidth, parentRight = config.width, UIParent:GetRight()
-    config.width, config.height = width * ratio, height * ratio
-    -- No width saved with the position (saved by an older version): keep the right corner as it is.
-    if not (finite(savedWidth) and parentRight and finite(position[1])) then return end
-    if abs(savedWidth - width * ratio) <= 0.5 then return end
-    local left = parentRight + position[1] - savedWidth
-    local x = RF.LeftPinnedOffset(left, width * ratio, parentRight)
-    position[1] = x
+    local savedWidth, savedHeight = config.width, config.height
+    local w, h = width * ratio, height * ratio
+    config.width, config.height = w, h
+    -- No size saved with the position (saved by an older version): keep the right corner as it is.
+    if not (finite(savedWidth) and finite(position[1]) and finite(position[2])) then return end
+    if not finite(savedHeight) then savedHeight = nil end
+    if abs(savedWidth - w) <= 0.5 and (not savedHeight or abs(savedHeight - h) <= 0.5) then return end
+    local x, y = RF.GrowOffset(position[1], position[2], savedWidth, savedHeight, w, h, cfg().rfGrowth)
+    position[1], position[2] = x, y
     attaching = true
     anchor:ClearAllPoints()
-    anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x / ratio, (position[2] or 0) / ratio)
+    anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x / ratio, y / ratio)
     attaching = nil
-    return x
+    return x, y
 end
 
 -- At login: the anchor takes its saved size and place at once, before anything measures it.
