@@ -518,8 +518,9 @@ local function createInventory(panel, isBank)
                 refresh()
             end)
         local leftmost = search
+        if ui.BagSort then leftmost = ui.BagSort.CreateButtons(window, leftmost, isBank, toolbarButton) end
         if keyring then
-            leftmost = toolbarButton(window, "KeyRing", search, ru and "Ключи" or "Keyring",
+            leftmost = toolbarButton(window, "KeyRing", leftmost, ru and "Ключи" or "Keyring",
                 "Interface\\Icons\\INV_Misc_Key_03", toggleKeys)
         end
         toggleBags:ClearAllPoints()
@@ -797,11 +798,17 @@ relayout = function()
     refresh()
 end
 
+local sortEvents = { BAG_UPDATE = true, ITEM_LOCK_CHANGED = true, BAG_UPDATE_COOLDOWN = true,
+    PLAYERBANKSLOTS_CHANGED = true }
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
 events:SetScript("OnEvent", function(self, event)
     if event ~= "PLAYER_LOGIN" then
-        if event == "DISPLAY_SIZE_CHANGED" then relayout() else refresh() end
+        if event == "DISPLAY_SIZE_CHANGED" then
+            relayout()
+        elseif not (sortEvents[event] and ui.BagSort and ui.BagSort.Busy()) then
+            refresh() -- while BagSort moves items it refreshes the grid itself, a few times a second
+        end
         return
     end
     self:UnregisterEvent(event)
