@@ -96,6 +96,14 @@ item("highLevel", 40, { line("Sword"), line("Требуется уровень 4
 item("broken", 10, { line("Helm"), line("Прочность 0 / 50", RED) })
 item("recipe", 10, { line("Recipe"), line("Требуется Портняжное дело (300)", RED) })
 DURABILITY_TEMPLATE = "Прочность %d / %d"
+-- Client requirement strings (ruRU) the check builds its patterns from.
+ITEM_MIN_LEVEL, ITEM_MIN_SKILL, ITEM_REQ_SKILL = "Требуется уровень %d", "Требуется %s (%d)", "Требуется %s"
+ITEM_CLASSES_ALLOWED, ITEM_SPELL_KNOWN = "Классы: %s", "Уже изучено"
+-- Another addon writes a red line into every tooltip (Auctionator prices): no requirement, the item stays usable.
+item("reagent", 10, { line("Ткань"), line("Хозяйственные товары"), line("Аукцион: нет данных", RED) })
+item("knownRecipe", 10, { line("Рецепт"), line("Уже изучено", RED) })
+item("classLocked", 10, { line("Tier helm"), line("Классы: Воин", RED) })
+item("lowRed", 10, { line("Ring"), line("a"), line("b"), line("c"), line("d"), line("e"), line("f", WHITE, "Цена", RED) })
 
 function GetItemInfo(link)
     local info = items[link]
@@ -182,6 +190,10 @@ check(U.CannotUse("highLevel") == true, "required level above the character: can
 check(U.CannotUse("broken") == false, "red durability of a broken item is no requirement")
 check(U.CannotUse("recipe") == true, "red skill requirement: cannot use")
 check(U.CannotUse(nil) == false, "no link: nothing to paint")
+check(U.CannotUse("reagent") == false, "a red line of another addon is no requirement")
+check(U.CannotUse("knownRecipe") == true, "already known: cannot use")
+check(U.CannotUse("classLocked") == true, "class requirement: cannot use")
+check(U.CannotUse("lowRed") == false, "a red right text far below the slot line is no armour type")
 item("late", 10, { line("Late belt"), line("Пояс", WHITE, "Кожа", RED) })
 items.late.loading = true
 check(U.CannotUse("late") == nil, "item data not there yet: no verdict (and none cached)")

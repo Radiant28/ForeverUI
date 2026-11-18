@@ -45,6 +45,40 @@ local function tooltip()
     return scanner
 end
 
+-- Only the client's own requirement lines count: other addons (Auctionator's price lines and others) write into
+-- every item tooltip, ours included, sometimes in red, and every reagent in the bank was painted (checked in game).
+-- Left lines: the requirement texts of the client (their part before the first %), and "Already known". Right
+-- lines near the top: the armour or weapon type next to the slot ("Plate", "Polearm").
+local requirementPrefixes, requirementWhole = {}, {}
+local function addPrefix(format)
+    if type(format) ~= "string" or format == "" then return end
+    local prefix = format:match("^(.-)%%") or format
+    prefix = prefix:gsub("%s+$", "")
+    if #prefix >= 3 then requirementPrefixes[#requirementPrefixes + 1] = prefix end
+end
+for _, name in ipairs({ "ITEM_MIN_LEVEL", "ITEM_REQ_SKILL", "ITEM_MIN_SKILL", "ITEM_REQ_REPUTATION",
+    "ITEM_REQ_ARENA_RATING", "ITEM_REQ_ARENA_RATING_3V3", "ITEM_REQ_ARENA_RATING_5V5", "ITEM_REQ_SPECIALIZATION",
+    "ITEM_CLASSES_ALLOWED", "ITEM_RACES_ALLOWED", "ITEM_REQ_PURCHASE_GROUP" }) do
+    addPrefix(_G[name])
+end
+for _, name in ipairs({ "ITEM_SPELL_KNOWN" }) do
+    if type(_G[name]) == "string" then requirementWhole[_G[name]] = true end
+end
+-- Equip type on the right: within the first lines (name, binding, unique, slot / type).
+local TYPE_LINES = 6
+
+local function requirementLine(left, right, index)
+    if isRed(left) then
+        local text = left:GetText()
+        if requirementWhole[text] then return true end
+        for _, prefix in ipairs(requirementPrefixes) do
+            if text:find(prefix, 1, true) == 1 then return true end
+        end
+    end
+    return index <= TYPE_LINES and isRed(right)
+end
+U.RequirementLine = requirementLine
+
 function U.CannotUse(link)
     if type(link) ~= "string" or link == "" then return false end
     local known = cache[link]
@@ -63,7 +97,7 @@ function U.CannotUse(link)
     local prefix = tip:GetName()
     local red = false
     for index = 2, lines do
-        if isRed(_G[prefix .. "TextLeft" .. index]) or isRed(_G[prefix .. "TextRight" .. index]) then
+        if requirementLine(_G[prefix .. "TextLeft" .. index], _G[prefix .. "TextRight" .. index], index) then
             red = true
             break
         end
