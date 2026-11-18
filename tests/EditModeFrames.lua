@@ -82,7 +82,13 @@ function CreateFrame(kind, name, parent, template)
 end
 
 local hooks = {}
-function hooksecurefunc(name, fn)
+function hooksecurefunc(target, name, fn)
+    if type(target) == "table" then
+        local old = target[name]
+        target[name] = function(...) local a, b, c = old(...); fn(...); return a, b, c end
+        return
+    end
+    name, fn = target, name
     local old = _G[name]
     _G[name] = function(...) local a, b, c = old(...); fn(...); return a, b, c end
 end
@@ -288,6 +294,11 @@ assert(settings.editLayout.ForeverStockUILeftGryphon == leftGryphon and leftGryp
 assert(next(settings.editLayout.PetActionBarFrame) == nil, "frames missing from the layout lose their settings")
 runUpdates()
 assert(PlayerFrame.scale == 1.2, "scale applied")
+-- The client re-anchors a unit frame after login: the saved spot wins on the next pass.
+PlayerFrame:ClearAllPoints()
+PlayerFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -19, -4)
+runUpdates()
+assert(PlayerFrame:GetPoint(1) == "TOPRIGHT" and select(4, PlayerFrame:GetPoint(1)) == -500, "saved spot back after the client moved it")
 EM.LoadLayout({})
 assert(playerConfig.position == nil, "no position")
 assert(PlayerFrame:GetPoint(1) == "TOPLEFT" and select(4, PlayerFrame:GetPoint(1)) == -19, "stock spot back")

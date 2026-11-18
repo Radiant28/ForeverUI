@@ -4,8 +4,8 @@ local function apply() if ui.Enchanting then ui.Enchanting.Apply() end end
 
 ui.RegisterOptions("enchanting", {
     title = L("Наложение чар", "Enchanting"),
-    description = L("Распыление выбранных предметов из сумки и переналожение чар на один предмет. Диагностика: /fuienchant.",
-        "Disenchant hand-picked bag items and repeat an enchant on one item. Diagnostics: /fuienchant."),
+    description = L("Кнопка распыления в сумке и переналожение чар на один предмет. Диагностика: /fuienchant.",
+        "A disenchant button in the bags and repeating an enchant on one item. Diagnostics: /fuienchant."),
     icon = "Interface\\Icons\\Trade_Engraving",
     group = "items", order = 35,
     enable = "enchantEnabled",
@@ -23,13 +23,13 @@ ui.RegisterOptions("enchanting", {
                 { "MOUSEWHEELUP", L("Колесо мыши вверх", "Mouse wheel up") },
                 { "ENTER", L("Enter", "Enter") },
                 { "NONE", L("Не назначать", "None") },
-            }, tooltip = L("Назначается только на время распыления или переналожения и после снимается. Каждое нажатие — следующий предмет, «Да» в окне замены чар или «Дальше»; пока идёт каст, нажатия ничего не делают (персонаж не прыгает и не сбивает каст).",
-                "Bound only while disenchanting or re-enchanting, then released. Each press does the next item, \"Yes\" in the replace dialog or \"Next\"; presses during a cast do nothing (no jump, the cast is not interrupted).") },
+            }, tooltip = L("Назначается только на время переналожения и после снимается. Каждое нажатие — «Да» в окне замены чар или «Дальше»; пока идёт каст, нажатия ничего не делают (персонаж не прыгает и не сбивает каст).",
+                "Bound only while re-enchanting, then released. Each press is \"Yes\" in the replace dialog or \"Next\"; presses during a cast do nothing (no jump, the cast is not interrupted).") },
         } },
         { title = L("Распыление", "Disenchanting"), options = {
             { "toggle", "enchantDisenchantButton", L("Кнопка распыления в сумке", "Disenchant button in bags"), default = true,
-                tooltip = L("Клик — режим выбора: отметьте предметы и подтвердите. Дальше каждый клик по кнопке или нажатие клавиши сессии распыляет следующий предмет: клиент разрешает каст только по клику или клавише.",
-                    "Click to pick items, then confirm. Each further click or session key press disenchants the next item: the client allows a cast only from a click or key press.") },
+                tooltip = L("Клик — курсор распыления, затем кликните по предмету. Пока курсор активен, предметы, которые нельзя распылить, затемнены (и при распылении из книги заклинаний).",
+                    "Click for the disenchant cursor, then click an item. While the cursor is up, items that cannot be disenchanted are dimmed (also with Disenchant from the spellbook).") },
         } },
         { title = L("Переналожение", "Re-enchanting"), options = {
             { "toggle", "enchantReenchant", L("Кнопка «Повторить» в окне профессии", "\"Repeat\" button in the profession window"),

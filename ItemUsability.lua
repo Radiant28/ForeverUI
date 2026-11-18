@@ -143,6 +143,48 @@ function U.Reset()
     for _, fn in ipairs(listeners) do fn() end
 end
 
+-- /fuiusable: what the check sees for the item under the mouse (hover it, then type the command; or pass a link).
+-- Prints the verdict, the level check and every coloured line of the scanned tooltip with its colour.
+local function report(link)
+    local print = function(text) DEFAULT_CHAT_FRAME:AddMessage("|cffe8c27aForever UI|r " .. text) end
+    if not link and GameTooltip and GameTooltip.GetItem and GameTooltip:IsShown() then link = select(2, GameTooltip:GetItem()) end
+    if not link then
+        print("/fuiusable: hover an item (bag, merchant, loot) and type the command again.")
+        return
+    end
+    cache[link] = nil
+    local ok, verdict = pcall(U.CannotUse, link)
+    local _, _, _, _, minLevel = GetItemInfo(link)
+    print(("item %s: verdict=%s (ok=%s) minLevel=%s player=%s"):format(link, tostring(verdict), tostring(ok),
+        tostring(minLevel), tostring(UnitLevel and UnitLevel("player"))))
+    local tip = tooltip()
+    tip:SetOwner(UIParent, "ANCHOR_NONE")
+    tip:ClearLines()
+    tip:SetHyperlink(link)
+    local prefix = tip:GetName()
+    print(("scanner lines: %d"):format(tip:NumLines() or 0))
+    for index = 1, tip:NumLines() or 0 do
+        for _, side in ipairs({ "TextLeft", "TextRight" }) do
+            local line = _G[prefix .. side .. index]
+            local text = line and line:GetText()
+            if text and text ~= "" then
+                local r, g, b = line:GetTextColor()
+                if not (r and r > 0.95 and g > 0.95 and b > 0.95) then
+                    print(("  %d %s: %.2f %.2f %.2f%s %s"):format(index, side, r or -1, g or -1, b or -1,
+                        isRed(line) and " RED" or "", (text:gsub("|", "||"))))
+                end
+            end
+        end
+    end
+    tip:Hide()
+end
+U.Report = report
+SLASH_FOREVERUIUSABLE1 = "/fuiusable"
+SlashCmdList.FOREVERUIUSABLE = function(input)
+    local link = input and input:match("|H.-|h.-|h") and input or nil
+    report(link)
+end
+
 local events = CreateFrame("Frame")
 for _, event in ipairs({ "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED", "UPDATE_FACTION", "LEARNED_SPELL_IN_TAB",
     "CHARACTER_POINTS_CHANGED", "PLAYER_TALENT_UPDATE" }) do

@@ -59,7 +59,9 @@ end
 local function cannotUse(link)
     local U = ui.ItemUsability
     if not U or not link then return false end
-    local verdict = U.CannotUse(link)
+    -- An error in the check must not stop the rest of the bag from being drawn.
+    local ok, verdict = pcall(U.CannotUse, link)
+    if not ok then return false end
     if verdict == nil then
         U.Retry("bags", function() if ui.Bags and ui.Bags.Refresh then ui.Bags.Refresh() end end)
     end

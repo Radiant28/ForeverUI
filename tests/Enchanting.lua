@@ -91,7 +91,8 @@ end
 function IsSpellKnown(id) return known[id] == true end
 local combat = false
 function InCombatLockdown() return combat end
-function GetAuctionItemClasses() return "Weapon", "Armor", "Container" end
+-- ForeverUI must not touch the auction house API: calling it fails the test.
+function GetAuctionItemClasses() error("auction house API used") end
 local itemInfo = {
     [100] = { "Green Sword", 2, "Weapon", "INVTYPE_WEAPON" },
     [101] = { "Blue Helm", 3, "Armor", "INVTYPE_HEAD" },
@@ -189,13 +190,34 @@ local driver
 for _, f in ipairs(frames) do if rawget(f.scripts, "OnUpdate") then driver = f end end
 local function tick(dt) now = now + (dt or 0.05); driver.scripts.OnUpdate(driver, dt or 0.05) end
 -- A press of the session key: the override binding clicks whatever button it points at.
+-- A click: PreClick, the secure action of the template (a "/use" macro uses the item: with the enchant cursor up
+-- the client applies the enchant to it, as a click on the item would), OnClick, PostClick.
+local secureUses = {}
+local function click(button, mouse)
+    mouse = mouse or "LeftButton"
+    if rawget(button.scripts, "PreClick") then button.scripts.PreClick(button, mouse) end
+    if button.attrs.type == "click" then
+        -- The secure "click" action presses the delegate button (Blizzard's own, untainted).
+        local delegate = button.attrs.clickbutton
+        if delegate and delegate.scripts.OnClick then delegate.scripts.OnClick(delegate, mouse) end
+    elseif button.attrs.type == "macro" then
+        local text = button.attrs.macrotext
+        secureUses[#secureUses + 1] = text
+        local bag, slot = text:match("^/use (%d+) (%d+)$")
+        if bag then
+            if targeting then targeting = false; appliedTo = "bag" .. bag .. ":" .. slot end
+        else
+            slot = text:match("^/use (%d+)$")
+            if targeting then targeting = false; appliedTo = "inv" .. slot end
+        end
+    end
+    if rawget(button.scripts, "OnClick") then button.scripts.OnClick(button, mouse) end
+    if rawget(button.scripts, "PostClick") then button.scripts.PostClick(button, mouse) end
+end
 local function press()
     local target = overrides.SPACE
     assert(target, "session key is bound")
-    local button = _G[target]
-    if rawget(button.scripts, "PreClick") then button.scripts.PreClick(button, "LeftButton") end
-    if rawget(button.scripts, "OnClick") then button.scripts.OnClick(button, "LeftButton") end
-    if rawget(button.scripts, "PostClick") then button.scripts.PostClick(button, "LeftButton") end
+    click(_G[target])
     return target
 end
 fire("PLAYER_LOGIN")
@@ -209,90 +231,74 @@ bags[0][1], bags[0][2], bags[0][3], bags[0][4], bags[0][5] = link(100, 0, 1), li
 assert(E.CanDisenchant(0, 1) and E.CanDisenchant(0, 2))
 assert(not E.CanDisenchant(0, 3) and not E.CanDisenchant(0, 4) and not E.CanDisenchant(0, 5), "grey, shirt, consumable")
 
--- Selection mode.
+-- Disenchant button: a plain Disenchant cast through the secure button laid over it while the bag is open.
 local deButton, secure = _G.ForeverStockUIDisenchantButton, _G.ForeverStockUIDisenchantSecure
-deButton.scripts.OnClick(deButton, "LeftButton")
 local de = E.disenchant
-assert(de.mode == "select")
 local function overlay(s) return E.Overlay(buttons[s]) end
-overlay(1).scripts.OnClick(overlay(1), "LeftButton")
-overlay(3).scripts.OnClick(overlay(3), "LeftButton")
-overlay(2).scripts.OnClick(overlay(2), "LeftButton")
-assert(#de.queue == 2 and de.queue[1].slot == 1 and de.queue[2].slot == 2, "invalid items are ignored")
-assert(overlay(3).dim.alpha > 0 and overlay(1).dim.alpha == 0, "ineligible items are dimmed")
-overlay(2).scripts.OnClick(overlay(2), "LeftButton")
-assert(#de.queue == 1, "second click unselects")
-overlay(2).scripts.OnClick(overlay(2), "LeftButton")
-assert(deButton.scripts and _G.ForeverStockUIDisenchantButton, "control exists")
-
--- Run: the secure button points at item 1.
-deButton.scripts.OnClick(deButton, "LeftButton")
-assert(de.mode == "run" and secure.shown)
-assert(secure.attrs.type == "spell" and secure.attrs.spell == "Disenchant" and secure.attrs["target-bag"] == 0
-    and secure.attrs["target-slot"] == 1)
--- The session key is bound to the secure button for the whole run.
+local currentSpell
+function IsCurrentSpell(name) return name == currentSpell end
+window:Show()
 tick(0.05)
-assert(overrides.SPACE == "ForeverStockUIDisenchantSecure")
--- Press: PreClick then the secure cast (target applied by the template), PostClick sees no targeting.
-assert(press() == "ForeverStockUIDisenchantSecure")
-assert(de.phase == "sent")
-assert(#used == 0)
-fire("UNIT_SPELLCAST_START", "player", "Disenchant")
-assert(de.phase == "casting")
--- Spamming the key mid-cast does nothing (and the key no longer reaches jump).
-press()
-assert(de.phase == "casting" and de.index == 1)
-bags[0][1] = nil
-fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Disenchant")
-fire("LOOT_OPENED")
-tick(3)
-assert(de.phase == "loot", "an open loot window holds the queue")
-fire("LOOT_CLOSED")
-tick(0.3)
-assert(de.index == 2 and de.phase == "ready" and secure.attrs["target-slot"] == 2)
-
--- The second item moved to slot 9: the queue follows it by key.
-bags[0][9], bags[0][2] = bags[0][2], nil
-secure.scripts.PreClick(secure, "LeftButton")
-assert(secure.attrs.type == nil, "a stale slot never casts")
-secure.scripts.PostClick(secure, "LeftButton")
-assert(secure.attrs["target-slot"] == 9 and de.phase == "ready")
--- Fallback for a template without target-bag: the cursor still targets after the click.
+assert(secure.shown and secure.attrs.type == "spell" and secure.attrs.spell == "Disenchant"
+    and secure.attrs["target-bag"] == nil, "a plain Disenchant cast, no target")
+assert(not _G.ForeverStockUIDisenchantCancel and deButton.scripts.OnClick, "no list mode left")
+-- Click: the cursor waits for an item; items that cannot be disenchanted are dimmed, the layer takes no clicks.
 secure.scripts.PreClick(secure, "LeftButton")
 targeting = true
-secure.scripts.PostClick(secure, "LeftButton")
-assert(used[1] == "0:9" and not targeting)
-fire("UNIT_SPELLCAST_SENT", "player", "Disenchant")
-bags[0][9] = nil
-fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Disenchant")
-tick(3) -- autoloot: no loot window, the timeout advances
-tick(0.3)
-assert(de.mode == "idle" and not secure.shown and secure.attrs.type == nil, "queue finished")
-assert(overrides.SPACE == nil, "the key is released after the run")
-assert(printed[#printed]:find("finished: 2"))
-
--- Combat stops a run and clears the secure button.
-bags[0][1] = link(100, 0, 11)
-deButton.scripts.OnClick(deButton, "LeftButton")
-overlay(1).scripts.OnClick(overlay(1), "LeftButton")
-deButton.scripts.OnClick(deButton, "LeftButton")
-assert(secure.attrs.type == "spell")
 tick(0.05)
-assert(overrides.SPACE)
+assert(de.dimmed, "dimmed while the cursor is up")
+assert(overlay(1).dim.alpha == 0 and overlay(2).dim.alpha == 0, "items that can be disenchanted stay bright")
+assert(overlay(3).dim.alpha > 0 and overlay(4).dim.alpha > 0 and overlay(5).dim.alpha > 0, "grey, shirt, consumable dimmed")
+assert(overlay(6).dim.alpha == 0, "empty slots are not dimmed")
+assert(overlay(3).mouse == false, "clicks go through to the item")
+-- The item is clicked: the cursor ends, the dimming goes.
+targeting = false
+tick(0.6)
+assert(not de.dimmed and not overlay(3).shown and de.armed == nil, "undimmed after the cast")
+-- Disenchant from the spellbook dims too; another targeting spell does not.
+targeting, currentSpell = true, "Disenchant"
+fire("CURRENT_SPELL_CAST_CHANGED")
+tick(0.05)
+assert(de.dimmed, "spellbook Disenchant dims")
+currentSpell = "Frost Nova"
+tick(0.05)
+assert(not de.dimmed, "other targeting spells do not dim")
+-- Bag changes while the cursor is up re-check the cells.
+currentSpell = "Disenchant"
+tick(0.05)
+bags[0][1] = link(102)
+fire("BAG_UPDATE")
+tick(0.05)
+assert(overlay(1).dim.alpha > 0, "re-checked after a bag change")
+targeting, currentSpell = false, nil
+tick(0.05)
+bags[0][1] = link(100, 0, 1)
+-- Combat hides the secure cover before the lockdown; it comes back after combat.
 fire("PLAYER_REGEN_DISABLED")
-assert(de.mode == "idle" and secure.attrs.type == nil and not secure.shown and overrides.SPACE == nil)
--- Closing the bag cancels selection.
-deButton.scripts.OnClick(deButton, "LeftButton")
+assert(not secure.shown, "hidden for combat")
+combat = true
+tick(0.05)
+assert(not secure.shown)
+combat = false
+fire("PLAYER_REGEN_ENABLED")
+tick(0.05)
+assert(secure.shown, "back after combat")
+-- Closing the bag hides the cover.
 window:Hide()
-assert(de.mode == "idle")
+tick(0.05)
+assert(not secure.shown, "bag closed")
 window:Show()
--- No disenchant spell: the button is disabled.
+tick(0.05)
+assert(secure.shown)
+-- No disenchant spell: the button is disabled and casts nothing.
 known[13262] = nil
 fire("SPELLS_CHANGED")
-assert(deButton.enabled == false)
-deButton.scripts.OnClick(deButton, "LeftButton")
-assert(de.mode == "idle")
+tick(0.05)
+assert(deButton.enabled == false and not secure.shown and secure.attrs.type == nil, "no spell, no cast")
 known[13262] = true
+fire("SPELLS_CHANGED")
+tick(0.05)
+assert(secure.shown and secure.attrs.type == "spell")
 
 -- Re-enchant: the repeat row and the one-time target pick.
 fire("ADDON_LOADED", "Blizzard_TradeSkillUI")
@@ -300,7 +306,15 @@ local reButton = _G.ForeverStockUIReenchantButton
 local re = E.reenchant
 ui.settings.enchantRepeatCount = 3
 fire("TRADE_SKILL_SHOW")
-assert(_G.ForeverStockUIReenchant.shown and reButton.text == "Repeat ×3")
+-- The count follows what the reagents allow (5 here)...
+assert(_G.ForeverStockUIReenchant.shown and reButton.text == "Repeat ×5", reButton.text)
+assert(ui.settings.enchantRepeatCount == 5 and _G.ForeverStockUIReenchantCount.text == 5, "max available filled in")
+-- ...until it is set by hand for the recipe: then updates keep the player's number.
+local minus = _G.ForeverStockUIReenchantMinus
+minus.scripts.OnClick(minus)
+minus.scripts.OnClick(minus)
+fire("TRADE_SKILL_UPDATE")
+assert(reButton.text == "Repeat ×3" and ui.settings.enchantRepeatCount == 3, "manual count kept")
 -- Outside a session the replace popup is left alone and the key is not bound.
 StaticPopup_Show("REPLACE_ENCHANT")
 tick(0.05)
@@ -308,7 +322,7 @@ assert(popups.REPLACE_ENCHANT and overrides.SPACE == nil and replaced == 0)
 popups.REPLACE_ENCHANT = nil
 
 inventory[15] = link(200, 1000, 5)
-reButton.scripts.OnClick(reButton, "LeftButton")
+click(reButton)
 assert(re.active and re.phase == "picking" and targeting)
 -- The user clicks the cloak on the character: the client applies the target, then asks to replace.
 PickupInventoryItem(15)
@@ -329,8 +343,11 @@ tick(0.4)
 assert(re.phase == "casting" and appliedTo == "inv15", "auto chain applies the remembered target")
 StaticPopup_Show("REPLACE_ENCHANT")
 tick(0.05)
-press()
-assert(replaced == 2)
+-- A mouse click on "Space: replace" does what the key does: Blizzard's Yes through the secure click action.
+assert(reButton.text == "Space: replace")
+click(reButton)
+assert(replaced == 2 and re.active and not popups.REPLACE_ENCHANT, "mouse click presses Blizzard's Yes")
+assert(reButton.attrs.type == nil and reButton.attrs.clickbutton == nil, "click action cleared")
 fire("UNIT_SPELLCAST_START", "player", "Enchant Cloak - Agility")
 fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Enchant Cloak - Agility")
 -- The client refuses DoTradeSkill outside a click: two tries, then step mode; the key presses "Next".
@@ -358,28 +375,64 @@ fire("ADDON_ACTION_FORBIDDEN", "OtherAddon", "CastSpellByName()")
 assert(E.blocked == "DoTradeSkill()")
 
 -- Remembered target reused; recipe change and a swapped item stop the session.
-reButton.scripts.OnClick(reButton, "LeftButton")
+click(reButton)
 assert(re.active and re.phase == "casting" and re.stepMode, "remembered target, no pick, step mode")
+assert(secureUses[#secureUses] == "/use 15" and appliedTo == "inv15", "a press applies the target with its secure /use")
+assert(reButton.attrs.type == nil and reButton.attrs.macrotext == nil, "the secure action is cleared after the click")
 fire("UNIT_SPELLCAST_START", "player", "Enchant Cloak - Agility")
 fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Enchant Cloak - Agility")
 TradeSkillFrame_SetSelection(2)
 assert(not re.active and printed[#printed]:find("recipe changed"))
 TradeSkillFrame_SetSelection(1)
 inventory[15] = link(200, 0, 99)
-reButton.scripts.OnClick(reButton, "LeftButton")
+click(reButton)
 assert(re.target == nil and re.phase == "picking", "a different cloak is not the remembered one")
 SpellStopTargeting()
 tick(0.2)
 assert(not re.active and printed[#printed]:find("no target"))
 -- Reagents.
 recipes[1][3] = 0
-reButton.scripts.OnClick(reButton, "LeftButton")
+click(reButton)
 assert(not re.active)
 recipes[1][3] = 5
+-- The client takes an auto-chained repeat but never casts it (no cast, no popup): no stop, the session goes
+-- on by presses and later sessions start that way.
+ui.settings.enchantAutoChainBlocked = nil
+inventory[15] = link(200, 1000, 5)
+click(reButton)
+PickupInventoryItem(15)
+fire("UNIT_SPELLCAST_START", "player", "Enchant Cloak - Agility")
+fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Enchant Cloak - Agility")
+tick(0.4)
+assert(re.phase == "casting" and re.auto, "auto chain applied the target")
+for _ = 1, 35 do tick(0.1) end
+assert(re.active and re.stepMode and re.phase == "wait_click", "silent drop: the session waits for a press")
+assert(ui.settings.enchantAutoChainBlocked == true and printed[#printed]:find("did not start the repeat"), "remembered")
+assert(press() == "ForeverStockUIReenchantButton" and re.phase == "casting" and not re.auto, "a press repeats")
+for _ = 1, 35 do tick(0.1) end
+assert(not re.active and printed[#printed]:find("did not start"), "a press that does not cast stops the session")
+-- No enchant cursor (the client refused DoTradeSkill): the press never runs "/use" (it would equip the item).
+ui.settings.enchantAutoChainBlocked = true
+inventory[15] = link(200, 1000, 5)
+local usesBefore = #secureUses
+tradeAllowed = false
+click(reButton)
+assert(#secureUses == usesBefore and not re.active, "no /use without the enchant cursor")
+tradeAllowed = true
+-- Stopping with the replace dialog up leaves the cursor alone (stopping it would close Blizzard's dialog from addon code).
+ui.settings.enchantAutoChainBlocked = true
+inventory[15] = link(200, 1000, 5)
+click(reButton)
+assert(re.active and re.phase == "casting", "session on the remembered cloak")
+targeting = true
+StaticPopup_Show("REPLACE_ENCHANT")
+click(reButton, "RightButton")
+assert(not re.active and targeting and popups.REPLACE_ENCHANT, "stopped, the dialog and its cursor untouched")
+popups.REPLACE_ENCHANT, targeting = nil, false
 -- Non-enchant recipe hides the row (the client shows its own "Create all" there).
 TradeSkillFrame_SetSelection(2)
 assert(not _G.ForeverStockUIReenchant.shown)
 
 assert(addonReplaced == 0 and addonTouchedPopup == 0, "the addon never calls ReplaceEnchant or StaticPopup_Hide")
 
-print("Enchanting OK: session key (disenchant, Blizzard Yes, Next, sink, released, combat), forbidden-action fallback, item keys, eligibility, selection, secure queue (moved item, loot wait, fallback target, combat, bag close), re-enchant (pick, replace only in session, auto chain, step mode, recipe change, target check, reagents)")
+print("Enchanting OK: session key (Blizzard Yes, Next, sink, released, combat), forbidden-action fallback, item keys, eligibility, disenchant button (plain cast, dimming, spellbook cast, bag changes, combat, bag close, no spell), re-enchant (pick, replace only in session, auto chain, step mode, recipe change, target check, reagents)")

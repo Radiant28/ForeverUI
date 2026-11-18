@@ -1,14 +1,13 @@
 local addonName, ui = ...
--- Enchanting helpers: (1) disenchant a hand-picked list of bag items, one key press or click per item;
--- (2) repeat the selected enchant on one remembered item N times; while that session runs the session key
--- presses "Yes" on REPLACE_ENCHANT.
+-- Enchanting helpers: (1) a disenchant button in the bags: the disenchant cursor, with every item that cannot be
+-- disenchanted dimmed while it is up; (2) repeat the selected enchant on one remembered item N times; while that
+-- session runs the session key presses "Yes" on REPLACE_ENCHANT.
 --
 -- Protected-API notes (3.3.5a):
 --  * Casting a spell from addon code is forbidden; it needs a hardware event on a secure button. Disenchant
---    therefore goes through ForeverStockUIDisenchantSecure (SecureActionButtonTemplate, type "spell" plus
---    "target-bag"/"target-slot"). Each click casts on the next queued item; between casts the attributes are
---    rewritten out of combat. The secure button is parented to UIParent and only *placed* over the bag
---    button by absolute coordinates, so the bag window never gets protected children or anchors.
+--    therefore goes through ForeverStockUIDisenchantSecure (SecureActionButtonTemplate, type "spell"). The
+--    secure button is parented to UIParent and only *placed* over the bag button by absolute coordinates, so
+--    the bag window never gets protected children or anchors.
 --  * DoTradeSkill and Pickup*/Use*Item while SpellIsTargeting are not protected: the repeat button is a
 --    plain button. Whether the client lets DoTradeSkill run outside a click is checked at run time: if the
 --    targeting cursor does not appear (or the client reports ADDON_ACTION_FORBIDDEN), the session falls back
@@ -41,7 +40,20 @@ local function spellName(id) return (GetSpellInfo(id)) end
 
 -- Read-only check (never call StaticPopup_Show/Hide from here: that taints Blizzard's dialogs).
 local function popupVisible(which)
-    return StaticPopup_Visible and StaticPopup_Visible(which)
+    -- Returns the dialog's frame name (the session key presses its first button).
+    local name = StaticPopup_Visible and StaticPopup_Visible(which)
+    if name then return name end
+    -- Clients may give the enchant popups their own names: any shown dialog about an enchant counts.
+    for i = 1, STATICPOPUP_NUMDIALOGS or 4 do
+        local popup = _G["StaticPopup" .. i]
+        local kind = popup and popup:IsShown() and popup.which
+        if type(kind) == "string" and kind:find("ENCHANT", 1, true)
+            and ((which == "REPLACE_ENCHANT" and kind:find("REPLACE", 1, true))
+                or (which == "BIND_ENCHANT" and kind:find("BIND", 1, true))) then
+            return "StaticPopup" .. i
+        end
+    end
+    return false
 end
 
 local function knowsSpell(id)
@@ -66,20 +78,17 @@ function E.ItemKey(link)
     return field(1) .. ":" .. field(7) .. ":" .. field(8)
 end
 
-local weaponClass, armorClass
 local skipSlots = { INVTYPE_BODY = true, INVTYPE_TABARD = true, INVTYPE_BAG = true, INVTYPE_QUIVER = true,
     INVTYPE_AMMO = true }
 
--- Returns ok, link. Uncommon..epic weapons and armour only (localized class names come from the auction
--- house list: first two entries are Weapon and Armor in every locale); shirts, tabards and quest items are out.
+-- Returns ok, link. Uncommon..epic weapons and armour only: an item with an equipment slot (ForeverUI does not
+-- touch the auction house, so its class list is not used); shirts, tabards, bags, ammo and quest items are out.
 function E.CanDisenchant(bag, slot)
     local link = GetContainerItemLink(bag, slot)
     if not link then return false end
-    if not weaponClass then weaponClass, armorClass = GetAuctionItemClasses() end
-    local _, _, quality, _, _, class, _, _, equipLoc = GetItemInfo(link)
+    local _, _, quality, _, _, _, _, _, equipLoc = GetItemInfo(link)
     if not quality or quality < 2 or quality > 4 then return false, link end
-    if class ~= weaponClass and class ~= armorClass then return false, link end
-    if skipSlots[equipLoc] then return false, link end
+    if type(equipLoc) ~= "string" or equipLoc == "" or skipSlots[equipLoc] then return false, link end
     if GetContainerItemQuestInfo then
         local isQuest, questID = GetContainerItemQuestInfo(bag, slot)
         if isQuest or questID then return false, link end
@@ -103,14 +112,16 @@ local driver = CreateFrame("Frame")
 driver:Hide()
 
 ----------------------------------------------------------------------------------------------------------
--- Feature 1: disenchant selection and queue
+-- Feature 1: disenchant button in the bags
 ----------------------------------------------------------------------------------------------------------
--- mode: "idle" | "select" | "run"; phase (run only): "ready" | "sent" | "casting" | "loot"
-local de = { mode = "idle", queue = {}, index = 0, done = 0 }
+-- A click on the button casts Disenchant like the spell from the spellbook: the cursor waits for an item and
+-- the player clicks it. The cast needs a hardware click on a secure button, so a secure spell button
+-- (ForeverStockUIDisenchantSecure) lies over the visible one. While the disenchant cursor is up (from this
+-- button or the spellbook) every bag item that cannot be disenchanted is dimmed; the dim layer takes no clicks.
+local de = { dimmed = false }
 E.disenchant = de
 local overlays = {}
-local ctrl, deButton, deIcon, deText, deCancel, secure
-local dirty
+local ctrl, deButton, deIcon, secure
 
 local function eachBagButton(fn)
     if ui.Bags and ui.Bags.Window and ui.Bags.Window() then
@@ -139,34 +150,56 @@ local function bagHost()
     if frame and frame:IsShown() and frame:GetID() == 0 then return frame end
 end
 
-local function queued(bag, slot)
-    for i, item in ipairs(de.queue) do
-        if item.bag == bag and item.slot == slot then return i end
-    end
+-- The dim layer of a bag cell: a plain frame that takes no mouse, so the click reaches the item underneath.
+function E.Overlay(button)
+    local overlay = overlays[button]
+    if overlay then return overlay end
+    overlay = CreateFrame("Frame", nil, button)
+    overlay:SetAllPoints(button)
+    overlay:SetFrameLevel(button:GetFrameLevel() + 6)
+    overlay:EnableMouse(false)
+    overlay.dim = overlay:CreateTexture(nil, "OVERLAY")
+    overlay.dim:SetTexture(white)
+    overlay.dim:SetVertexColor(0, 0, 0)
+    overlay.dim:SetPoint("TOPLEFT", overlay, "TOPLEFT", 2, -2)
+    overlay.dim:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", -2, 2)
+    overlay.dim:SetAlpha(0)
+    overlay:Hide()
+    overlays[button] = overlay
+    return overlay
 end
 
-local function findByKey(key, skip)
-    for bag = 0, NUM_BAG_SLOTS or 4 do
-        for slot = 1, GetContainerNumSlots(bag) do
-            if not (skip and skip[bag .. ":" .. slot]) and E.ItemKey(GetContainerItemLink(bag, slot)) == key then
-                return bag, slot
-            end
-        end
-    end
+-- The cursor waits for a disenchant target (cast from the button, or Disenchant from the spellbook).
+local function disenchantTargeting()
+    if not SpellIsTargeting() then return false end
+    if de.armed then return true end
+    local name = spellName(DISENCHANT_ID)
+    return (name and IsCurrentSpell and IsCurrentSpell(name)) and true or false
 end
+E.DisenchantTargeting = disenchantTargeting
 
-local function setSecure(bag, slot)
+local function refreshDim()
+    de.dirty = nil
+    -- Stock container buttons are reused for other bags, so every layer is hidden and re-bound each pass.
+    for _, overlay in pairs(overlays) do overlay:Hide() end
+    if not de.dimmed then return end
+    eachBagButton(function(button, bag, slot)
+        local overlay = E.Overlay(button)
+        local link = GetContainerItemLink(bag, slot)
+        overlay.dim:SetAlpha((link and not E.CanDisenchant(bag, slot)) and 0.7 or 0)
+        overlay:Show()
+    end)
+end
+E.RefreshDim = refreshDim
+
+local function setSecure()
     if not secure or InCombatLockdown() then return end
-    if bag then
+    if knowsSpell(DISENCHANT_ID) then
         secure:SetAttribute("type", "spell")
         secure:SetAttribute("spell", spellName(DISENCHANT_ID))
-        secure:SetAttribute("target-bag", bag)
-        secure:SetAttribute("target-slot", slot)
     else
         secure:SetAttribute("type", nil)
         secure:SetAttribute("spell", nil)
-        secure:SetAttribute("target-bag", nil)
-        secure:SetAttribute("target-slot", nil)
     end
 end
 
@@ -175,355 +208,16 @@ local function updateControl()
     local known = knowsSpell(DISENCHANT_ID)
     deIcon:SetDesaturated(not known)
     if known then deButton:Enable() else deButton:Disable() end
-    local text = ""
-    if de.mode == "select" then
-        text = (L("Подтвердить (%d)", "Confirm (%d)")):format(#de.queue)
-    elseif de.mode == "run" then
-        local total = #de.queue
-        if de.phase == "ready" then
-            text = (L("Распылить %d/%d", "Disenchant %d/%d")):format(de.index, total)
-            local key = E.KeyLabel and E.KeyLabel()
-            if key then text = text .. " [" .. key .. "]" end
-        else
-            text = (L("Ждём… %d/%d", "Waiting… %d/%d")):format(de.index, total)
-        end
-    end
-    deText:SetText(text)
-    deButton:SetWidth(deIcon:GetWidth() + (text ~= "" and deText:GetStringWidth() + 8 or 0))
-    if de.mode == "idle" then deCancel:Hide() else deCancel:Show() end
+    setSecure()
 end
 
-local function refreshOverlays()
-    dirty = nil
-    -- Stock container buttons are reused for other bags, so every overlay is hidden and re-bound each pass.
-    for _, overlay in pairs(overlays) do overlay:Hide() end
-    if de.mode == "idle" then return updateControl() end
-    eachBagButton(function(button, bag, slot)
-        local overlay = E.Overlay(button)
-        overlay.bag, overlay.slot = bag, slot
-        local index = queued(bag, slot)
-        if de.mode == "select" and index then
-            -- Drop a selection whose slot no longer holds the chosen item (moved, sold, destroyed).
-            local item = de.queue[index]
-            if E.ItemKey(GetContainerItemLink(bag, slot)) ~= item.key then
-                table.remove(de.queue, index)
-                index = nil
-            end
-        end
-        local ok = E.CanDisenchant(bag, slot)
-        local current = de.mode == "run" and index == de.index
-        overlay:EnableMouse(de.mode == "select")
-        overlay.dim:SetAlpha((de.mode == "select" and not ok and not index) and 0.65 or 0)
-        if index then
-            local r, g, b = 0.72, 0.45, 1
-            if current then r, g, b = 1, 0.82, 0.2 end
-            overlay:SetBackdropBorderColor(r, g, b, 1)
-            overlay.check:Show()
-            overlay.number:SetText(index)
-            overlay.check:SetAlpha((de.mode == "run" and index < de.index) and 0.35 or 1)
-        else
-            overlay:SetBackdropBorderColor(0, 0, 0, 0)
-            overlay.check:Hide()
-            overlay.number:SetText("")
-        end
-        overlay:Show()
-    end)
-    updateControl()
-end
-
-local function markDirty() dirty = true end
-
-local function stopDisenchant(reason)
-    local wasRunning = de.mode ~= "idle"
-    de.mode, de.phase, de.index, de.done = "idle", nil, 0, 0
-    wipe(de.queue)
-    if not InCombatLockdown() and secure then
-        setSecure(nil)
-        secure:Hide()
-    end
-    refreshOverlays()
-    updateControl()
-    if wasRunning and reason then say(reason, true) end
-end
-
-local function toggleItem(bag, slot)
-    local index = queued(bag, slot)
-    if index then
-        table.remove(de.queue, index)
-    else
-        local ok, link = E.CanDisenchant(bag, slot)
-        local _, _, locked = GetContainerItemInfo(bag, slot)
-        if not ok or locked then return end
-        de.queue[#de.queue + 1] = { bag = bag, slot = slot, link = link, key = E.ItemKey(link), tries = 0 }
-    end
-    refreshOverlays()
-end
-
-local function selectAll()
-    eachBagButton(function(_, bag, slot)
-        if not queued(bag, slot) and E.CanDisenchant(bag, slot) then toggleItem(bag, slot) end
-    end)
-end
-
-function E.Overlay(button)
-    local overlay = overlays[button]
-    if overlay then return overlay end
-    overlay = CreateFrame("Button", nil, button)
-    overlay:SetAllPoints(button)
-    overlay:SetFrameLevel(button:GetFrameLevel() + 6)
-    overlay:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    overlay:SetBackdrop({ edgeFile = white, edgeSize = 2 })
-    overlay:SetBackdropBorderColor(0, 0, 0, 0)
-    overlay.dim = overlay:CreateTexture(nil, "OVERLAY")
-    overlay.dim:SetTexture(white)
-    overlay.dim:SetVertexColor(0, 0, 0)
-    overlay.dim:SetPoint("TOPLEFT", overlay, "TOPLEFT", 2, -2)
-    overlay.dim:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", -2, 2)
-    overlay.check = overlay:CreateTexture(nil, "OVERLAY", nil, 1)
-    overlay.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
-    overlay.check:SetSize(18, 18)
-    overlay.check:SetPoint("TOPRIGHT", overlay, "TOPRIGHT", 2, 2)
-    overlay.check:Hide()
-    overlay.number = overlay:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-    overlay.number:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", 3, 2)
-    overlay:SetScript("OnClick", function(self, button)
-        if button == "RightButton" then
-            stopDisenchant()
-        elseif de.mode == "select" then
-            toggleItem(self.bag, self.slot)
-        end
-    end)
-    overlay:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetBagItem(self.bag, self.slot)
-        GameTooltip:AddLine(L("ЛКМ — выбрать/снять, ПКМ — отменить режим", "Left-click: select/unselect, right-click: cancel"),
-            0.6, 0.8, 1)
-        GameTooltip:Show()
-    end)
-    overlay:SetScript("OnLeave", GameTooltip_Hide)
-    overlay:Hide()
-    overlays[button] = overlay
-    return overlay
-end
-
-local function finishDisenchant()
-    local done = de.done
-    stopDisenchant()
-    say((L("Распыление завершено: %d предм.", "Disenchanting finished: %d item(s).")):format(done), true)
-end
-
--- Points the secure button at the next queued item (out of combat only). Skips items that disappeared.
-local function prepareStep()
-    if de.mode ~= "run" or InCombatLockdown() then return end
-    local claimed = {}
-    for i = de.index + 1, #de.queue do
-        local other = de.queue[i]
-        claimed[other.bag .. ":" .. other.slot] = true
-    end
-    while true do
-        local item = de.queue[de.index]
-        if not item then return finishDisenchant() end
-        if E.ItemKey(GetContainerItemLink(item.bag, item.slot)) ~= item.key then
-            local bag, slot = findByKey(item.key, claimed)
-            if bag then
-                item.bag, item.slot = bag, slot
-            else
-                say((L("Пропущен (исчез из сумки): %s", "Skipped (no longer in bags): %s")):format(item.link))
-                de.index = de.index + 1
-                item = nil
-            end
-        end
-        if item then
-            if E.FreeSlots() < 1 then
-                return stopDisenchant(L("Распыление остановлено: нет места в сумках.", "Disenchanting stopped: bags are full."))
-            end
-            setSecure(item.bag, item.slot)
-            de.phase, de.lootOpen = "ready", nil
-            refreshOverlays()
-            return
-        end
-    end
-end
-
-local function advance()
-    de.done = de.done + 1
-    de.index = de.index + 1
-    de.phase = "next"
-    de.nextAt = GetTime() + 0.2
-    setSecure(nil)
-    updateControl()
-end
-
-local function startRun()
-    if InCombatLockdown() then return end
-    if #de.queue == 0 then
-        say(L("Выберите предметы для распыления.", "Select items to disenchant first."), true)
-        return
-    end
-    de.mode, de.index, de.done = "run", 1, 0
-    secure:Show()
-    driver:Show()
-    local key = E.KeyLabel()
-    if key then
-        say((L("Жмите %s (или кнопку) — каждый раз распыляется следующий предмет.",
-            "Press %s (or the button): each press disenchants the next item.")):format(key))
-    end
-    prepareStep()
-end
-
-local function enterSelect()
-    if InCombatLockdown() then
-        say(L("В бою распыление недоступно.", "Not available in combat."), true)
-        return
-    end
-    if not knowsSpell(DISENCHANT_ID) then return end
-    de.mode = "select"
-    wipe(de.queue)
-    driver:Show()
-    refreshOverlays()
-end
-
-local function placeControl()
-    if not ctrl then return end
-    local host, footer = bagHost()
-    if not host or not enabled("enchantDisenchantButton") then
-        ctrl:Hide()
-        return
-    end
-    ctrl:SetParent(footer or host)
-    ctrl:ClearAllPoints()
-    if footer then
-        ctrl:SetPoint("LEFT", footer, "LEFT", 3, 0)
-    else
-        ctrl:SetPoint("TOPLEFT", host, "BOTTOMLEFT", 12, 2)
-    end
-    ctrl:SetFrameLevel((footer or host):GetFrameLevel() + 3)
-    ctrl:Show()
-    updateControl()
-end
-
-local function hostHidden()
-    if de.mode ~= "idle" then
-        stopDisenchant(L("Распыление отменено: сумка закрыта.", "Disenchanting cancelled: bags closed."))
-    end
-end
-
-local function createSecure()
-    secure = CreateFrame("Button", "ForeverStockUIDisenchantSecure", UIParent, "SecureActionButtonTemplate")
-    secure:SetFrameStrata("TOOLTIP")
-    secure:RegisterForClicks("LeftButtonUp")
-    secure:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    secure:Hide()
-    -- Last insecure look before the secure handler casts: re-check the slot, refuse stale or busy clicks.
-    secure:SetScript("PreClick", function()
-        if InCombatLockdown() then return end
-        local item = de.queue[de.index]
-        if de.mode ~= "run" or de.phase ~= "ready" or not item
-            or E.ItemKey(GetContainerItemLink(item.bag, item.slot)) ~= item.key or UnitCastingInfo("player") then
-            setSecure(nil)
-            if de.mode == "run" and de.phase == "ready" then de.pending = true end
-            return
-        end
-        de.phase, de.sentAt = "sent", GetTime()
-        updateControl()
-    end)
-    -- Fallback for a SecureActionButton without target-bag support: the click's hardware event is still
-    -- current, and using a bag item while the cursor targets applies the spell to it.
-    secure:SetScript("PostClick", function()
-        local item = de.queue[de.index]
-        local canTarget = SpellCanTargetItem or SpellIsTargeting
-        if de.phase == "sent" and item and canTarget() then
-            UseContainerItem(item.bag, item.slot)
-            if SpellIsTargeting() then SpellStopTargeting() end
-        end
-        if de.pending then
-            de.pending = nil
-            prepareStep()
-        end
-    end)
-    secure:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        local item = de.queue[de.index]
-        GameTooltip:SetText(spellName(DISENCHANT_ID) or "Disenchant")
-        if item then GameTooltip:AddLine(item.link) end
-        GameTooltip:AddLine(L("Каждый клик распыляет следующий предмет.", "Each click disenchants the next item."), 0.6, 0.8, 1)
-        GameTooltip:Show()
-    end)
-    secure:SetScript("OnLeave", GameTooltip_Hide)
-end
-
-local function createControl()
-    ctrl = CreateFrame("Frame", "ForeverStockUIDisenchantControl", UIParent)
-    ctrl:SetSize(160, 18)
-    ctrl:Hide()
-    deButton = CreateFrame("Button", "ForeverStockUIDisenchantButton", ctrl)
-    deButton:SetHeight(18)
-    deButton:SetPoint("LEFT", ctrl, "LEFT", 0, 0)
-    deButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    deButton:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    deIcon = deButton:CreateTexture(nil, "ARTWORK")
-    deIcon:SetSize(18, 18)
-    deIcon:SetPoint("LEFT", deButton, "LEFT", 0, 0)
-    deIcon:SetTexture(select(3, GetSpellInfo(DISENCHANT_ID)) or "Interface\\Icons\\INV_Enchant_Disenchant")
-    deIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    deText = deButton:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    deText:SetPoint("LEFT", deIcon, "RIGHT", 4, 0)
-    deButton:SetWidth(18)
-    deButton:SetScript("OnClick", function(_, button)
-        if button == "RightButton" then return stopDisenchant() end
-        if de.mode == "idle" then
-            enterSelect()
-        elseif de.mode == "select" then
-            if IsShiftKeyDown() then selectAll() else startRun() end
-        end
-    end)
-    deButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText(spellName(DISENCHANT_ID) or "Disenchant")
-        if not knowsSpell(DISENCHANT_ID) then
-            GameTooltip:AddLine((L("Нужна профессия «%s».", "Requires %s.")):format(spellName(ENCHANTING_ID) or "Enchanting"),
-                1, 0.3, 0.3)
-        elseif de.mode == "idle" then
-            GameTooltip:AddLine(L("Выбрать предметы для распыления.", "Pick items to disenchant."), 1, 1, 1)
-        else
-            GameTooltip:AddLine(L("ЛКМ — запустить, Shift+ЛКМ — выбрать всё подходящее, ПКМ — отмена.",
-                "Left-click: start, Shift-click: select every eligible item, right-click: cancel."), 1, 1, 1, true)
-        end
-        GameTooltip:Show()
-    end)
-    deButton:SetScript("OnLeave", GameTooltip_Hide)
-    deCancel = CreateFrame("Button", nil, ctrl)
-    deCancel:SetSize(16, 16)
-    deCancel:SetPoint("LEFT", deButton, "RIGHT", 4, 0)
-    deCancel:SetNormalTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up")
-    deCancel:SetHighlightTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Highlight", "ADD")
-    deCancel:SetScript("OnClick", function() stopDisenchant() end)
-    deCancel:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText(CANCEL)
-        GameTooltip:Show()
-    end)
-    deCancel:SetScript("OnLeave", GameTooltip_Hide)
-    deCancel:Hide()
-    createSecure()
-
-    local window = ui.Bags and ui.Bags.Window and ui.Bags.Window()
-    if window then
-        window:HookScript("OnShow", placeControl)
-        window:HookScript("OnHide", hostHidden)
-    elseif ContainerFrame1 then
-        ContainerFrame1:HookScript("OnShow", placeControl)
-        ContainerFrame1:HookScript("OnHide", hostHidden)
-    end
-    placeControl()
-end
-
--- Keep the secure button exactly over the visible one (absolute UIParent coordinates, never an anchor).
+-- Keep the secure button exactly over the visible one (absolute UIParent coordinates, never an anchor: the
+-- bag window must not get protected children). Shown only out of combat, while the visible button is.
 local placed = {}
 local function syncSecure()
-    if InCombatLockdown() or not secure:IsShown() then return end
-    if not deButton:IsVisible() then
-        secure:Hide()
+    if not secure or InCombatLockdown() then return end
+    if not (deButton and deButton:IsVisible() and knowsSpell(DISENCHANT_ID)) then
+        if secure:IsShown() then secure:Hide() end
         return
     end
     local scale = deButton:GetEffectiveScale() / UIParent:GetEffectiveScale()
@@ -537,56 +231,107 @@ local function syncSecure()
         secure:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
         secure:SetSize(w, h)
     end
+    if not secure:IsShown() then secure:Show() end
+end
+
+local function placeControl()
+    if not ctrl then return end
+    local host, footer = bagHost()
+    if not host or not enabled("enchantDisenchantButton") then
+        ctrl:Hide()
+        syncSecure()
+        return
+    end
+    ctrl:SetParent(footer or host)
+    ctrl:ClearAllPoints()
+    if footer then
+        ctrl:SetPoint("LEFT", footer, "LEFT", 3, 0)
+    else
+        ctrl:SetPoint("TOPLEFT", host, "BOTTOMLEFT", 12, 2)
+    end
+    ctrl:SetFrameLevel((footer or host):GetFrameLevel() + 3)
+    ctrl:Show()
+    updateControl()
+    syncSecure()
+    driver:Show()
+end
+
+local function hostHidden()
+    syncSecure()
+end
+
+local function showTooltip(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText(spellName(DISENCHANT_ID) or "Disenchant")
+    if not knowsSpell(DISENCHANT_ID) then
+        GameTooltip:AddLine((L("Нужна профессия «%s».", "Requires %s.")):format(spellName(ENCHANTING_ID) or "Enchanting"),
+            1, 0.3, 0.3)
+    else
+        GameTooltip:AddLine(L("Клик — затем кликните по предмету. Предметы, которые нельзя распылить, затемняются.",
+            "Click, then click an item. Items that cannot be disenchanted are dimmed."), 1, 1, 1, true)
+    end
+    GameTooltip:Show()
+end
+
+local function createSecure()
+    secure = CreateFrame("Button", "ForeverStockUIDisenchantSecure", UIParent, "SecureActionButtonTemplate")
+    secure:SetFrameStrata("TOOLTIP")
+    secure:RegisterForClicks("LeftButtonUp")
+    secure:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    secure:Hide()
+    -- The cast itself is the secure action ("spell" without a target): the cursor then waits for an item.
+    secure:SetScript("PreClick", function()
+        de.armed, de.armedAt = true, GetTime()
+        driver:Show()
+    end)
+    secure:SetScript("OnEnter", showTooltip)
+    secure:SetScript("OnLeave", GameTooltip_Hide)
+    setSecure()
+end
+
+local function createControl()
+    ctrl = CreateFrame("Frame", "ForeverStockUIDisenchantControl", UIParent)
+    ctrl:SetSize(18, 18)
+    ctrl:Hide()
+    deButton = CreateFrame("Button", "ForeverStockUIDisenchantButton", ctrl)
+    deButton:SetSize(18, 18)
+    deButton:SetPoint("LEFT", ctrl, "LEFT", 0, 0)
+    deButton:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    deIcon = deButton:CreateTexture(nil, "ARTWORK")
+    deIcon:SetAllPoints(deButton)
+    deIcon:SetTexture(select(3, GetSpellInfo(DISENCHANT_ID)) or "Interface\\Icons\\INV_Enchant_Disenchant")
+    deIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    -- Reached only while the secure button is not over it (combat).
+    deButton:SetScript("OnClick", function()
+        if InCombatLockdown() then
+            say(L("В бою кнопка распыления недоступна.", "The disenchant button is not available in combat."), true)
+        end
+    end)
+    deButton:SetScript("OnEnter", showTooltip)
+    deButton:SetScript("OnLeave", GameTooltip_Hide)
+    createSecure()
+
+    local window = ui.Bags and ui.Bags.Window and ui.Bags.Window()
+    if window then
+        window:HookScript("OnShow", placeControl)
+        window:HookScript("OnHide", hostHidden)
+    elseif ContainerFrame1 then
+        ContainerFrame1:HookScript("OnShow", placeControl)
+        ContainerFrame1:HookScript("OnHide", hostHidden)
+    end
+    placeControl()
 end
 
 local function disenchantTick(now)
-    if de.mode ~= "run" then return end
     syncSecure()
-    if de.phase == "sent" and now - de.sentAt > 1.5 then
-        -- The click produced no cast (e.g. silently refused); offer the same item again.
-        prepareStep()
-    elseif de.phase == "loot" and not de.lootOpen and now - de.succeededAt > 2.5 then
-        advance()
-    elseif de.phase == "next" and now >= de.nextAt and not UnitCastingInfo("player") then
-        prepareStep()
-    end
-end
-
-local function disenchantEvent(event, unit, spell)
-    if de.mode ~= "run" then return end
-    local deName = spellName(DISENCHANT_ID)
-    if event == "LOOT_OPENED" then
-        if de.phase == "loot" or de.phase == "casting" then de.lootOpen = true end
-        return
-    elseif event == "LOOT_CLOSED" then
-        if de.phase == "loot" then de.lootOpen = nil; advance() end
-        return
-    end
-    if unit ~= "player" or spell ~= deName then return end
-    if event == "UNIT_SPELLCAST_SENT" or event == "UNIT_SPELLCAST_START" then
-        if de.phase == "sent" then de.phase = "casting"; updateControl() end
-    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if de.phase == "sent" or de.phase == "casting" then
-            de.phase, de.succeededAt = "loot", GetTime()
-            updateControl()
-        end
-    elseif event == "UNIT_SPELLCAST_INTERRUPTED" then
-        if de.phase == "casting" then
-            stopDisenchant(L("Распыление остановлено: каст прерван.", "Disenchanting stopped: cast interrupted."))
-        end
-    elseif event == "UNIT_SPELLCAST_FAILED" then
-        if de.phase == "sent" or de.phase == "casting" then
-            local item = de.queue[de.index]
-            item.tries = item.tries + 1
-            if item.tries >= 2 then
-                say((L("Не удалось распылить, пропускаю: %s", "Could not disenchant, skipping: %s")):format(item.link))
-                de.index = de.index + 1
-            end
-            de.phase = "next"
-            de.nextAt = GetTime() + 0.3
-            setSecure(nil)
-            updateControl()
-        end
+    -- The cast from the button may take a moment to bring the cursor up; after that "armed" ends with it.
+    if de.armed and not SpellIsTargeting() and now - (de.armedAt or 0) > 0.5 then de.armed = nil end
+    local want = disenchantTargeting()
+    if want ~= de.dimmed then
+        de.dimmed = want
+        refreshDim()
+    elseif de.dirty then
+        refreshDim()
     end
 end
 
@@ -597,6 +342,27 @@ end
 -- the cast; a REPLACE_ENCHANT/BIND_ENCHANT popup may sit in between) | "channel" (cast bar running) |
 -- "next" (auto-chain delay) | "wait_click" (client needs a click for each repeat)
 local re = { active = false, done = 0, total = 1 }
+-- Seconds the cast may take to start after the target is applied (Nozdor answers with some lag).
+local CAST_WAIT = 3
+
+-- What happened since the last repeat started (client errors, cast events, popups), told when a repeat fails.
+local function trace(text)
+    re.trace = re.trace or {}
+    if #re.trace < 12 then re.trace[#re.trace + 1] = text end
+end
+local function shownPopups()
+    local list = {}
+    for i = 1, STATICPOPUP_NUMDIALOGS or 4 do
+        local popup = _G["StaticPopup" .. i]
+        if popup and popup:IsShown() then list[#list + 1] = tostring(popup.which) end
+    end
+    return #list > 0 and table.concat(list, ",") or "-"
+end
+local function traceText()
+    return " [" .. table.concat(re.trace or {}, "; ") .. "; popups: " .. shownPopups() .. "; targeting: "
+        .. tostring(SpellIsTargeting() and true or false) .. "]"
+end
+E.TraceText = traceText
 E.reenchant = re
 local reRow, reButton, reCount
 
@@ -629,9 +395,21 @@ local function repeatCount()
     return math.max(1, math.min(99, math.floor(value)))
 end
 
+-- The count follows the number of enchants the reagents allow, until the player sets it by hand for this recipe.
+local manualRecipe
+
+local function autoCount(name, available)
+    if re.active or not name or manualRecipe == name or (available or 0) < 1 then return end
+    local want = math.min(99, available)
+    if repeatCount() ~= want then ui.Settings().enchantRepeatCount = want end
+    if reCount and not (reCount.HasFocus and reCount:HasFocus()) then reCount:SetText(want) end
+end
+E.AutoCount = autoCount
+
 local function updateRepeat()
     if not reRow then return end
-    local index, _, _, verb = selectedRecipe()
+    local index, recipe, available, verb = selectedRecipe()
+    if index and verb then autoCount(recipe, available) end
     local show = enabled("enchantReenchant") and isEnchanting() and (re.active or (index and verb))
     if not show then
         reRow:Hide()
@@ -658,7 +436,11 @@ end
 local function stopRepeat(reason, quiet)
     if not re.active then return end
     re.active, re.phase = false, nil
-    if SpellIsTargeting() then SpellStopTargeting() end
+    -- With the replace or bind dialog up the cursor is left alone: stopping it from addon code closes Blizzard's
+    -- dialog from tainted code, and the client blocks ForeverUI (checked in game). The dialog stays to the player.
+    if SpellIsTargeting() and not popupVisible("REPLACE_ENCHANT") and not popupVisible("BIND_ENCHANT") then
+        SpellStopTargeting()
+    end
     updateRepeat()
     if reason and not quiet then say(reason, true) end
 end
@@ -674,9 +456,20 @@ local function applyTarget()
     re.applying = true
     if target.type == "inv" then PickupInventoryItem(target.slot) else PickupContainerItem(target.bag, target.slot) end
     re.applying = nil
+    trace(("target %s %s: targeting=%s"):format(target.type == "inv" and "inv" or tostring(target.bag), tostring(target.slot),
+        tostring(SpellIsTargeting() and true or false)))
     -- Safety: if targeting had ended, Pickup* would have put the item on the cursor; put it back.
     if CursorHasItem() then ClearCursor() end
 end
+
+-- The macro line that uses the remembered item: with an enchant waiting for its target it applies the enchant.
+local function useText(target)
+    if target.type == "inv" then return "/use " .. target.slot end
+    return "/use " .. target.bag .. " " .. target.slot
+end
+E.UseText = useText
+-- True while the repeat button's PreClick runs: its secure action can apply the target.
+local secureClick = false
 
 -- One repeat. fromClick: called from a real click (hardware event).
 local function step(fromClick)
@@ -694,7 +487,10 @@ local function step(fromClick)
     end
     if SpellIsTargeting() then SpellStopTargeting() end
     re.castName = nil
+    re.trace = {}
+    trace(fromClick and "press" or "auto")
     DoTradeSkill(index, 1)
+    trace("DoTradeSkill: targeting=" .. tostring(SpellIsTargeting() and true or false))
     -- Enchants on items open the targeting cursor synchronously; no cursor means the client refused the call.
     if not SpellIsTargeting() then
         if fromClick then
@@ -702,13 +498,19 @@ local function step(fromClick)
         end
         return false
     end
-    if re.target then
+    if re.target and secureClick then
+        -- Nozdor ignores a target set by addon code (the cursor closes, nothing is cast): the press's own secure
+        -- action uses the item instead ("/use bag slot" on the repeat button, see its PreClick), like a macro.
+        re.secureUse = useText(re.target)
+        trace("target by /use")
+        re.phase, re.castStarted, re.auto = "casting", GetTime(), false
+    elseif re.target then
         applyTarget()
         if SpellIsTargeting() and not awaitingConfirm() then
             SpellStopTargeting()
             return stopRepeat(L("Эти чары нельзя наложить на выбранный предмет.", "This enchant cannot go on the remembered item."))
         end
-        re.phase, re.castStarted = "casting", GetTime()
+        re.phase, re.castStarted, re.auto = "casting", GetTime(), not fromClick
     else
         re.phase, re.pickStarted = "picking", GetTime()
         say(L("Кликните по предмету в сумке или на персонаже — он будет запомнен.",
@@ -752,7 +554,7 @@ local function captured(kind, a, b)
     end
     if not target then return end
     re.target = target
-    re.phase, re.castStarted = "casting", GetTime()
+    re.phase, re.castStarted, re.auto = "casting", GetTime(), false
     say((L("Цель запомнена: %s", "Target remembered: %s")):format(target.link))
     updateRepeat()
 end
@@ -762,12 +564,23 @@ local function repeatTick(now)
     if not re.active then return end
     if re.phase == "picking" and not SpellIsTargeting() and now - re.pickStarted > 0.1 then
         stopRepeat(L("Переналожение отменено: цель не выбрана.", "Re-enchanting cancelled: no target picked."))
-    elseif re.phase == "casting" and now - re.castStarted > 2 then
+    elseif re.phase == "casting" and now - re.castStarted > CAST_WAIT then
         -- Waiting on a confirmation the user has to give (bind on enchant, or replace with auto-confirm off)?
         if popupVisible("BIND_ENCHANT") or popupVisible("REPLACE_ENCHANT") then
             re.castStarted = now
+        elseif re.auto and not re.stepMode then
+            -- A repeat the addon started by itself was dropped silently by the client (the target taken from an
+            -- OnUpdate is ignored here). The session goes on with a press per repeat: the button or the session key.
+            if SpellIsTargeting() then SpellStopTargeting() end
+            re.stepMode, re.phase = true, "wait_click"
+            -- Remembered: later sessions go by presses at once (/fuienchant reset forgets it).
+            ui.Settings().enchantAutoChainBlocked = true
+            say(L("Клиент не запустил повтор сам: нажимайте «Дальше» или клавишу сессии.",
+                "The client did not start the repeat by itself: press \"Next\" or the session key."), true)
+            updateRepeat()
         else
-            stopRepeat(L("Переналожение остановлено: наложение не началось.", "Re-enchanting stopped: the enchant did not start."))
+            stopRepeat(L("Переналожение остановлено: наложение не началось.", "Re-enchanting stopped: the enchant did not start.")
+                .. traceText())
         end
     elseif re.phase == "next" and now >= re.nextAt and not UnitCastingInfo("player") then
         if re.target and not targetValid(re.target) then
@@ -800,7 +613,12 @@ local function repeatEvent(event, unit, spell)
         stopRepeat(L("Переналожение остановлено: окно профессии закрыто.", "Re-enchanting stopped: profession window closed."))
         return updateRepeat()
     end
+    if re.active and event == "UI_ERROR_MESSAGE" then
+        trace("error: " .. tostring(unit))
+        return
+    end
     if not re.active or unit ~= "player" then return end
+    if event:find("^UNIT_SPELLCAST_") then trace(event:sub(16) .. " " .. tostring(spell)) end
     if event == "UNIT_SPELLCAST_START" then
         if re.phase == "casting" then
             re.phase, re.castName = "channel", spell
@@ -832,11 +650,68 @@ local function createRepeat()
     reRow = CreateFrame("Frame", "ForeverStockUIReenchant", TradeSkillFrame)
     reRow:SetSize(160, 22)
     reRow:Hide()
-    reButton = CreateFrame("Button", "ForeverStockUIReenchantButton", reRow, "UIPanelButtonTemplate")
+    -- A secure action button: PreClick runs the session (DoTradeSkill opens the enchant cursor), then the button's
+    -- own secure action uses the remembered item ("/use 0 16"), which the client takes as the enchant's target.
+    reButton = CreateFrame("Button", "ForeverStockUIReenchantButton", reRow, "SecureActionButtonTemplate,UIPanelButtonTemplate")
     reButton:SetSize(96, 22)
     reButton:SetPoint("RIGHT", TradeSkillCreateButton, "LEFT", -4, 0)
     reButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    reButton:SetScript("OnClick", function(_, button)
+    local function clearAction(self)
+        if InCombatLockdown() then return end
+        self:SetAttribute("type", nil)
+        self:SetAttribute("macrotext", nil)
+        self:SetAttribute("clickbutton", nil)
+    end
+    local press
+    reButton:SetScript("PreClick", function(self, button)
+        clearAction(self)
+        re.secureUse, re.clickedYes = nil, nil
+        -- The replace dialog is up (the button reads "Space: replace"): a mouse click does what the key does,
+        -- it presses Blizzard's own "Yes" through the secure "click" action. Addon code never touches the dialog.
+        local dialog = button ~= "RightButton" and re.active and setting("enchantKeyConfirm", true)
+            and popupVisible("REPLACE_ENCHANT")
+        if dialog and not InCombatLockdown() then
+            if type(dialog) == "table" then dialog = dialog.GetName and dialog:GetName() end
+            local yes = type(dialog) == "string" and _G[dialog .. "Button1"]
+            if yes then
+                self:SetAttribute("type", "click")
+                self:SetAttribute("clickbutton", yes)
+                re.clickedYes = true
+                return
+            end
+        end
+        secureClick = true
+        local ok, err = pcall(press, button)
+        secureClick = false
+        if not ok then geterrorhandler()(err) end
+        -- Only with the enchant cursor up: "/use" on a shield without it would put the shield on.
+        if re.secureUse and SpellIsTargeting() and not InCombatLockdown() then
+            self:SetAttribute("type", "macro")
+            self:SetAttribute("macrotext", re.secureUse)
+        else
+            re.secureUse = nil
+        end
+    end)
+    reButton:SetScript("PostClick", function(self)
+        if re.clickedYes then
+            re.clickedYes = nil
+            clearAction(self)
+            updateRepeat()
+            return
+        end
+        local used = re.secureUse
+        re.secureUse = nil
+        clearAction(self)
+        if not used or not re.active then return end
+        trace("after /use: targeting=" .. tostring(SpellIsTargeting() and true or false))
+        if SpellIsTargeting() and not awaitingConfirm() then
+            SpellStopTargeting()
+            return stopRepeat(L("Эти чары нельзя наложить на выбранный предмет.", "This enchant cannot go on the remembered item.")
+                .. traceText())
+        end
+        updateRepeat()
+    end)
+    press = function(button)
         if button == "RightButton" then
             if re.active then
                 stopRepeat(L("Переналожение остановлено.", "Re-enchanting stopped."))
@@ -853,7 +728,7 @@ local function createRepeat()
         else
             startRepeat()
         end
-    end)
+    end
     reButton:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText(L("Переналожение чар", "Repeat enchant"))
@@ -885,6 +760,8 @@ local function createRepeat()
     minus:SetText("-")
     minus:SetPoint("RIGHT", reCount, "LEFT", -6, 0)
     local function setCount(value)
+        -- Set by hand: this recipe keeps the number until another recipe is picked.
+        manualRecipe = select(2, selectedRecipe())
         ui.Settings().enchantRepeatCount = math.max(1, math.min(99, value))
         reCount:SetText(repeatCount())
         updateRepeat()
@@ -892,13 +769,17 @@ local function createRepeat()
     plus:SetScript("OnClick", function() setCount(repeatCount() + 1) end)
     minus:SetScript("OnClick", function() setCount(repeatCount() - 1) end)
     reCount:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-    reCount:SetScript("OnEditFocusLost", function(self) setCount(tonumber(self:GetText()) or 1) end)
+    reCount:SetScript("OnEditFocusLost", function(self)
+        local value = tonumber(self:GetText()) or 1
+        if value ~= repeatCount() then setCount(value) else updateRepeat() end
+    end)
     reCount:SetScript("OnEscapePressed", function(self) self:SetText(repeatCount()); self:ClearFocus() end)
     reCount:SetText(repeatCount())
 
     -- Changing the recipe ends the session; the row also hides for recipes that create items (rods, oils),
     -- where the client shows its own "Create all" row in the same place.
     hooksecurefunc("TradeSkillFrame_SetSelection", function(id)
+        if GetTradeSkillInfo(id) ~= manualRecipe then manualRecipe = nil end
         if re.active then
             local name = GetTradeSkillInfo(id)
             if name ~= re.recipe then
@@ -949,7 +830,6 @@ local function popupButton(which)
 end
 
 local function keyTarget()
-    if de.mode == "run" and secure and secure:IsShown() then return "ForeverStockUIDisenchantSecure" end
     if re.active then
         local accept = setting("enchantKeyConfirm", true) and popupButton("REPLACE_ENCHANT")
         if accept then return accept end
@@ -973,10 +853,11 @@ E.BoundKey = function() return boundKey, boundTarget end
 ----------------------------------------------------------------------------------------------------------
 driver:SetScript("OnUpdate", function(self)
     local now = GetTime()
-    if dirty then refreshOverlays() end
     disenchantTick(now)
     repeatTick(now)
-    if de.mode == "idle" and not re.active then
+    -- Runs while a repeat session, the disenchant cursor or the bag button (its secure cover follows it) is up.
+    local busy = re.active or de.dimmed or de.armed or (secure and secure:IsShown()) or (deButton and deButton:IsVisible())
+    if not busy then
         bindKey(nil)
         self:Hide()
     else
@@ -1000,7 +881,8 @@ events:SetScript("OnEvent", function(self, event, a, b)
         for _, name in ipairs({ "BAG_UPDATE", "ITEM_LOCK_CHANGED", "PLAYER_REGEN_DISABLED", "SPELLS_CHANGED",
             "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_FAILED",
             "UNIT_SPELLCAST_INTERRUPTED", "LOOT_OPENED", "LOOT_CLOSED", "TRADE_SKILL_SHOW", "TRADE_SKILL_UPDATE",
-            "TRADE_SKILL_CLOSE", "UNIT_INVENTORY_CHANGED", "ADDON_ACTION_FORBIDDEN", "ADDON_ACTION_BLOCKED" }) do
+            "TRADE_SKILL_CLOSE", "UNIT_INVENTORY_CHANGED", "ADDON_ACTION_FORBIDDEN", "ADDON_ACTION_BLOCKED",
+            "UI_ERROR_MESSAGE", "PLAYER_REGEN_ENABLED", "CURRENT_SPELL_CAST_CHANGED" }) do
             self:RegisterEvent(name)
         end
         return
@@ -1008,18 +890,23 @@ events:SetScript("OnEvent", function(self, event, a, b)
         if a == "Blizzard_TradeSkillUI" and ctrl then createRepeat() end
         return
     elseif event == "PLAYER_REGEN_DISABLED" then
-        -- Handlers of this event still run before the lockdown: the last moment to clear the secure button.
-        if de.mode ~= "idle" then
-            setSecure(nil)
-            if secure then secure:Hide() end
-            stopDisenchant(L("Распыление остановлено: начался бой.", "Disenchanting stopped: entering combat."))
-        end
+        -- Handlers of this event still run before the lockdown: the last moment to hide the secure button.
+        if secure then secure:Hide() end
+        de.armed = nil
         stopRepeat(L("Переналожение остановлено: бой.", "Re-enchanting stopped: combat."))
         bindKey(nil)
+        return
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        placeControl()
+        return
+    elseif event == "CURRENT_SPELL_CAST_CHANGED" then
+        -- Disenchant from the spellbook brings the cursor up too: the tick dims the bags.
+        driver:Show()
         return
     elseif event == "ADDON_ACTION_FORBIDDEN" or event == "ADDON_ACTION_BLOCKED" then
         if a ~= addonName then return end
         E.blocked = tostring(b)
+        if re.active then trace("blocked " .. E.blocked) end
         -- The client refused DoTradeSkill outside a click: remember it and stay on one press per repeat.
         if E.blocked:find("DoTradeSkill", 1, true) then
             ui.Settings().enchantAutoChainBlocked = true
@@ -1035,32 +922,29 @@ events:SetScript("OnEvent", function(self, event, a, b)
         updateControl()
         return
     elseif event == "BAG_UPDATE" or event == "ITEM_LOCK_CHANGED" or event == "UNIT_INVENTORY_CHANGED" then
-        if de.mode ~= "idle" then markDirty() end
+        if de.dimmed then de.dirty = true end
         return
     end
-    disenchantEvent(event, a, b)
     repeatEvent(event, a, b)
 end)
 
 function E.Apply()
-    if not enabled("enchantDisenchantButton") then stopDisenchant() end
     if not enabled("enchantReenchant") then stopRepeat(nil, true) end
     placeControl()
     updateRepeat()
 end
 
-E.StartSelect = enterSelect
-E.Stop = function() stopDisenchant(); stopRepeat(nil, true) end
+E.Stop = function() stopRepeat(nil, true) end
 
 -- Diagnostics in ASCII (the client chat font shows addon Cyrillic as "?").
 SLASH_FOREVERUIENCHANT1 = "/fuienchant"
 SlashCmdList.FOREVERUIENCHANT = function(msg)
-    if msg == "de" then return enterSelect() end
     local host = bagHost()
     local p = function(s) DEFAULT_CHAT_FRAME:AddMessage("|cffe8c27aForever UI|r " .. s) end
     p(("disenchant known=%s spell=%s"):format(tostring(knowsSpell(DISENCHANT_ID)), tostring(GetSpellInfo(DISENCHANT_ID) ~= nil)))
-    p(("bag host=%s combined=%s mode=%s queue=%d phase=%s"):format(host and (host:GetName() or "?") or "none",
-        tostring(ui.Bags and ui.Bags.Window and ui.Bags.Window() ~= nil), de.mode, #de.queue, tostring(de.phase)))
+    p(("bag host=%s combined=%s secure=%s targeting=%s dimmed=%s"):format(host and (host:GetName() or "?") or "none",
+        tostring(ui.Bags and ui.Bags.Window and ui.Bags.Window() ~= nil), tostring(secure and secure:IsShown()),
+        tostring(disenchantTargeting()), tostring(de.dimmed)))
     p(("tradeskill enchanting=%s repeat active=%s phase=%s done=%d/%d stepMode=%s target=%s"):format(
         tostring(isEnchanting()), tostring(re.active), tostring(re.phase), re.done, re.total, tostring(re.stepMode),
         re.target and (re.target.type .. " " .. (re.target.bag or "") .. " " .. re.target.slot) or "none"))

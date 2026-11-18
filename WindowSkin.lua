@@ -246,7 +246,6 @@ local WINDOWS = {
     { "MacroFrame", "Макросы", "Macros", rect = { 11, -12, -32, 76 } },
     { "ItemSocketingFrame", "Инкрустация", "Socketing", rect = { 11, -12, -2, 31 } },
     { "GuildBankFrame", "Гильдейский банк", "Guild bank", rect = { 11, -12, 0, 8 } },
-    { "AuctionFrame", "Аукцион", "Auction house", rect = { 11, 0, 0, 23 } },
     { "LFRParentFrame", "Поиск рейда", "Raid browser", rect = { 11, -12, -3, 4 } },
     { "PVPParentFrame", "PvP", "PvP", rect = { 11, -12, -32, 76 } },
     { "BattlefieldFrame", "Поля боя", "Battlegrounds", rect = { 11, -12, -32, 76 } },

@@ -553,6 +553,7 @@ function Setup.CheckFirstRun()
     -- The early load used the last saved set; the client may be on the other one.
     if loaded and loaded.group ~= group and rec.specs[group] then
         Setup.ApplyState(rec.specs[group])
+        ui.Print((L("загружены позиции набора талантов %d.", "positions of talent set %d loaded.")):format(group))
     end
     rec.group = group
     if not rec.specs[group] then

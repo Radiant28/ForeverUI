@@ -219,6 +219,9 @@ local function getPosition(entry)
     if type(position) == "table" and number(position[1]) and number(position[2]) then return position end
 end
 
+-- True while Edit Mode itself sets a point (the SetPoint watch of the unit frames ignores it).
+local placing = false
+
 local function move(entry, x, y)
     local frame = entry.frame
     local ratio = screenScale(frame)
@@ -227,8 +230,10 @@ local function move(entry, x, y)
     if frame:GetNumPoints() == 1 and point == "TOPRIGHT" and relative == UIParent and relativePoint == "TOPRIGHT"
         and math.abs((currentX or 0) - x) < 0.001 and math.abs((currentY or 0) - y) < 0.001 then return end
     if not entry.points then entry.points = points(frame) end
+    placing = true
     frame:ClearAllPoints()
     frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x, y)
+    placing = false
 end
 
 local function groupMembers(names, visit)
@@ -976,6 +981,17 @@ function ui.RegisterEditFrame(frame, label, category, slider, legacyPosition)
     return entry
 end
 
+-- The saved spot of a stock unit frame goes back to the client (its own mover took the frame). Said in the chat,
+-- with the reason, so a spot that disappears can be traced.
+local function releaseToClient(entry, reason)
+    if not entry.config or not getPosition(entry) then return end
+    entry.config.position, entry.points = nil, nil
+    if ui.Print then
+        ui.Print((ru and "позиция «%s» передана клиенту (%s)." or "the spot of \"%s\" went back to the client (%s)."):format(
+            entry.label or entry.name, reason))
+    end
+end
+
 local function add(name, russian, english, members)
     local entry = ui.RegisterEditFrame(_G[name], ru and russian or english)
     if not entry then return end
@@ -983,8 +999,22 @@ local function add(name, russian, english, members)
     entry.native = nativeUnits[name] and windows and windows.Apply
     entry.holder = nativeUnits[name] and name or name == "CastingBarFrame" and "castbar"
     if entry.native then
+        -- A frame the player really dragged with the client's own mover (drag start and stop) is the client's
+        -- again; a stray OnDragStop without a drag keeps the saved spot.
+        entry.frame:HookScript("OnDragStart", function() entry.clientDrag = true end)
         entry.frame:HookScript("OnDragStop", function()
-            if entry.config then entry.config.position, entry.points = nil, nil end
+            if not entry.clientDrag then return end
+            entry.clientDrag = nil
+            releaseToClient(entry, "drag")
+        end)
+    end
+    -- After login the Nozdor client puts the player, target and focus frames back on its own spot later than Edit
+    -- Mode places them (the target frame went back to the stock place after a relog). A saved spot wins: whenever
+    -- someone else re-anchors the frame, the next pass puts it back (out of combat; the pass waits for that).
+    if nativeUnits[name] and hooksecurefunc then
+        hooksecurefunc(entry.frame, "SetPoint", function()
+            if placing or dragging == entry or not entry.config or held(entry) then return end
+            if getPosition(entry) and ui.RefreshEditLayout then ui.RefreshEditLayout() end
         end)
     end
     return entry
@@ -1386,6 +1416,6 @@ end
 if UnitFrameMove_Do then
     hooksecurefunc("UnitFrameMove_Do", function(name, command)
         local entry = byName[name]
-        if command == "reset" and entry and entry.config then entry.config.position, entry.points = nil, nil end
+        if command == "reset" and entry then releaseToClient(entry, "UnitFrameMove_Do reset") end
     end)
 end

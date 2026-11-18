@@ -17,7 +17,7 @@ end
 -- The windows below are scanned for such buttons each time they open.
 local WINDOWS = { "CharacterFrame", "SpellBookFrame", "PlayerTalentFrame", "FriendsFrame", "QuestLogFrame",
     "GossipFrame", "QuestFrame", "MerchantFrame", "MailFrame", "TradeFrame", "BankFrame", "LootFrame",
-    "InspectFrame", "AuctionFrame", "GuildBankFrame", "TradeSkillFrame", "WorldMapFrame", "ChatConfigFrame",
+    "InspectFrame", "GuildBankFrame", "TradeSkillFrame", "WorldMapFrame", "ChatConfigFrame",
     "GameMenuFrame", "AchievementFrame", "LFDParentFrame", "PVPFrame", "ClassTrainerFrame", "TaxiFrame",
     "NozdorCollectionsFrame", "EncounterJournal", "BattlePassFrame", "LuckyWheelMainFrame", "NozdorStoreFrame", "StoreFrame",
     "StaticPopup1", "GlyphFrame", "ItemSocketingFrame", "MacroFrame", "ReadyCheckFrame" }
