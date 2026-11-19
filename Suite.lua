@@ -400,6 +400,10 @@ function Suite.RenameProfile(old, new)
             for group, bound in pairs(char.specProfiles or {}) do
                 if bound == old then char.specProfiles[group] = new end
             end
+            for kind, bound in pairs(char.groupProfiles or {}) do
+                if bound == old then char.groupProfiles[kind] = new end
+            end
+            if char.beforeGroup == old then char.beforeGroup = new end
         end
     end
     changed()
@@ -419,6 +423,10 @@ function Suite.DeleteProfile(name)
             for group, bound in pairs(char.specProfiles or {}) do
                 if bound == name then char.specProfiles[group] = nil end
             end
+            for kind, bound in pairs(char.groupProfiles or {}) do
+                if bound == name then char.groupProfiles[kind] = nil end
+            end
+            if char.beforeGroup == name then char.beforeGroup = nil end
         end
     end
     if Suite.ActiveProfileName() ~= name then changed() end
@@ -492,11 +500,74 @@ function Suite.TreeNames()
     return names
 end
 
+-- Profiles bound to the group type: party (5, dungeon), raid of 10 and raid of 25 (more than 10 in
+-- the raid). In such a group that profile wins over the talent spec binding; when the group is left
+-- the profile from before returns. The old single "raid" binding counts for both raid sizes.
+local function groupBindings(char)
+    if type(char.groupProfiles) ~= "table" then char.groupProfiles = {} end
+    local bound = char.groupProfiles
+    if bound.raid then
+        bound.raid10 = bound.raid10 or bound.raid
+        bound.raid25 = bound.raid25 or bound.raid
+        bound.raid = nil
+    end
+    return bound
+end
+
+function Suite.GroupKind()
+    local raid = GetNumRaidMembers()
+    if raid > 10 then return "raid25" end
+    if raid > 0 then return "raid10" end
+    if GetNumPartyMembers() > 0 then return "party" end
+    return "solo"
+end
+
+function Suite.GroupProfile(kind) return groupBindings(charDB())[kind] end
+function Suite.SetGroupProfile(kind, name)
+    groupBindings(charDB())[kind] = (name ~= "" and name) or nil
+    Suite.CheckSpecProfile()
+end
+
+-- Which profile should be active now: the group binding, else the talent spec binding.
+function Suite.WantedProfile()
+    local char = charDB()
+    local db = suiteDB()
+    local kind = Suite.GroupKind()
+    local bound = kind ~= "solo" and groupBindings(char)[kind]
+    if bound and db.profiles[bound] then return bound, true end
+    bound = char.specProfiles[Suite.TalentGroup()]
+    if bound and db.profiles[bound] then return bound, false end
+end
+
 function Suite.CheckSpecProfile()
-    local bound = charDB().specProfiles[Suite.TalentGroup()]
-    if bound and suiteDB().profiles[bound] and bound ~= Suite.ActiveProfileName() then
-        Suite.SetProfile(bound)
-        ui.Print(L("Профиль сменён: ", "Profile switched: ") .. bound)
+    if InCombatLockdown() then
+        ui.RunOutOfCombat("suiteAutoProfile", Suite.CheckSpecProfile)
+        return
+    end
+    local char = charDB()
+    local wanted, byGroup = Suite.WantedProfile()
+    local active = Suite.ActiveProfileName()
+    if byGroup then
+        if wanted ~= active then
+            if not char.beforeGroup then char.beforeGroup = active end
+            Suite.SetProfile(wanted)
+            ui.Print(L("Профиль сменён: ", "Profile switched: ") .. wanted)
+        end
+        return
+    end
+    -- No group binding applies: go back to what was active before the group profile took over.
+    local back = char.beforeGroup
+    if back then
+        char.beforeGroup = nil
+        if not wanted and suiteDB().profiles[back] and back ~= active then
+            Suite.SetProfile(back)
+            ui.Print(L("Профиль сменён: ", "Profile switched: ") .. back)
+            return
+        end
+    end
+    if wanted and wanted ~= active then
+        Suite.SetProfile(wanted)
+        ui.Print(L("Профиль сменён: ", "Profile switched: ") .. wanted)
     end
 end
 
@@ -605,6 +676,45 @@ function Suite.UnitRole(unit)
         end
     end
     if GetPartyAssignment and GetPartyAssignment("MAINTANK", unit) then return "TANK" end
+    return nil
+end
+
+---------------------------------------------------------------------------------------------------
+-- Drinking: the "Drink" / "Food & Drink" buff of mana drinks (mage water included). Matched by the
+-- localized buff name first, then by spell id: UnitBuff of 3.3.5 returns the id as its 11th value,
+-- but some private clients return nil there, so the name alone must be enough.
+---------------------------------------------------------------------------------------------------
+Suite.drinkNames = { "Питье", "Питьё", "Потребление пищи и напитков", "Drink", "Food & Drink", "Refreshment" }
+-- Drink buffs of 3.3.5a: vendor and cooked drinks by tier, conjured mage water (Conjured Water up to
+-- Conjured Glacier Water, Mana Biscuit, Mana Pie and Strudel), festival drinks. Their names (resolved
+-- through GetSpellInfo) also join the name set, so another locale is covered automatically.
+Suite.drinkSpells = {
+    430, 431, 432, 1133, 1135, 1137, 10250, 22734, 24355, 25696, 26261, 26402, 26473, 26475, 27089, 29007,
+    34291, 43154, 43155, 43182, 43183, 43706, 44166, 45019, 45020, 46755, 57073, 61830, 64356, 72623,
+}
+local drinkByName, drinkById
+local function drinkTables()
+    if drinkByName then return drinkByName, drinkById end
+    drinkByName, drinkById = {}, {}
+    for _, name in ipairs(Suite.drinkNames) do drinkByName[name] = true end
+    for _, id in ipairs(Suite.drinkSpells) do
+        drinkById[id] = true
+        local name = GetSpellInfo and GetSpellInfo(id)
+        if name then drinkByName[name] = true end
+    end
+    return drinkByName, drinkById
+end
+Suite.ResetDrinkCache = function() drinkByName, drinkById = nil, nil end
+
+-- Returns name, icon, expiration, duration of the drink buff on the unit, or nil.
+function Suite.DrinkAura(unit)
+    if not unit or not UnitExists(unit) or not UnitBuff then return nil end
+    local names, ids = drinkTables()
+    for index = 1, 40 do
+        local name, _, icon, _, _, duration, expiration, _, _, _, spellId = UnitBuff(unit, index)
+        if not name then return nil end
+        if names[name] or (spellId and ids[spellId]) then return name, icon, expiration, duration end
+    end
     return nil
 end
 
@@ -747,6 +857,10 @@ Suite.sounds = {
     { "TellMessage", L("Шёпот", "Whisper") },
     { "igQuestListComplete", L("Задание выполнено", "Quest complete") },
     { "LEVELUP", L("Новый уровень", "Level up") },
+    { "AlarmClockWarning2", L("Будильник (короткий)", "Alarm (short)") },
+    { "igPlayerInvite", L("Приглашение", "Invite") },
+    { "PVPTHROUGHQUEUE", L("Поле боя готово", "Battleground ready") },
+    { "LOOTWINDOWCOINSOUND", L("Монеты", "Coins") },
 }
 function Suite.SoundItems()
     local items = {}
@@ -773,12 +887,17 @@ end
 ---------------------------------------------------------------------------------------------------
 local driver = CreateFrame("Frame")
 for _, event in ipairs({ "PLAYER_LOGIN", "SPELLS_CHANGED", "LEARNED_SPELL_IN_TAB", "UNIT_PET",
-    "ACTIVE_TALENT_GROUP_CHANGED", "CHARACTER_POINTS_CHANGED", "PLAYER_TALENT_UPDATE" }) do
+    "ACTIVE_TALENT_GROUP_CHANGED", "CHARACTER_POINTS_CHANGED", "PLAYER_TALENT_UPDATE",
+    "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE" }) do
     driver:RegisterEvent(event)
 end
 local pending
 driver:SetScript("OnEvent", function(self, event, unit)
     if event == "UNIT_PET" and unit ~= "player" then return end
+    if event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE" then
+        if Suite.ready then Suite.CheckSpecProfile() end
+        return
+    end
     if event == "PLAYER_LOGIN" then
         Suite.ready = true
         Suite.Profile()

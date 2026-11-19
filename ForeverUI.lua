@@ -134,7 +134,8 @@ local retailSpecs = {
         health = { "LEFT", "portrait", "RIGHT", 2, -1, 125, 20 },
         power = { "LEFT", "portrait", "RIGHT", 2, -17, 125, 9 },
         bg = { retailArt .. "Player-BACKGROUND", retailArt .. "Player-BORDER", 256, 128, "LEFT", "health", "LEFT", -67, -28 },
-        name = { "LEFT", "health", "TOPLEFT", 4, 7.5, 96 },
+        -- Names are centred over the health bar, `above` px over its top (where DragonUI puts the name line).
+        name = { above = 7.5 },
         level = { 15.5, -59 },
         glows = {
             status = { retailArt .. "Player-Status", 196, 71, { 0, 392 / 512, 0, 142 / 256 }, "bg", 0, 0.5 },
@@ -146,7 +147,7 @@ local retailSpecs = {
         health = { "RIGHT", "portrait", "LEFT", -1.25, -2.25, 126, 20 },
         power = { "RIGHT", "portrait", "LEFT", 6.25, -18.75, 133, 9.5 },
         bg = { retailArt .. "Target-BACKGROUND", retailArt .. "Target-BORDER", 256, 128, "TOPLEFT", "frame", "TOPLEFT", -0.5, -10.5 },
-        name = { "LEFT", "bg", "TOPLEFT", 4, -15.5, 117 },
+        name = { above = 8 },
         level = { 177.83, -55.5 },
         glows = {
             combat = { retailArt .. "Target-InCombat", 188, 67, { 0, 376 / 512, 0, 134 / 256 }, "frame", 1, 24 },
@@ -157,12 +158,15 @@ local retailSpecs = {
         health = { "LEFT", "portrait", "RIGHT", 2, 1, 70.5, 10 },
         power = { "LEFT", "portrait", "RIGHT", -1.5, -9, 74, 7.5 },
         bg = { retailArt .. "ToT-BACKGROUND", retailArt .. "ToT-BORDER", 128, 64, "LEFT", "portrait", "CENTER", -24.5, -9.5 },
-        name = { "LEFT", "portrait", "RIGHT", 3, 13, 65 },
+        name = { above = 7 },
     },
 }
 retailSpecs.target.glows.status = retailSpecs.target.glows.combat
 retailSpecs.small.glows = {}
 local function retailActive() return ui.Settings().barLayout == "retail" end
+-- Opacity of the reaction-coloured gradient behind target and focus names (both layouts): it fades from almost
+-- clear at the top to `bottom` at the bottom, like the Retail name background.
+local ACCENT_ALPHA = { bottom = 0.9, top = 0.1 }
 
 local skins = {}
 local healthBars = {}
@@ -272,13 +276,19 @@ local function applyPanelMedia(panel, scale)
     local settings = ui.Settings()
     local background = ui.MediaPath("background", settings.unitBarBackground)
     local border = ui.MediaPath("border", settings.unitBarBorder)
-    -- The bronze chrome of the player, target and party frames already is their border.
-    if panel.foreverChrome then border = "" end
-    -- The Retail art brings its own wells.
-    if panel.retailOn then
-        placePanel(panel, 0)
-        panel:SetBackdrop(nil)
-        return
+    -- The bronze chrome and the Retail art lie over the bar panel: there the border goes on its own layer above
+    -- them (`panel.edge`, level `panel.edgeLevel`), and the panel keeps the background. With the chrome it frames
+    -- the bars and the name (the panel), in Retail the health and power bars.
+    local edge = panel.edge
+    if (panel.foreverChrome or panel.retailOn) and not edge and border ~= "" then
+        edge = CreateFrame("Frame", nil, panel:GetParent())
+        panel.edge = edge
+    end
+    if edge then
+        edge:SetFrameStrata(panel:GetFrameStrata())
+        edge:SetFrameLevel(panel.edgeLevel or panel:GetFrameLevel() + 2)
+        edge:SetBackdrop(nil)
+        edge:Hide()
     end
     local edgeSize, inset = 0, 0
     if border ~= "" then
@@ -289,10 +299,40 @@ local function applyPanelMedia(panel, scale)
         end
         edgeSize, inset = edgeSize * scale, inset * scale
     end
+    local edgeColor = color("ufBorderColor", { 1, 1, 1, 1 })
+    -- The Retail art brings its own wells; only the chosen border goes around the bars.
+    if panel.retailOn then
+        placePanel(panel, 0)
+        panel:SetBackdrop(nil)
+        local top, bottom = panel.health, panel.power or panel.health
+        if edge and border ~= "" and top then
+            edge:ClearAllPoints()
+            edge:SetPoint("TOPLEFT", top, "TOPLEFT", -inset, inset)
+            edge:SetPoint("BOTTOMRIGHT", bottom, "BOTTOMRIGHT", inset, -inset)
+            edge:SetBackdrop({ edgeFile = border, edgeSize = edgeSize })
+            edge:SetBackdropBorderColor(edgeColor[1], edgeColor[2], edgeColor[3], edgeColor[4] or 1)
+            edge:Show()
+        end
+        return
+    end
+    if edge then
+        edge:ClearAllPoints()
+        edge:SetAllPoints(panel)
+    end
     placePanel(panel, inset)
     if background == "" and border == "" then
         panel:SetBackdrop(nil)
         return
+    end
+    if edge and border ~= "" then
+        edge:SetBackdrop({ edgeFile = border, edgeSize = edgeSize })
+        edge:SetBackdropBorderColor(edgeColor[1], edgeColor[2], edgeColor[3], edgeColor[4] or 1)
+        edge:Show()
+        border = ""
+        if background == "" then
+            panel:SetBackdrop(nil)
+            return
+        end
     end
     panel:SetBackdrop({
         bgFile = background ~= "" and background or nil,
@@ -301,8 +341,7 @@ local function applyPanelMedia(panel, scale)
         insets = { left = inset, right = inset, top = inset, bottom = inset },
     })
     if border ~= "" then
-        local edge = color("ufBorderColor", { 1, 1, 1, 1 })
-        panel:SetBackdropBorderColor(edge[1], edge[2], edge[3], edge[4] or 1)
+        panel:SetBackdropBorderColor(edgeColor[1], edgeColor[2], edgeColor[3], edgeColor[4] or 1)
     end
     local tint = color("ufPanelColor", { 0.13, 0.085, 0.048, 0.30 })
     if background == white then
@@ -319,6 +358,7 @@ end
 local function createBarPanel(frame, health, power, scale, hasChrome)
     local panel = CreateFrame("Frame", nil, frame)
     panel.foreverChrome = hasChrome
+    panel.health, panel.power = health, power
     panel:SetFrameStrata(health:GetFrameStrata())
     local level = health:GetFrameLevel()
     if power then level = math.min(level, power:GetFrameLevel()) end
@@ -428,6 +468,8 @@ local function apply(frame, style, originX, originY, scale, flip)
     local top = style.nameBelow and style.health[2] - 2.5 or style.name[2] - 2
     local bottom = bottomBar[2] + bottomBar[4] + 2.5
     local panel = createBarPanel(frame, health, power, scale, style.chrome ~= nil)
+    -- The border of a chromed frame is drawn above the chrome and the portrait ring.
+    panel.edgeLevel = portraitLayer:GetFrameLevel() + 1
     position(panel, "TOPLEFT", left, top, right - left, bottom - top)
     rememberPanel(panel)
     applyPanelMedia(panel, scale)
@@ -529,9 +571,22 @@ local function apply(frame, style, originX, originY, scale, flip)
         skin.aggro = ring
     end
     if style.nameFill then
+        -- Name accent: the Retail name background in both layouts, a vertical gradient in the unit's reaction colour
+        -- at about 60% brightness, fading out towards the top (`ACCENT_ALPHA`). Classic fills the name slot of the
+        -- chrome; Retail a 17 px strip on top of the health bar.
         local accent = panel:CreateTexture(nil, "ARTWORK", nil, -1)
         accent:SetTexture(white)
-        position(accent, "TOPLEFT", unpack(style.nameFill))
+        local function placeAccent(retail)
+            accent:ClearAllPoints()
+            if retail then
+                accent:SetPoint("BOTTOMLEFT", health, "TOPLEFT", 0, 0)
+                accent:SetPoint("BOTTOMRIGHT", health, "TOPRIGHT", 0, 0)
+                accent:SetHeight(17)
+            else
+                position(accent, "TOPLEFT", unpack(style.nameFill))
+            end
+        end
+        placeAccent(false)
         local deathIcon = portraitLayer:CreateTexture(nil, "OVERLAY", nil, 2)
         deathIcon:SetTexture(frameArt)
         deathIcon:SetTexCoord(64 / 512, 128 / 512, 384 / 512, 448 / 512)
@@ -542,11 +597,13 @@ local function apply(frame, style, originX, originY, scale, flip)
             if frame.unit and UnitExists(frame.unit) then
                 dead = UnitIsDeadOrGhost(frame.unit)
                 local r, g, b = UnitSelectionColor(frame.unit)
-                local bottomTint, topTint = 62, 37
-                accent:SetGradientAlpha("VERTICAL",
-                    (23 + r * bottomTint) / 255, (12 + g * bottomTint) / 255, (7 + b * bottomTint) / 255, 1,
-                    (15 + r * topTint) / 255, (8 + g * topTint) / 255, (7 + b * topTint) / 255, 1)
-                if setting("ufTargetAccent", true) and not (rt and rt.on) then accent:Show() else accent:Hide() end
+                local retail = rt and rt.on and true or false
+                placeAccent(retail)
+                -- Measured on the Retail frame: a friendly player (0, 0, 1) goes from 13, 13, 165 at the bottom
+                -- to the world showing through at the top.
+                local br, bg, bb = (13 + r * 152) / 255, (13 + g * 152) / 255, (13 + b * 152) / 255
+                accent:SetGradientAlpha("VERTICAL", br, bg, bb, ACCENT_ALPHA.bottom, br, bg, bb, ACCENT_ALPHA.top)
+                if setting("ufTargetAccent", true) then accent:Show() else accent:Hide() end
             else
                 accent:Hide()
             end
@@ -801,12 +858,12 @@ local function apply(frame, style, originX, originY, scale, flip)
                 center(power.TextString, power)
             end
             if name then
-                local n = spec.name
                 if rt.stockFont and rt.stockFont[1] then name:SetFont(unpack(rt.stockFont)) end
-                anchor(name, n[1], n[2], n[3], n[4], n[5])
-                name:SetSize(n[6], 12)
+                name:ClearAllPoints()
+                name:SetPoint("CENTER", health, "TOP", 0, spec.name.above)
+                name:SetSize(h[6] - 6, 12)
                 name:SetWordWrap(false)
-                name:SetJustifyH("LEFT")
+                name:SetJustifyH("CENTER")
             end
         end
         function rt.set(on)

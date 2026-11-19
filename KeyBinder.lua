@@ -245,7 +245,7 @@ SlashCmdList.FOREVERUIBIND = function() KB.Toggle() end
 -- Game menu: right under the "ForeverUI" button added by EditMode.lua.
 if GameMenuFrame and GameMenuFrame_AddButton then
     local menu = CreateFrame("Button", "ForeverStockUIKeyBindButton", GameMenuFrame, "GameMenuButtonTemplate")
-    menu:SetText(L("Назначение клавиш", "Key bindings"))
+    menu:SetText("Remap")
     menu:SetScript("OnClick", function()
         PlaySound("igMainMenuOption")
         HideUIPanel(GameMenuFrame)

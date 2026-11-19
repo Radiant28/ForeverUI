@@ -3,10 +3,10 @@ local groupName = ui.russian and "Группа/Рейд" or "Party/Raid"
 local lootName = ui.russian and "Добыча" or "Loot"
 local guildName = ui.russian and "Гильдия" or "Guild"
 local windows = {
-    { groupName, { SAY = true, PARTY = true, PARTY_LEADER = true, RAID = true, RAID_LEADER = true, RAID_WARNING = true },
-        "chatGroupWindow" },
-    { lootName, { LOOT = true }, "chatLootWindow" },
-    { guildName, { GUILD = true }, "chatGuildWindow" },
+    { groupName, { SAY = true, EMOTE = true, TEXT_EMOTE = true, YELL = true, WHISPER = true, PARTY = true,
+        PARTY_LEADER = true, RAID = true, RAID_LEADER = true, RAID_WARNING = true }, "chatGroupWindow" },
+    { lootName, { LOOT = true, MONEY = true }, "chatLootWindow" },
+    { guildName, { WHISPER = true, GUILD = true, GUILD_ACHIEVEMENT = true, OFFICER = true }, "chatGuildWindow" },
 }
 
 local function enabled(key)

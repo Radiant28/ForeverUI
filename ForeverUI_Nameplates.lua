@@ -64,7 +64,7 @@ local defaults = {
     auraDebuffs = true, auraBuffs = true, auraMine = true, auraOthers = true, auraOthersClass = false,
     auraTimerText = true, auraTimerFont = "", auraTimerSize = 0, auraTimerOutline = "thin", auraTimerColour = {1, 1, 1},
     classColourEnemy = true, classColourFriend = true, friendlyNameOnly = false, friendlyNPCNameOnly = true, clickFollowsPlate = true,
-    npcTitles = true, playerGuilds = true, subtitleSize = 10,
+    npcTitles = true, playerGuilds = true, subtitleSize = 10, nameReactionColour = true,
 }
 
 local function Clamp(value, low, high, fallback)
@@ -1284,7 +1284,25 @@ local function SetBarMode(view, full)
     if not full then view.dragon:Hide(); view.raid:Hide(); view.cast:Hide(); view.boxAt = nil end
 end
 
-local function StyleName(view, friendly, castShown, class)
+-- Name colours of non-hostile NPCs, as the stock client paints them by reaction.
+local REACTION_FRIENDLY, REACTION_NEUTRAL = { 0, 1, 0 }, { 1, 1, 0 }
+
+-- Reaction of an NPC plate: UnitReaction when a unit token exists (UnitIsFriend also counts neutral units
+-- as friends), otherwise the native bar colour (green friendly, yellow neutral, red hostile).
+local function NameReaction(unit, r, g, b)
+    local reaction = unit and UnitReaction(unit, "player")
+    if reaction then
+        if reaction == 4 then return REACTION_NEUTRAL end
+        if reaction >= 5 then return REACTION_FRIENDLY end
+        return
+    end
+    if g > 0.9 and b < 0.2 then
+        if r > 0.9 then return REACTION_NEUTRAL end
+        if r < 0.2 then return REACTION_FRIENDLY end
+    end
+end
+
+local function StyleName(view, friendly, castShown, class, reaction)
     local under = castShown and cfg.namePlace == "undercast"
     local size = friendly and cfg.nameSizeFriend or cfg.nameSizeEnemy
     local name = view.name
@@ -1317,7 +1335,7 @@ local function StyleName(view, friendly, castShown, class)
     if color then
         r, g, b = color.r, color.g, color.b
     else
-        local tint = cfg.nameTextColour
+        local tint = reaction or cfg.nameTextColour
         r, g, b = tint[1], tint[2], tint[3]
     end
     if view.nameR ~= r or view.nameG ~= g or view.nameB ~= b then
@@ -1419,7 +1437,10 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
     local castShown = not headline and wfn.DrawCast(view, unit, friendly, now)
     MuteNativeDetails(view, headline or castShown)
     local nameClass = (cfg.nameColour == "class" or (nameOnly and cfg.classColourFriend)) and class or nil
-    StyleName(view, friendly, castShown, nameClass)
+    -- Friendly NPCs green, neutral yellow; hostile names keep the configured colour.
+    local reaction = cfg.nameReactionColour and kind ~= "player" and not team and not blue
+        and NameReaction(unit, r, g, b) or nil
+    StyleName(view, friendly, castShown, nameClass, reaction)
     if view.fullName ~= name then SetName(view, name) end
     DrawSubtitle(view, Subtitle(view, unit, kind, now), headline, castShown)
     if headline then
@@ -1641,6 +1662,8 @@ driver:SetScript("OnEvent", function(self, event, unit, ...)
     if event == "PLAYER_LOGIN" then
         self:UnregisterEvent(event)
         if IsAddOnLoaded("!!RefinedBlizzPlates") then return end
+        -- Switched off in the setup wizard or on the General page (account-wide, applies after /reload).
+        if ui.Settings and ui.Settings().nameplatesEnabled == false then return end
         LoadConfig()
         wfn.CreateOptions(ApplyCVars, defaults)
         wfn.RegisterSlash()

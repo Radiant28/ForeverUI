@@ -40,6 +40,18 @@ ui.RegisterOptions("tooltip", {
                 tooltip = L("Клиент сам скрывает подсказку по окончании штатного затухания, поэтому слишком большое время может обрезаться.",
                     "The client hides the tooltip when its own fade ends, so very long times may be cut short.") },
         } },
+        { title = L("Заклинания", "Spells"), options = {
+            { "toggle", "tooltipSpellId", L("Показывать ID заклинания", "Show spell ID"), default = true, apply = false,
+                tooltip = L("Строка «ID: 12345» в подсказке заклинания и ауры. Заклинание, перетащенное мышью на поле "
+                    .. "ввода заклинаний ForeverUI (или Shift+клик по нему, пока поле в фокусе), вставляет свой ID.",
+                    "An “ID: 12345” line in spell and aura tooltips. A spell dragged onto a ForeverUI spell input "
+                    .. "(or Shift-clicked while the box has focus) puts its ID in.") },
+            { "select", "tooltipSpellIdPlace", L("Где показывать ID", "ID position"), default = "name", apply = false,
+                depends = "tooltipSpellId", values = {
+                    { "name", L("Под названием", "Under the name") },
+                    { "bottom", L("Внизу подсказки", "At the bottom") },
+                } },
+        } },
         { title = L("В бою", "In combat"), options = {
             { "select", "tooltipCombat", L("Подсказки в бою", "Tooltips in combat"), default = "show",
                 values = {

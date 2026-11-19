@@ -19,17 +19,24 @@ ui.RegisterOptions("chat", {
             { "toggle", "chatGuildWindow", L("Гильдия", "Guild"), default = true },
             { "toggle", "chatLootWindow", L("Добыча", "Loot"), default = true },
             { "toggle", "chatLootRollsOnly", L("Во вкладке «Добыча» только броски", "Loot tab shows rolls only"),
-                default = true, depends = "chatLootWindow" },
+                default = false, depends = "chatLootWindow" },
         } },
     },
 })
 
 ui.RegisterOptions("loot", {
     title = L("Окно добычи", "Loot window"),
-    description = L("Анимация появления и исчезновения добычи.", "Loot reveal and fade animation."),
+    description = L("Вид окна добычи и анимация появления и исчезновения.", "Loot window look and reveal and fade animation."),
     icon = "Interface\\Icons\\INV_Misc_Bag_10_Green",
     group = "items", order = 40,
     sections = {
+        { title = L("Вид", "Look"), apply = function() if ui.Loot then ui.Loot.Apply() end end, options = {
+            { "toggle", "lootForeverCards", L("Карточки предметов WoW Forever", "WoW Forever item cards"), default = true,
+                tooltip = L("Фон, обводка и подсветка строк добычи из текстур WoW Forever. Выкл. — карточки клиента.",
+                    "Background, outline and highlight of loot rows from WoW Forever textures. Off: the client's cards.") },
+            { "toggle", "lootQualityBorder", L("Обводка цветом качества", "Outline in quality colour"), default = true,
+                depends = "lootForeverCards" },
+        } },
         { title = L("Анимация", "Animation"), options = {
             { "range", "lootFadeDuration", L("Длительность", "Duration"), min = 0.15, max = 1.5, step = 0.05, default = 0.3,
                 suffix = L(" с", " s") },

@@ -2,4 +2,7 @@
 	<Binding name="FOREVERUI_TOGGLE_KEYHINTS" header="FOREVERUI">
 		ForeverStockUI_ToggleKeyHints()
 	</Binding>
+	<Binding name="FOREVERUI_BAGSORT">
+		ForeverStockUI_SortBags()
+	</Binding>
 </Bindings>

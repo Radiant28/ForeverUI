@@ -24,8 +24,8 @@
 ### Партия 2 — сделано 12.11.2026
 - [x] Рамки группы, боссов, питомца, фокуса, цели цели — уже с оправой Forever: они рисуются стилями `player`/`target` в масштабе (компактный спрайт `uipartyframec60` не нужен)
 - [x] Руны рыцаря смерти — `uideathknightrunes` → `Art/Forever/Runes.tga` (хук `SetTexture` иконки руны)
-- [x] Фоны талантов по веткам, свои и при осмотре — `talentbackground*`, `talentsclassbackgrounddeathknight*` → `Art/Forever/Talents/` (`CharacterSkin.lua`; таланты питомца штатные)
-- [x] Штатные кнопки окон (UIPanelButtonTemplate) — `128-redbutton-*` → `Art/Forever/Panel-Button.tga` (при открытии окна из списка `CharacterSkin`)
+- [x] Фоны талантов по веткам, свои и при осмотре — `talentbackground*`, `talentsclassbackgrounddeathknight*` → `Art/Forever/Talents/` (`SkinExtras.lua`; таланты питомца штатные)
+- [x] Штатные кнопки окон (UIPanelButtonTemplate) — `128-redbutton-*` → `Art/Forever/Panel-Button.tga` (при открытии окна из списка `SkinExtras.lua`)
 - [x] Стрелки миникарты к цели и к трупу — `rotating-minimap*arrow` (если клиент поддерживает смену; стрелка игрока в 3.3.5 — модель)
 
 ### Нужна настройка по скриншотам
@@ -174,7 +174,7 @@
 - [ ] `ui-itemsocketparchementframe-left.tga` (16x128)
 
 **01_Frames_And_Borders/lootframe** (1)
-- [ ] `lootframe.tga` (512x1024)
+- [x] `lootframe.tga` (512x1024) → `Art/Forever/Loot-Atlas.tga` (карточки строк добычи и затемнение, `Loot.lua`)
 
 **01_Frames_And_Borders/macroframe** (2)
 - [ ] `macropopupc60.tga` (256x256)
@@ -823,7 +823,7 @@
 
 **07_HUD_And_Atlases/hud** (14)
 - [ ] `uiactionbar.tga` (256x1024)
-- [ ] `uiactionbar2xc60.tga` (1024x1024)
+- [x] `uiactionbar2xc60.tga` (1024x1024) — ячейка с крылом → `Art/Forever/ActionBar-SlotWing.tga` (фон ячеек основной панели)
 - [ ] `uiactionbarverticalc60.tga` (128x32)
 - [ ] `uicalendar.tga` (256x256)
 - [ ] `uideathknightrunes.tga` (512x256)

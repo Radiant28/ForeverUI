@@ -46,6 +46,13 @@ function SU.Access(target, path, default, onChange)
     return access
 end
 
+-- Section tab inside a custom block: `holder` is the frame the block was built in, top = offset from its top
+-- (positive downwards). The options window turns holder.anchors into tabs above the page.
+function SU.Anchor(holder, title, top)
+    holder.anchors = holder.anchors or {}
+    holder.anchors[#holder.anchors + 1] = { title = title, top = top }
+end
+
 -- Vertical grid: rows go into `columns` columns, full-width rows break the line.
 function SU.Grid(parent, x, y, width, columns)
     local grid = { rows = {}, x = x, y = y, top = y, width = width, columns = columns or 2, column = 0, line = 0 }
@@ -82,9 +89,11 @@ function SU.Grid(parent, x, y, width, columns)
         self.rows[#self.rows + 1] = row
         return self:Place(row, full)
     end
-    function grid:Header(text)
+    -- tab: the header also becomes a section tab of the page (true = its own text, or a shorter title).
+    function grid:Header(text, tab)
         self:Break()
         self.y = self.y - 4
+        if tab then SU.Anchor(parent, tab == true and text or tab, -self.y) end
         local header = W.Header(parent, text, width)
         self:Place(header, true, 22)
         return header

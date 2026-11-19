@@ -2,7 +2,9 @@
 -- optionally, on the stock unit frames. Mouse buttons 1-5 with Shift/Ctrl/Alt become secure
 -- attributes of the button itself; the mouse wheel and keyboard keys become override bindings that
 -- a secure wrapper sets on OnEnter and clears on OnLeave/OnHide (SetBindingClick with a virtual
--- button "fuiccN"), the pattern Cell uses on this client. Every child layer added by ForeverUI is
+-- button "fuiccN"), the pattern Cell uses on this client. Only one button owns bindings at a time,
+-- and a secure OnClick guard cancels a binding that fires with the cursor off the button, so a key
+-- can never cast on the unit of a frame the cursor has left. Every child layer added by ForeverUI is
 -- click-through, so the bar, the power bar and the shield line all reach the button.
 -- Attributes of protected frames can only change out of combat: changes wait in ui.RunOutOfCombat.
 -- Bindings per talent group (dual spec) or one common set, stored in the suite profile.
@@ -187,19 +189,88 @@ local function showUnitMenu(self, unit)
     ToggleDropDownMenu(1, nil, unitMenu, "cursor", 0, 0)
 end
 
+-- Secure snippets. They all run in the environment of `header`, so HOVER (the button that owns the
+-- key and wheel bindings right now) is shared by every wrapped button.
+--   OnEnter: the previous owner loses its bindings first, even when the client never sent its
+--            OnLeave (the grid was rebuilt under the cursor, the button was re-parented, ...).
+--   OnLeave / OnHide: the button drops its own bindings and forgets itself.
+--   OnClick: a key or wheel binding ("fuiccN") that fires while the cursor is not over the button is
+--            a stale binding. The click is cancelled (no cast on the old unit) and the binding is
+--            removed, so the next press of the key does what the key normally does.
+local ENTER_SNIPPET = [[
+    if HOVER and HOVER ~= self then HOVER:ClearBindings() end
+    HOVER = self
+    local code = self:GetAttribute("fuicc-bind")
+    if code then control:RunFor(self, code) end
+]]
+local LEAVE_SNIPPET = [[
+    self:ClearBindings()
+    if HOVER == self then HOVER = nil end
+]]
+local CLICK_SNIPPET = [[
+    if type(button) == "string" and strsub(button, 1, 5) == "fuicc" and not self:IsUnderMouse(true) then
+        self:ClearBindings()
+        if HOVER == self then HOVER = nil end
+        return false
+    end
+]]
+CC.snippets = { enter = ENTER_SNIPPET, leave = LEAVE_SNIPPET, click = CLICK_SNIPPET }
+
+-- The click guard needs IsUnderMouse in the restricted environment; asked once, out of combat.
+local guardKnown, guardSupported
+local function clickGuardSupported()
+    if guardKnown then return guardSupported end
+    if InCombatLockdown() or not header.Execute then return false end
+    guardKnown = true
+    pcall(header.Execute, header, [[ self:SetAttribute("fuicc-um", self.IsUnderMouse and 1 or 0) ]])
+    guardSupported = header:GetAttribute("fuicc-um") == 1
+    return guardSupported
+end
+
+-- Insecure safety net, only out of combat (in combat the secure snippets above do the work): drops
+-- the override bindings of a button the cursor is not over.
+local function releaseBindings(frame)
+    if InCombatLockdown() or not ClearOverrideBindings then return end
+    ClearOverrideBindings(frame)
+end
+
+local function underCursor(frame)
+    if not frame.IsVisible or not frame:IsVisible() then return false end
+    if MouseIsOver then return MouseIsOver(frame) and true or false end
+    return GetMouseFocus and GetMouseFocus() == frame or false
+end
+
+-- Clears bindings left on buttons the cursor is not over (all of them with `all`). Called right
+-- before combat lockdown, after combat and on roster changes.
+function CC.ReleaseStale(all)
+    if InCombatLockdown() or not ClearOverrideBindings then return end
+    for frame in pairs(frames) do
+        if all or not underCursor(frame) then ClearOverrideBindings(frame) end
+    end
+end
+
 local function wrap(frame)
     local state = frames[frame]
     if state.wrapped then return end
     state.wrapped = true
-    header:WrapScript(frame, "OnEnter", [[
-        local code = self:GetAttribute("fuicc-bind")
-        if code then control:RunFor(self, code) end
-    ]])
-    header:WrapScript(frame, "OnLeave", [[ self:ClearBindings() ]])
-    header:WrapScript(frame, "OnHide", [[ self:ClearBindings() ]])
-    -- Plain (insecure) hooks only tell the hint panel that a unit frame is under the cursor.
+    header:WrapScript(frame, "OnEnter", ENTER_SNIPPET)
+    header:WrapScript(frame, "OnLeave", LEAVE_SNIPPET)
+    header:WrapScript(frame, "OnHide", LEAVE_SNIPPET)
+    if clickGuardSupported() and frame:GetScript("OnClick") then
+        header:WrapScript(frame, "OnClick", CLICK_SNIPPET)
+        state.guarded = true
+    end
+    -- Plain (insecure) hooks: the hint panel learns that a unit frame is under the cursor, and the
+    -- bindings are dropped once more out of combat in case the secure OnLeave was lost.
     frame:HookScript("OnEnter", function() if CC.SetHovered then CC.SetHovered(true) end end)
-    frame:HookScript("OnLeave", function() if CC.SetHovered then CC.SetHovered(false) end end)
+    frame:HookScript("OnLeave", function(self)
+        if CC.SetHovered then CC.SetHovered(false) end
+        releaseBindings(self)
+    end)
+    frame:HookScript("OnHide", function(self)
+        if CC.SetHovered then CC.SetHovered(false) end
+        releaseBindings(self)
+    end)
 end
 
 local function applyTo(frame, attrs, snippet)
@@ -222,6 +293,8 @@ local function applyTo(frame, attrs, snippet)
     end
     frame:SetAttribute("fuicc-bind", enabled and snippet or "self:ClearBindings()")
     wrap(frame)
+    -- The old set must not stay bound on a button that is under the cursor right now.
+    releaseBindings(frame)
 end
 
 function CC.Attach(frame)
@@ -474,8 +547,12 @@ events:SetScript("OnEvent", function(_, event)
         end
     elseif event == "PLAYER_REGEN_DISABLED" then
         inCombat = true
+        CC.ReleaseStale()
     elseif event == "PLAYER_REGEN_ENABLED" then
         inCombat = false
+        CC.ReleaseStale()
+    else
+        CC.ReleaseStale()
     end
     CC.RefreshHints()
 end)

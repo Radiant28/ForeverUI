@@ -55,7 +55,8 @@ local function build(parent, width)
     local actionRow = W.Create(parent, { type = "select", label = L("Действие", "Action"), values = cc.actions },
         su.Access(draft, "action", "spell", function() refresh() end), 220)
     actionRow:SetPoint("TOPLEFT", 0, y)
-    local valueRow = W.Create(parent, { type = "text", label = L("Заклинание, макрос или предмет", "Spell, macro or item") },
+    local valueRow = W.Create(parent, { type = "text", label = L("Заклинание, макрос или предмет", "Spell, macro or item"),
+        spellDrop = { as = "name" } },
         su.Access(draft, "value", "", function() refresh() end), width - 240)
     valueRow:SetPoint("TOPLEFT", 240, y)
     y = y - 52

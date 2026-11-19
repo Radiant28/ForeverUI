@@ -936,6 +936,27 @@ tick()
 local bankerView = banker.children[3]
 assert(bankerView:IsShown() and not bankerView.health:IsShown(), "friendly NPC shows the name only")
 assert(not bankerView.subtitle:IsShown(), "no title before the NPC was ever seen")
+assert(bankerView.name.color[1] == 0 and bankerView.name.color[2] == 1 and bankerView.name.color[3] == 0,
+    "friendly NPC name is green")
+cfg.nameReactionColour = false
+tick()
+assert(bankerView.name.color[1] == 1 and bankerView.name.color[2] == 1 and bankerView.name.color[3] == 1,
+    "reaction colour can be turned off")
+cfg.nameReactionColour = true
+-- A neutral NPC (yellow bar) stays yellow, also when hovered and UnitIsFriend calls it a friend.
+local trader = plate("Торговец")
+trader.children[1]:SetStatusBarColor(1, 1, 0)
+trader.children[1]:SetValue(100)
+tick()
+local traderView = trader.children[3]
+assert(traderView.name.color[1] == 1 and traderView.name.color[2] == 1 and traderView.name.color[3] == 0,
+    "neutral NPC name is yellow")
+units.mouseover = { name = "Торговец", level = 80, friendly = true, reaction = 4 }
+tick()
+assert(traderView.name.color[1] == 1 and traderView.name.color[3] == 0, "hovered neutral NPC stays yellow")
+units.mouseover = nil
+trader:Hide()
+tick()
 units.mouseover = { name = "Казначей", level = 80, friendly = true }
 tooltipUnits.mouseover = { "Казначей", "Хранилище аккаунта" }
 tick()
@@ -1063,7 +1084,7 @@ end
 assert(customs == 2 and keys.plateOffsetY.default == cfg.plateOffsetY and keys.auraTimerAnimation.values[2][1] == "forever")
 for _, key in ipairs({ "auraDebuffs", "auraBuffs", "auraMine", "auraOthers", "auraOthersClass", "auraTimerText", "auraTimerFont",
     "auraTimerSize", "auraTimerOutline", "auraTimerColour", "classColourEnemy", "classColourFriend", "friendlyNameOnly", "friendlyNPCNameOnly", "crowdSaver", "crowdThreshold", "edgeFade", "edgeFadeInner", "edgeFadeOuter", "npcTitles", "playerGuilds", "subtitleSize",
-    "nameMaxLetters", "nameTextColour", "stackNearestFirst", "stackBehindAlpha" }) do
+    "nameMaxLetters", "nameTextColour", "nameReactionColour", "stackNearestFirst", "stackBehindAlpha" }) do
     assert(keys[key], "schema option " .. key)
 end
 assert(keys.clickFollowsPlate == nil and keys.verticalSpacing.default == 0.9 and cfg.spacingDefault090)

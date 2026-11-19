@@ -39,9 +39,19 @@ local retailCells = {
     spellbook = { up = {121, 159, 55, 107}, down = {81, 119, 433, 485}, mouseover = {189, 227, 433, 485}, disabled = {1, 39, 55, 107} },
     talent = { up = {161, 199, 1, 53}, down = {81, 119, 271, 323}, mouseover = {81, 119, 1, 53}, disabled = {81, 119, 55, 107} },
 }
+-- DragonUI has no Store or Adventure Guide icon: Retail-MicroExtra.tga (256 x 128) holds both in its style, built
+-- from the colour cart and skull book of Micro-Color on the DragonUI plate, toned like its four states.
+local retailExtra = art .. "ActionBar\\Retail-MicroExtra"
+local function extraCells(row)
+    local top, bottom = 1 + row * 54, 53 + row * 54
+    return { sheet = retailExtra, height = 128, up = { 1, 39, top, bottom }, mouseover = { 41, 79, top, bottom },
+        down = { 81, 119, top, bottom }, disabled = { 121, 159, top, bottom } }
+end
+retailCells.store = extraCells(0)
+retailCells.adventure = extraCells(1)
 local retailNames = { Character = "character", Spellbook = "spellbook", Talent = "talent", Achievement = "achievement",
     QuestLog = "questlog", Socials = "socials", PVP = "pvp", LFD = "lfd", MainMenu = "mainmenu", Help = "help",
-    Collections = "collections" }
+    Collections = "collections", Store = "store", EncounterJournal = "adventure" }
 local skins, stockSizes, stockInsets, stockPoints = {}, {}, {}, {}
 
 ui.MicroMenu = {
@@ -53,9 +63,12 @@ ui.MicroMenu = {
     end,
 }
 
-local function setRetailCell(texture, cell)
-    texture:SetTexture(retailSheet)
-    texture:SetTexCoord(cell[1] / 256, cell[2] / 256, cell[3] / 512, cell[4] / 512)
+local function setRetailCell(texture, cell, cells)
+    local height = cells and cells.height or 512
+    texture:SetTexture(cells and cells.sheet or retailSheet)
+    texture:SetDesaturated(nil)
+    texture:SetVertexColor(1, 1, 1)
+    texture:SetTexCoord(cell[1] / 256, cell[2] / 256, cell[3] / height, cell[4] / height)
     texture:ClearAllPoints()
     texture:SetAllPoints(texture:GetParent())
 end
@@ -127,7 +140,10 @@ events:SetScript("OnEvent", function(self)
                     hooksecurefunc(button, setter, function(self)
                         local current = self[getter](self)
                         if not current then return end
-                        if skins[name] and skins[name].flat then
+                        local retail = skins[name] and skins[name].retail
+                        if retail then
+                            setRetailCell(current, retail[({ "up", "down", "disabled" })[i]], retail)
+                        elseif skins[name] and skins[name].flat then
                             flatCell(current, self, cell)
                         else
                             setCell(current, self, cell)
@@ -208,6 +224,7 @@ events:SetScript("OnEvent", function(self)
             local flat = retail and cells
             local desaturated = retail and not cells
             skin.flat = desaturated
+            skin.retail = flat and cells or nil
             -- Flat icons carry their own plate; the colour-only buttons get the bronze plate, desaturated.
             -- The WoW Forever plate (cell 8) has its own bronze rim, so the action-slot edge stays hidden.
             skin.plate:SetAlpha(flat and 0 or 1)
@@ -256,9 +273,9 @@ events:SetScript("OnEvent", function(self)
                     { "GetDisabledTexture", cells.disabled } }
                 for _, face in ipairs(faces) do
                     local texture = button[face[1]](button)
-                    if texture then setRetailCell(texture, face[2]) end
+                    if texture then setRetailCell(texture, face[2], cells) end
                 end
-                setRetailCell(skin.hover, cells.mouseover)
+                setRetailCell(skin.hover, cells.mouseover, cells)
                 skin.hover:SetBlendMode("ADD")
                 skin.hover:SetVertexColor(1, 1, 1)
             elseif desaturated then

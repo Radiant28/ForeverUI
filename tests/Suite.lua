@@ -78,6 +78,7 @@ function methods:SetVertexColor(...) self.color = { ... } end
 function methods:SetTexture(t) self.texture = t end
 function methods:GetTexture() return self.texture end
 function methods:SetStatusBarTexture(t) self.barTexture = t end
+function methods:GetStatusBarTexture() local bar = self return { GetTexture = function() return bar.barTexture end } end
 function methods:SetStatusBarColor(...) self.barColor = { ... } end
 function methods:SetBackdropBorderColor(...) self.borderColor = { ... } end
 function methods:GetName() return self.name end
@@ -92,6 +93,11 @@ function methods:Click(button) if self.scripts.OnClick then self.scripts.OnClick
 function methods:GetLeft() return 100 end
 function methods:GetTop() return 600 end
 methods.WrapScript = function(self, frame, script, body) frame.wraps = frame.wraps or {}; frame.wraps[script] = body end
+-- The restricted environment of this client has IsUnderMouse: the probe in ClickCast.lua says yes.
+methods.Execute = function(self) self.attributes["fuicc-um"] = 1 end
+local released, hovering = {}, nil
+function ClearOverrideBindings(frame) released[frame] = true end
+function MouseIsOver(frame) return frame == hovering end
 
 function CreateFrame(kind, name, parent)
     local frame = new(kind, parent, name)
@@ -113,6 +119,7 @@ RAID_CLASS_COLORS = { PRIEST = { r = 1, g = 1, b = 1 } }
 local combat, now = false, 100
 local printed = {}
 function InCombatLockdown() return combat end
+function GetCursorPosition() return 0, 0 end
 function GetTime() return now end
 function GetLocale() return "ruRU" end
 function GetAddOnMetadata() return "1.3.0" end
@@ -310,6 +317,67 @@ assert(printed.sound == "RaidWarning", "stack alert sound")
 printed.sound = nil
 tick(0.2)
 assert(printed.sound == nil, "the alert sound plays once")
+-- ready sound: the group's sound, the entry's own wins, "none" mutes, hidden icons still sound, GCD is not a cooldown
+do
+    local penance = group.items[1]
+    local function step(cd)
+        cooldowns.Penance = cd
+        CDM.Evaluate(group, penance, r, now)
+        CDM.Alerts(group, penance, r, now)
+    end
+    local onCooldown, ready, gcd = { now - 2, 10, 1 }, { 0, 0, 1 }, { now - 0.5, 1.5, 1 }
+    group.soundReady, penance.soundReady = "ReadyCheck", ""
+    step(onCooldown)
+    printed.sound = nil
+    step(ready)
+    assert(printed.sound == "ReadyCheck", "group sound when the cooldown ends")
+    printed.sound = nil
+    step(ready)
+    assert(printed.sound == nil, "once per cooldown")
+    penance.soundReady = "RaidWarning"
+    step(onCooldown) step(ready)
+    assert(printed.sound == "RaidWarning", "the entry's own sound wins")
+    penance.soundReady = "none"
+    printed.sound = nil
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "muted entry")
+    penance.soundReady = ""
+    group.cdShow = "ready"
+    step(onCooldown)
+    assert(not r.show, "hidden while on cooldown")
+    step(ready)
+    assert(printed.sound == "ReadyCheck", "sound when an only-ready icon appears")
+    group.cdShow, group.showGCD = "always", true
+    step(ready)
+    printed.sound = nil
+    step(gcd) step(ready)
+    assert(printed.sound == nil, "no sound after a global cooldown")
+    group.soundCombatOnly = true
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "combat only: silent out of combat")
+    group.soundReady, group.soundCombatOnly, group.showGCD = "", false, false
+    -- one sound for every skill: the group and the entry take it unless they set their own
+    local cdmDb = Suite.Part("cdm")
+    cdmDb.soundReady = "MapPing"
+    step(onCooldown) step(ready)
+    assert(printed.sound == "MapPing", "common sound for every skill")
+    group.soundReady = "none"
+    printed.sound = nil
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "a muted group ignores the common sound")
+    penance.soundReady = "LEVELUP"
+    step(onCooldown) step(ready)
+    assert(printed.sound == "LEVELUP", "the entry still wins inside a muted group")
+    cdmDb.soundCombatOnly = true
+    printed.sound = nil
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "combat only for every skill")
+    cdmDb.soundCombatOnly = false
+    assert(CDM.ClearOwnSounds() >= 2 and group.soundReady == "" and penance.soundReady == "", "own sounds cleared")
+    step(onCooldown) step(ready)
+    assert(printed.sound == "MapPing", "after clearing every skill uses the common sound")
+    cdmDb.soundReady = ""
+end
 -- load conditions
 group.load.when = "combat"
 assert(not CDM.LoadAllowed(group))
@@ -364,10 +432,33 @@ button.healthBar = CreateFrame("StatusBar", nil, button)
 button.healthBar.width, button.healthBar.height = 70, 30
 button.attributes.unit = "raid1"
 button.attributes.type1 = "target"
+button.scripts.OnClick = function() end
 fire("RAID_ROSTER_UPDATE")
 CC.Add(1, "BUTTON1", "", "spell", "Renew")
 assert(button.attributes.type1 == "spell" and button.attributes.spell1 == "Renew", "bindings land on client buttons")
 assert(button.wraps and button.wraps.OnEnter and button.wraps.OnLeave, "secure wrappers for wheel and keys")
+-- Sticky bindings: one owner at a time, the leaving button forgets itself, and a key that fires
+-- with the cursor off the button is cancelled instead of casting on the old unit.
+assert(button.wraps.OnEnter:find("HOVER:ClearBindings%(%)") and button.wraps.OnEnter:find("HOVER = self"),
+    "entering a button clears the previous owner")
+assert(button.wraps.OnLeave:find("self:ClearBindings%(%)") and button.wraps.OnHide == button.wraps.OnLeave,
+    "leaving and hiding drop the bindings")
+assert(button.wraps.OnClick and button.wraps.OnClick:find("IsUnderMouse") and button.wraps.OnClick:find("return false"),
+    "a binding fired off the button is cancelled")
+released = {}
+CC.ReleaseStale()
+assert(released[button], "bindings of a button the cursor left are dropped out of combat")
+released, hovering = {}, button
+CC.ReleaseStale()
+assert(not released[button], "the button under the cursor keeps its bindings")
+hovering = nil
+button.scripts.OnLeave(button)
+assert(released[button], "the plain OnLeave hook drops them too")
+combat, released = true, {}
+CC.ReleaseStale()
+button.scripts.OnLeave(button)
+assert(next(released) == nil, "nothing insecure touches bindings in combat")
+combat = false
 CC.Remove(1, 1)
 assert(button.attributes.type1 == "target" and button.attributes.spell1 == nil, "the client default comes back")
 combat = true
@@ -424,6 +515,50 @@ RF.EachFrame(function(frame, d) if frame == button then deco = d end end)
 assert(deco, "the client button is decorated")
 assert(button.healthBar.barTexture and deco.layer.level > button.level, "Forever texture, click-through layer above")
 local settings = Suite.Part("raid")
+-- Own name text, hover highlight and target border
+tick(0.05)
+assert(deco.name.shown and deco.name.text == "Tester", "own name text")
+settings.rfNameMaxLetters = 3
+RF.Apply()
+tick(0.05)
+assert(deco.name.text == "Tes", "the name is cut to the letter limit")
+assert(RF.CutName("Привет", 3) == "При", "whole UTF-8 letters")
+settings.rfNameMaxLetters, settings.rfNameCustom = 0, false
+RF.Apply()
+tick(0.05)
+assert(not deco.name.shown, "the client name comes back")
+settings.rfNameCustom = true
+RF.Apply()
+tick(0.05)
+button.scripts.OnEnter(button)
+assert(deco.hoverEdge.shown and deco.hoverFill.shown, "hover highlight")
+settings.rfHoverStyle = "border"
+RF.Apply()
+assert(deco.hoverEdge.shown and not deco.hoverFill.shown, "border only")
+settings.rfHoverStyle = "both"
+button.scripts.OnLeave(button)
+assert(not deco.hoverEdge.shown and not deco.hoverFill.shown, "the highlight leaves with the cursor")
+button.scripts.OnEnter(button)
+tick(0.6)
+assert(not deco.hoverEdge.shown, "a highlight whose OnLeave was lost is swept away")
+assert(not deco.target.shown, "no target border on a frame that is not the target")
+do
+    local realIsUnit = UnitIsUnit
+    function UnitIsUnit(a, b) return (a == "raid1" and b == "target") or realIsUnit(a, b) end
+    fire("PLAYER_TARGET_CHANGED")
+    tick(0.05)
+    assert(deco.target.shown and deco.target.borderColor[1] == 1 and deco.target.borderColor[2] == 0.82,
+        "target border in the chosen colour")
+    settings.rfTarget = false
+    RF.Apply()
+    tick(0.05)
+    assert(not deco.target.shown, "the target border can be turned off")
+    settings.rfTarget = true
+    UnitIsUnit = realIsUnit
+    fire("PLAYER_TARGET_CHANGED")
+    tick(0.05)
+    assert(not deco.target.shown, "the border follows the target")
+end
 RF.DrawBars(deco, 0.6, 0.1, 0.2)
 assert(deco.shield.shown and math.abs(deco.shield.width - 70 * 0.2) < 0.01 and deco.shield.points[1][4] == 70 * 0.7,
     "attached shield starts after health and heals")
@@ -550,12 +685,19 @@ local function hopeShown(frame)
     end)
     return found
 end
-assert(Suite.Part("raid").rfBuffHide == "63944", "Renewed Hope is hidden by default")
-assert(not hopeShown(button) and not hopeShown(others[2]) and not hopeShown(others[3]), "no party-wide hope icon")
-ui.SetOption("raidframes", "rfBuffHide", "")
+assert(Suite.Part("raid").rfBuffTrack == RF.defaultExclusionText.rfBuffTrack and Suite.Part("raid").rfDebuffHide:match("57724"),
+    "the recommended tracked and hidden lists are the defaults")
+assert(not hopeShown(button) and not hopeShown(others[2]) and not hopeShown(others[3]), "untracked buffs get no icon")
+Suite.Part("raid").rfBuffTrack = "63944"; RF.Apply()
 tick(0.05)
-assert(hopeShown(button), "an empty list shows it again")
-ui.SetOption("raidframes", "rfBuffHide", "63944")
+assert(hopeShown(button), "a tracked buff is drawn")
+Suite.Part("raid").rfBuffFilter = "mine"; RF.Apply()
+tick(0.05)
+assert(hopeShown(button), "mine only keeps my tracked buff")
+Suite.Part("raid").rfBuffTrack = ""; Suite.Part("raid").rfBuffFilter = "all"; RF.Apply()
+tick(0.05)
+assert(not hopeShown(button), "an empty tracked list draws no buff icons")
+Suite.Part("raid").rfBuffTrack = RF.defaultExclusionText.rfBuffTrack; RF.Apply()
 for _, unit in ipairs({ "raid1", "raid2", "raid3" }) do
     table.remove(auras[unit].HELPFUL, 1)
     fire("UNIT_AURA", unit)
@@ -647,8 +789,307 @@ assert(imported:find("Импорт") and Suite.DB().profiles[imported].cdm.group
 assert(not Suite.Import("garbage"), "bad strings do not import")
 assert(Suite.RenameProfile(imported, "Shared") and Suite.DB().profiles.Shared)
 assert(Suite.DeleteProfile("Shared") and not Suite.DB().profiles.Shared)
+-- profiles with the old exclusion list get the recommended tracked list and see anyone's buffs
+Suite.Part("raid").rfBuffHide, Suite.Part("raid").rfBuffTrack, Suite.Part("raid").rfBuffFilter = "63944", nil, "mine"
+RF.Apply()
+assert(Suite.Part("raid").rfBuffHide == nil and Suite.Part("raid").rfBuffTrack == RF.defaultExclusionText.rfBuffTrack
+    and Suite.Part("raid").rfBuffFilter == "all", "old profiles move to the tracked list")
+-- healer basics: every healer class starts with them, the button adds only what is missing
+do
+    local names = {}
+    for _, entry in ipairs(Suite.Part("raid").indicators) do names[entry.name] = true end
+    assert(names["Defensive cooldown"] and names["Healing reduced"] and names["Renew"], "a priest starts with healer basics")
+    assert(RF.AddPresets(Suite.Part("raid").indicators, RF.healerIndicators) == 0, "no duplicates")
+    assert(RF.IsHidden(false, { id = 999999, name = "Something" }) and not RF.IsHidden(false, { id = 33206, name = "x" }),
+        "only tracked buffs are drawn")
+    -- an indicator for anyone's saves sees another healer's Pain Suppression even with "mine only" icons
+    local index
+    for i, entry in ipairs(Suite.Part("raid").indicators) do if entry.name == "Defensive cooldown" then index = i end end
+    Suite.Part("raid").rfBuffFilter = "mine"
+    RF.Apply()
+    table.insert(auras.raid1.HELPFUL, { name = "Pain Suppression", icon = "ps", duration = 8, expiration = now + 6,
+        caster = "raid2", id = 33206 })
+    fire("UNIT_AURA", "raid1")
+    tick(0.05)
+    local d
+    RF.EachFrame(function(f, dd) if f == button then d = dd end end)
+    local widget = d.indicators[index]
+    assert(widget and widget.shown and widget.square.texture == "ps", "others' saves reach the indicators")
+    -- list order is the layer order: moving an indicator up puts it over the ones below
+    local list = Suite.Part("raid").indicators
+    local first = d.indicators[1]
+    assert(first and first.level > widget.level and widget.cooldown.level == widget.level + 1,
+        "the first indicator is drawn above later ones")
+    local renewLevel = first.level
+    list[1], list[index] = list[index], list[1]
+    RF.Apply()
+    tick(0.05)
+    assert(d.indicators[1].shown and d.indicators[1].square.texture == "ps" and d.indicators[1].level == renewLevel,
+        "moved to the top, the save takes the top layer")
+    list[1], list[index] = list[index], list[1]
+    RF.Apply()
+    table.remove(auras.raid1.HELPFUL)
+    fire("UNIT_AURA", "raid1")
+    Suite.Part("raid").rfBuffFilter = "all"
+    RF.Apply()
+    tick(0.05)
+end
+-- hidden debuffs: no icon and no dispel highlight; the rest still shows
+do
+    local d
+    RF.EachFrame(function(f, dd) if f == button then d = dd end end)
+    local sated = { name = "Sated", icon = "sated", type = "Magic", duration = 600, expiration = now + 500, id = 57724 }
+    local nova = { name = "Frost Nova", icon = "f", type = "Magic", duration = 8, expiration = now + 4, id = 122 }
+    Suite.Part("raid").rfDebuffHide = "57724, Frost Nova"
+    RF.Apply()
+    RF.DrawAuras(d, {}, { sated, nova }, now)
+    assert(not d.debuffs[1] or not d.debuffs[1].shown, "hidden debuffs get no icon")
+    assert(not d.dispelOutline.shown, "and no dispel highlight")
+    Suite.Part("raid").rfDebuffHide = "57724"
+    RF.Apply()
+    RF.DrawAuras(d, {}, { sated, nova }, now)
+    assert(d.debuffs[1].shown and d.debuffs[1].texture.texture == "f" and d.dispelOutline.shown, "the rest still shows")
+    assert(RF.IsHidden(true, sated) and not RF.IsHidden(true, nova), "only listed debuffs are hidden")
+    Suite.Part("raid").rfDebuffHide = RF.defaultExclusionText.rfDebuffHide
+    RF.Apply()
+end
 local onlyRaid = Suite.DecodeString(Suite.Export({ raid = true }))
 assert(onlyRaid.profile.raid and not onlyRaid.profile.cdm, "partial export")
+
+---------------------------------------------------------------------------------------------------
+-- Cooldown Manager: class and talent tree presets, restoring defaults
+---------------------------------------------------------------------------------------------------
+do
+    local function presetGroup(key)
+        for _, g in ipairs(CDM.Groups()) do if g.preset == key then return g end end
+    end
+    local function find(g, spell)
+        for i, e in ipairs(g.items) do if e.spell == spell then return e, i end end
+    end
+    local function setTree(tree)
+        GetTalentTabInfo = function(i) return ({ "Discipline", "Holy", "Shadow" })[i], "", i == tree and 51 or 0 end
+        ui.Fire("SuiteTalentsChanged")
+    end
+    local r = {}
+    local essential = presetGroup("essential")
+    assert(essential and essential.name == "Essential Cooldowns", "starting groups are marked")
+    local penance, pom = find(essential, 47540), find(essential, 33076)
+    assert(penance.class == "PRIEST" and penance.spec == 1 and pom.class == "PRIEST" and pom.spec == 2,
+        "default entries carry their class and tree")
+    assert(find(presetGroup("utility"), 6346).spec == 0, "common entries are for every tree")
+    setTree(2)
+    assert(not CDM.EntryActive(penance) and CDM.EntryActive(pom), "holy shows holy entries")
+    CDM.Evaluate(essential, penance, r, now)
+    assert(not r.show, "entries of another tree are hidden")
+    setTree(1)
+    assert(select(2, CDM.CurrentSpec()) == 1 and CDM.EntryActive(penance) and not CDM.EntryActive(pom),
+        "a talent change switches the set")
+    CDM.Evaluate(essential, penance, r, now)
+    assert(r.show, "penance shows for discipline")
+    setTree(0)
+    assert(CDM.EntryActive(penance) and CDM.EntryActive(pom), "without talents every tree is allowed")
+    setTree(2)
+    assert(not CDM.EntryActive({ kind = "cooldown", spell = 12294, class = "WARRIOR", spec = 0 }), "other classes are hidden")
+    essential.load.class = "WARRIOR"
+    assert(not CDM.LoadAllowed(essential), "group class condition")
+    essential.load.class = "PRIEST"
+    assert(CDM.LoadAllowed(essential))
+    essential.load.class = ""
+
+    -- every class: three tree names, five groups worth of entries, no entry twice for one tree
+    local classes = 0
+    for class, preset in pairs(CDM.presets) do
+        classes = classes + 1
+        assert(#preset.trees == 3, class)
+        local total = 0
+        for _, def in ipairs(CDM.presetGroups) do
+            local common, seen = {}, {}
+            local list = CDM.PresetItems(def.key, class)
+            for _, e in ipairs(list) do if e.spec == 0 then common[CDM.EntryKey(e)] = true end end
+            for _, e in ipairs(list) do
+                local key = CDM.EntryKey(e) .. "#" .. e.spec
+                assert(not seen[key], class .. " " .. def.key .. " repeats " .. key)
+                assert(e.spec == 0 or not common[CDM.EntryKey(e)], class .. " " .. def.key .. " common and tree " .. key)
+                seen[key] = true
+                assert(type(e.spell) == "number" or e.kind == "missing" or e.kind == "totem", class .. " spell id")
+            end
+            total = total + #list
+        end
+        for tree = 1, 3 do
+            local essentialCount = 0
+            for _, e in ipairs(CDM.PresetItems("essential", class)) do
+                if e.spec == tree then essentialCount = essentialCount + 1 end
+            end
+            assert(essentialCount >= 2, class .. " tree " .. tree .. " has its own cooldowns")
+        end
+        assert(total > 20, class)
+    end
+    assert(classes == 10, "all ten classes")
+
+    -- restore deleted groups and entries; the user's own stay
+    local count = #CDM.Groups()
+    local utilityId, utilityPos = presetGroup("utility").id, nil
+    for i, g in ipairs(CDM.Groups()) do if g.id == utilityId then utilityPos = i end end
+    local utilityCount = #presetGroup("utility").items
+    CDM.DeleteGroup(utilityId)
+    local _, pomIndex = find(essential, 33076)
+    CDM.RemoveItem(essential.id, pomIndex)
+    CDM.AddItem(essential.id, "cooldown", 139)
+    local addedGroups, addedItems = CDM.RestoreDefaults("missing")
+    assert(addedGroups == 1 and addedItems == 1 + utilityCount, "restore counts")
+    assert(#CDM.Groups() == count and CDM.Groups()[utilityPos].preset == "utility", "the group returns to its place")
+    local back, backIndex = find(essential, 33076)
+    assert(back and back.spec == 2 and backIndex == pomIndex, "the entry returns to its place")
+    assert(find(essential, 139), "own entries stay")
+    addedGroups, addedItems = CDM.RestoreDefaults("missing")
+    assert(addedGroups == 0 and addedItems == 0, "nothing is added twice")
+    -- a renamed starting group is still recognised
+    essential.name = "Main"
+    assert(CDM.RestoreDefaults("missing") == 0)
+
+    -- profiles from before the split: the starting groups are found by name, default entries get tags
+    Suite.DB().profiles.Legacy = { cdm = { groups = { [1] = { name = "Essential Cooldowns", kind = "icons",
+        items = { { kind = "cooldown", spell = 47540 }, { kind = "cooldown", spell = 139 } } } }, order = { 1 }, nextId = 2 } }
+    assert(Suite.SetProfile("Legacy"))
+    local legacy = CDM.Groups()[1]
+    assert(legacy.preset == "essential" and legacy.items[1].class == "PRIEST" and legacy.items[1].spec == 1,
+        "old default entries get their tree")
+    assert(legacy.items[2].class == "" and legacy.items[2].spec == 0, "own entries stay for every tree")
+    addedGroups = CDM.RestoreDefaults("missing")
+    assert(addedGroups == 4 and #CDM.Groups() == 5 and #legacy.items > 10, "restore completes an old profile")
+    Suite.SetProfile(Suite.DEFAULT_PROFILE)
+    Suite.DeleteProfile("Legacy")
+
+    -- reset: only the starting set
+    CDM.RestoreDefaults("all")
+    assert(#CDM.Groups() == 5 and not find(presetGroup("essential"), 139) and presetGroup("essential").name == "Essential Cooldowns",
+        "reset to defaults")
+    GetTalentTabInfo = function(i) return ({ "Discipline", "Holy", "Shadow" })[i], "", i == 2 and 51 or 10 end
+    ui.Fire("SuiteTalentsChanged")
+end
+
+---------------------------------------------------------------------------------------------------
+-- Cooldown Manager: role, categories, display modes, active effect, test mode, per-spec entries
+---------------------------------------------------------------------------------------------------
+do
+    local function presetGroup(key)
+        for _, g in ipairs(CDM.Groups()) do if g.preset == key then return g end end
+    end
+    local r = {}
+    assert(CDM.SpecKey() == "PRIEST-2" and CDM.Role() == "HEALER", "holy priest is a healer")
+    Suite.Part("cdm").role = "TANK"
+    CDM.SettingsChanged()
+    assert(CDM.Role() == "TANK", "the chosen role wins")
+    Suite.Part("cdm").role = "auto"
+    CDM.SettingsChanged()
+    assert(CDM.CategoryOf({ spell = 33206 }) == "raid" and CDM.CategoryOf({ spell = 47540 }) == nil
+        and CDM.CategoryOf({ spell = 47540, category = "offensive" }) == "offensive", "categories")
+    for id in pairs(CDM.categoryById) do assert(type(id) == "number") end
+    assert(presetGroup("essential").sort == "role" and presetGroup("buffs").sort == "manual", "cooldown groups sort by role")
+
+    -- what you add belongs to the current spec
+    local id = CDM.CreateGroup("Mine", "icons")
+    local group = CDM.Group(id)
+    local index = CDM.AddItem(id, "cooldown", 47540)
+    local penance = group.items[index]
+    assert(penance.class == "PRIEST" and penance.spec == 2, "own entries are tagged with the spec")
+    CDM.AddItem(id, "cooldown", 17)
+    group.items[2].category = "raid"
+
+    -- modes: group visibility and hidden categories
+    assert(CDM.ActiveMode() == "full" and CDM.LoadAllowed(presetGroup("utility")))
+    assert(CDM.SetMode("minimal") and not CDM.LoadAllowed(presetGroup("utility")) and CDM.LoadAllowed(presetGroup("essential"))
+        and not CDM.LoadAllowed(group), "minimal shows the main cooldowns only")
+    group.modes = { minimal = true }
+    assert(CDM.LoadAllowed(group), "a group may override its mode visibility")
+    CDM.Evaluate(group, penance, r, now)
+    assert(r.show, "entries without a hidden category stay")
+    CDM.Evaluate(group, group.items[2], r, now)
+    assert(not r.show, "minimal hides raid cooldowns")
+    CDM.SetMode("combat")
+    assert(not CDM.LoadAllowed(presetGroup("essential")), "combat mode hides everything out of combat")
+    assert(not CDM.SetMode("nonsense"))
+    CDM.SetMode("auto")
+    local stock = IsInInstance
+    IsInInstance = function() return true, "raid" end
+    fire("ZONE_CHANGED_NEW_AREA")
+    assert(CDM.ActiveMode() == "raid", "auto mode follows the zone")
+    IsInInstance = stock
+    fire("ZONE_CHANGED_NEW_AREA")
+    assert(CDM.ActiveMode() == "full")
+    assert(_G.ForeverStockUICDMMode and _G.ForeverStockUICDMMode.shown, "mode button")
+    _G.ForeverStockUICDMMode:Click("LeftButton")
+    assert(Suite.Part("cdm").mode == "full", "the button steps to the next mode")
+    _G.ForeverStockUICDMMode:Click("RightButton")
+    assert(Suite.Part("cdm").mode == "auto")
+
+    -- active effect: the spell's own buff takes the icon over
+    cooldowns.Penance = { now - 2, 10, 1 }
+    auras.player.HELPFUL[3] = { name = "Penance", icon = "p", duration = 6, expiration = now + 4, caster = "player", id = 47540 }
+    fire("UNIT_AURA", "player")
+    CDM.Evaluate(group, penance, r, now)
+    assert(r.active and not r.desaturate and r.expiration == now + 4 and r.duration == 6, "active effect")
+    group.showActive = false
+    CDM.Evaluate(group, penance, r, now)
+    assert(not r.active and r.desaturate and r.duration == 10, "cooldown without the active state")
+    group.showActive = true
+    auras.player.HELPFUL[3] = nil
+    fire("UNIT_AURA", "player")
+    cooldowns.Penance = nil
+
+    -- layout: centred rows and the flat border
+    group.grow, group.borderStyle, group.perRow = "CENTER", "pixel", 8
+    CDM.Rebuild()
+    local container = _G["ForeverStockUICDM" .. id]
+    assert(container.shown and container.elements[1].pixelBorder and container.elements[1].shown, "pixel border")
+    -- a group placed in Edit Mode keeps the box it had there; hidden entries do not shift the visible ones
+    CDM.AddItem(id, "cooldown", 60065)        -- not learned: hidden
+    CDM.Rebuild()
+    assert(container:GetWidth() == 76, "an unplaced group is as wide as its visible icons")
+    container.editEntry = { config = { position = { -300, -200 } } }
+    CDM.Rebuild()
+    assert(container:GetWidth() == 116, "a placed group keeps the Edit Mode box")
+    assert(select(4, container.elements[1]:GetPoint(1)) == 20, "visible icons are centred in the box")
+    group.grow = "RIGHT"
+    CDM.Rebuild()
+    assert(select(4, container.elements[1]:GetPoint(1)) == 0, "growth to the right starts at the left edge")
+    group.grow = "CENTER"
+    container.editEntry = nil
+
+    -- test mode: everything of the spec runs a fake loop, combat ends it
+    CDM.SetTest(true)
+    tick(0.2)
+    assert(CDM.IsTesting() and container.unlocked and container.shown, "test mode unlocks the groups")
+    local sawTimer = false
+    for _ = 1, 40 do
+        tick(0.5)
+        if container.elements[1].expiration then sawTimer = true end
+    end
+    assert(sawTimer, "fake timers run")
+    fire("PLAYER_REGEN_DISABLED")
+    assert(not CDM.IsTesting(), "combat ends the test")
+    fire("PLAYER_REGEN_ENABLED")
+    tick(0.2)
+    assert(not container.unlocked)
+
+    -- auto-adaptation off: every tree of the class shows
+    local discipline = { kind = "cooldown", spell = 47540, class = "PRIEST", spec = 1 }
+    assert(not CDM.EntryActive(discipline))
+    Suite.Part("cdm").autoAdapt = false
+    CDM.SettingsChanged()
+    assert(CDM.EntryActive(discipline), "without auto-adaptation trees are not filtered")
+    Suite.Part("cdm").autoAdapt = true
+    CDM.SettingsChanged()
+
+    -- factory layout of the current spec
+    local essential = presetGroup("essential")
+    local before = #essential.items
+    CDM.AddItem(essential.id, "cooldown", 139)
+    assert(#essential.items == before + 1)
+    CDM.ResetSpec()
+    assert(#essential.items == before and #group.items == 0, "the spec returns to its defaults")
+    CDM.DeleteGroup(id)
+end
 
 ---------------------------------------------------------------------------------------------------
 -- Option pages on the real modules
@@ -656,6 +1097,30 @@ assert(onlyRaid.profile.raid and not onlyRaid.profile.cdm, "partial export")
 for _, module in ipairs({ "cooldowns", "raidframes", "clickcast", "profiles" }) do
     ui.OpenOptions(module)
     assert(ForeverUIOptions:IsShown(), module)
+end
+-- The Cooldown Manager page (one custom block) gets section tabs from the headers it marks.
+do
+    local cdmPage
+    local function findPage(frame)
+        for _, child in ipairs(frame.children or {}) do
+            if child.spec and child.spec.id == "cooldowns" and child.customTabs then return child end
+            local found = findPage(child)
+            if found then return found end
+        end
+    end
+    cdmPage = findPage(ForeverUIOptions)
+    assert(cdmPage and cdmPage.sectionTabs and #cdmPage.sectionTabs >= 8, "cooldown manager section tabs")
+    local titles, last = {}, -1
+    for i, tab in ipairs(cdmPage.sectionTabs) do
+        titles[tab.text:GetText()] = i
+        assert(tab.top >= last, "tabs in page order")
+        last = tab.top
+    end
+    assert(titles["Быстрый старт"] == 1 and titles["Звук для всех"] and titles["Группы"] and titles["Условия загрузки"]
+        and titles["Подсветка и звуки"] and not titles["Основное"], "cooldown manager tab titles")
+    local tab = cdmPage.sectionTabs[titles["Условия загрузки"]]
+    tab.scripts.OnClick(tab)
+    assert(cdmPage.activeTab == titles["Условия загрузки"], "a tab click selects it")
 end
 local side = RF.previews[#RF.previews]:GetParent()
 assert(#RF.previews >= 3 and side:GetParent() == ForeverUIOptions, "three previews beside the options window")
@@ -670,10 +1135,56 @@ local function findHolder(frame)
 end
 holder = findHolder(ForeverUIOptions)
 assert(holder, "the raid page keeps its previews")
+-- exclusion editors: add by id or name, no duplicates, recommended merge, remove
+do
+    local function findEditor(frame, key)
+        for _, child in ipairs(frame.children or {}) do
+            if child["input" .. key] then return child end
+            local found = findEditor(child, key)
+            if found then return found end
+        end
+    end
+    local editor = findEditor(ForeverUIOptions, "rfDebuffHide")
+    assert(editor and findEditor(ForeverUIOptions, "rfBuffTrack"), "the tracked and hidden list editors are built")
+    local input = editor.inputrfDebuffHide
+    Suite.Part("raid").rfDebuffHide = ""
+    input:SetText("139, Renew, Curse of Doom")
+    input.scripts.OnEnterPressed(input)
+    assert(Suite.Part("raid").rfDebuffHide == "139, Curse of Doom", "added by id or name without duplicates")
+    local _, count = RF.defaultExclusionText.rfDebuffHide:gsub(",", ",")
+    for _, child in ipairs(editor.children or {}) do
+        if child.text and child.text.text == ui.L("Добавить рекомендуемые", "Add recommended") then child.scripts.OnClick(child) end
+    end
+    local _, after = Suite.Part("raid").rfDebuffHide:gsub(",", ",")
+    assert(after == count + 2, "recommended entries are merged once")
+    Suite.Part("raid").rfDebuffHide = RF.defaultExclusionText.rfDebuffHide
+    editor.refreshrfDebuffHide()
+end
 holder.scripts.OnHide(holder)
 assert(not side:IsShown(), "the side preview hides with the page")
 holder.scripts.OnShow(holder)
 assert(side:IsShown(), "and shows with it")
+-- The three preview frames show the same indicators, buff and debuff icons.
+do
+    local function signature(preview)
+        preview:Refresh()
+        local d, parts = preview.deco, {}
+        for i, widget in pairs(d.indicators) do
+            if widget.shown then parts[#parts + 1] = "i" .. i .. "=" .. tostring(widget.square.texture) end
+        end
+        table.sort(parts)
+        for _, kind in ipairs({ "buffs", "debuffs" }) do
+            for i, icon in ipairs(d[kind]) do
+                if icon.shown then parts[#parts + 1] = kind .. i .. "=" .. tostring(icon.texture.texture) end
+            end
+        end
+        return table.concat(parts, " ") .. (d.dispelOutline.shown and " dispel" or "")
+    end
+    local n = #RF.previews
+    local first = signature(RF.previews[n - 2])
+    assert(first:find("i1=") and first:find("debuffs1=") and first:find("dispel"), "the preview shows indicators, debuffs and dispel")
+    assert(signature(RF.previews[n - 1]) == first and signature(RF.previews[n]) == first, "all three previews show the same auras")
+end
 -- Edited indicators restyle in the preview too (entries change in place).
 local renewEntry = Suite.Part("raid").indicators[1]
 local oldSize = renewEntry.size
@@ -815,6 +1326,536 @@ assert(window.width == 340 and window.height == 160, "only a technical minimum r
 rightDown = false
 window.scripts.OnUpdate(window, 0.02)
 
+-- Raid frame visibility: client / always / hidden, protected changes wait for the end of combat
+do
+    local raidSettings = Suite.Part("raid")
+    local container = CompactRaidFrameContainer
+    CompactPartyFrame = CompactPartyFrame or CreateFrame("Frame", "CompactPartyFrame", UIParent)
+    local party = CompactPartyFrame
+    container:Hide()
+    party:Hide()
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "always", "client"
+    RF.ApplyVisibility()
+    assert(party:IsShown() and not container:IsShown(), "party frames always shown outside a raid")
+    raidSettings.rfRaidShow = "always"
+    RF.ApplyVisibility()
+    assert(container:IsShown(), "raid frames always shown")
+    container:Hide()
+    assert(container:IsShown(), "the client hiding them is undone")
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "hidden", "hidden"
+    RF.ApplyVisibility()
+    assert(not party:IsShown() and not container:IsShown(), "both turned off")
+    combat = true
+    container:Show()
+    assert(container:IsShown() and ui.HasCombatQueue(), "no protected hide in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(not container:IsShown(), "hidden again after combat")
+    -- solo: the client party frame hangs on a hidden holder and its first button has no unit
+    local holder = CreateFrame("Frame", nil, UIParent)
+    holder:Hide()
+    party:SetParent(holder)
+    local member = CompactPartyFrameMember1 or CreateFrame("Button", "CompactPartyFrameMember1", party)
+    member:Hide()
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "always", "client"
+    RF.ApplyVisibility()
+    assert(party:IsVisible() and party:GetParent() == UIParent, "a hidden holder does not hide the party frame")
+    assert(member:IsShown() and member:GetAttribute("unit") == "player", "solo: the first button shows the player")
+    raidSettings.rfPartyShow = "client"
+    RF.ApplyVisibility()
+    assert(party:GetParent() == holder and not member:IsShown(), "the client's parent and button come back")
+    party:SetParent(UIParent)
+    raidSettings.rfPartyShow, raidSettings.rfRaidShow = "client", "client"
+    RF.ApplyVisibility()
+    assert(not container:IsShown() and not party:IsShown(), "the state from before ForeverUI comes back")
+    container:Show()
+    assert(container:IsShown(), "the client is in charge again")
+end
+
+---------------------------------------------------------------------------------------------------
+-- Drinking indicator on the raid frames
+---------------------------------------------------------------------------------------------------
+do
+    local d
+    RF.EachFrame(function(f, dd) if f == button then d = dd end end)
+    tick(0.05)
+    local unit = d.unit
+    assert(unit and auras[unit], "the decorated button has a mocked unit")
+    local inCombat, power = false, 0
+    UnitBuff = function(u, i) return UnitAura(u, i, "HELPFUL") end
+    UnitAffectingCombat = function() return inCombat end
+    UnitPowerType = function() return power end
+    UnitMana, UnitManaMax = function() return 42 end, function() return 100 end
+    local raid = Suite.Part("raid")
+    raid.rfDrink, raid.rfDrinkStyle, raid.rfDrinkManaOnly = true, "text", true
+    RF.Apply()
+    tick(0.05)
+    assert(not d.drink.shown, "no drink, no mug")
+    local list = auras[unit].HELPFUL
+    local drink = { name = "Питье", icon = "x", duration = 30, expiration = now + 20 }
+    list[#list + 1] = drink
+    fire("UNIT_AURA", unit)
+    tick(0.05)
+    assert(d.drink.shown and d.drinkText.text == "Пьёт - - -", "the label shows while drinking")
+    raid.rfDrinkStyle = "mana"
+    RF.Apply()
+    tick(0.05)
+    assert(d.drink.shown and d.drinkText.text == "Пьёт 42%", "the label with the mana percent")
+    raid.rfDrinkStyle = "text"
+    RF.Apply()
+    tick(0.05)
+    assert(d.drinkText.text == "Пьёт - - -", "back to the plain label")
+    inCombat = true
+    fire("UNIT_FLAGS", unit)
+    tick(0.05)
+    assert(not d.drink.shown, "combat hides it at once")
+    inCombat = false
+    fire("UNIT_FLAGS", unit)
+    tick(0.05)
+    assert(d.drink.shown)
+    power = 1
+    fire("UNIT_DISPLAYPOWER", unit)
+    tick(0.05)
+    assert(not d.drink.shown, "mana users only")
+    raid.rfDrinkManaOnly = false
+    RF.Apply()
+    tick(0.05)
+    assert(d.drink.shown, "everyone when the option is off")
+    power = 0
+    -- matched by spell id when the name is unknown (mage water on another locale)
+    drink.name, drink.id = "Unbekannt", 27089
+    fire("UNIT_AURA", unit)
+    tick(0.05)
+    assert(d.drink.shown, "spell id match")
+    table.remove(list)
+    fire("UNIT_AURA", unit)
+    tick(0.05)
+    assert(not d.drink.shown, "the buff ends, the mug goes")
+    raid.rfDrinkStyle, raid.rfDrinkManaOnly = "text", true
+    -- a profile with the old mug defaults moves to the label bottom left
+    local old = { rfDrinkStyle = "icon", rfDrinkAnchor = "TOP", rfDrinkX = 0, rfDrinkY = -2 }
+    RF.MigrateExclusions(old)
+    assert(old.rfDrinkStyle == "text" and old.rfDrinkAnchor == "BOTTOMLEFT" and old.rfDrinkX == 2 and old.rfDrinkY == 2)
+    UnitBuff, UnitAffectingCombat, UnitPowerType, UnitMana, UnitManaMax = nil, nil, nil, nil, nil
+    RF.Apply()
+end
+
+---------------------------------------------------------------------------------------------------
+-- Raid anchor: left edge stays put when the width changes; drag handle moves the saved position
+---------------------------------------------------------------------------------------------------
+do
+    local anchor, raid = RF.anchor, Suite.Part("raid")
+    assert(RF.LeftPinnedOffset(100, 300, 1000) == -600, "right-corner offset for a left-pinned anchor")
+    local x, y = RF.ClampPosition(50, -9999, 200, 100, 1000, 800)
+    assert(x == 0 and y == 100 - 800, "clamped inside the screen")
+    x = RF.ClampPosition(-5000, 0, 200, 100, 1000, 800)
+    assert(x == 200 - 1000)
+
+    local entry = { config = { position = { -700, -50 }, width = 200 } }
+    anchor.editEntry = entry
+    raid.rfGrowth = "corner"       -- the previous behaviour: the left edge stays
+    anchor.GetLeft = function() return 100 end
+    UIParent.GetRight = function() return 1000 end
+    UIParent.GetTop = function() return 800 end
+    anchor:SetWidth(200)
+    RF.ResizeAnchor(300, 100)      -- more players: wider, left edge stays at 100
+    assert(entry.config.position[1] == -600 and entry.config.position[2] == -50, "grows to the right")
+    local point, _, _, px, py = anchor:GetPoint()
+    assert(point == "TOPRIGHT" and px == -600 and py == -50)
+    RF.ResizeAnchor(150, 100)      -- players left: narrower, left edge still 100
+    assert(entry.config.position[1] == -750, "shrinks to the right")
+    RF.ResizeAnchor(150.2, 100)
+    assert(entry.config.position[1] == -750, "no change below half a pixel")
+    assert(entry.config.width == 150.2 and entry.config.height == 100, "the size is saved with the position")
+    -- /reload: the anchor still stands at its default place (left, by the chat) with its default size
+    -- when the buttons are measured; the saved position must survive that
+    entry.config.position, entry.config.width = { -600, -50 }, 300
+    anchor.GetLeft = function() return 22 end
+    anchor:SetWidth(220)
+    RF.ResizeAnchor(300, 100)
+    assert(entry.config.position[1] == -600 and entry.config.position[2] == -50, "same size: the saved place stays")
+    RF.ResizeAnchor(500, 100)
+    assert(entry.config.position[1] == -400, "wider: the left edge of the SAVED place stays (100), not the default one")
+    -- a position saved by an older version (no width): the right corner is kept, the width recorded
+    entry.config.position, entry.config.width = { -600, -50 }, nil
+    RF.ResizeAnchor(250, 100)
+    assert(entry.config.position[1] == -600 and entry.config.width == 250, "old saves keep their place")
+    -- login: the anchor takes the saved size and place before anything measures it
+    entry.config.position, entry.config.width, entry.config.height = { -480, -120 }, 360, 90
+    anchor:ClearAllPoints()
+    anchor:SetWidth(220)
+    RF.RestoreAnchor()
+    local rp, rrel, rrp, rx, ry = anchor:GetPoint()
+    assert(anchor:GetWidth() == 360 and anchor:GetHeight() == 90 and rp == "TOPRIGHT" and rrel == UIParent
+        and rrp == "TOPRIGHT" and rx == -480 and ry == -120, "saved size and place restored at login")
+    anchor.GetLeft = function() return 100 end
+    entry.config.position, entry.config.width, entry.config.height = nil, nil, nil
+    RF.ResizeAnchor(400, 100)
+    assert(entry.config.position == nil and anchor:GetWidth() == 400, "no saved position: nothing is written")
+    RF.RestoreAnchor()
+
+    -- Growth from the centre (default): the horizontal middle stays, the top never moves.
+    local gx, gy = RF.GrowOffset(-600, -50, 300, 100, 500, 100, "center")
+    assert(gx == -500 and gy == -50, "half of the extra width to each side")
+    gx, gy = RF.GrowOffset(-600, -50, 300, 100, 500, 100, "corner")
+    assert(gx == -400 and gy == -50, "corner: all of it to the right")
+    gx, gy = RF.GrowOffset(-600, -50, 300, 100, 300, 180, "center")
+    assert(gx == -600 and gy == -50, "taller (more players in a group): the top stays")
+    raid.rfGrowth = "center"
+    assert(RF.defaults.rfGrowth == "center" and RF.sharedKeys.rfGrowth, "default and shared by party and raids")
+    entry.config.position, entry.config.width, entry.config.height = { -600, -50 }, 300, 100
+    RF.ResizeAnchor(500, 100)      -- horizontal: two more players / vertical: one more group column
+    assert(entry.config.position[1] == -500 and entry.config.position[2] == -50, "spreads left and right evenly")
+    RF.ResizeAnchor(200, 100)      -- players or a group left
+    assert(entry.config.position[1] == -650, "shrinks towards the middle")
+    RF.ResizeAnchor(200, 300)      -- vertical: more players inside the groups
+    assert(entry.config.position[1] == -650 and entry.config.position[2] == -50, "the top stays, players grow down")
+    -- /reload: one wrong measure (the full-raid client container before the buttons show) does not stay.
+    entry.config.position, entry.config.width = { -600, -50 }, 300
+    RF.ResizeAnchor(300, 100)
+    RF.ResizeAnchor(900, 400)
+    assert(entry.config.position[1] == -300, "the wrong measure moves it for a moment")
+    RF.ResizeAnchor(300, 100)
+    assert(entry.config.position[1] == -600, "the next right measure puts it back exactly")
+    -- A spot written by someone else (a drag, Edit Mode) becomes the new middle.
+    entry.config.position = { -300, -50 }
+    RF.ResizeAnchor(500, 100)
+    assert(entry.config.position[1] == -200, "re-pinned on the dragged spot, then grows from its middle")
+    RF.ResizeAnchor(200, 100)      -- the size the drag handle checks below expect
+    entry.config.position, entry.config.width, entry.config.height = nil, nil, nil
+    raid.rfGrowth = nil
+
+    -- drag handle
+    raid.rfEnabled, raid.rfHandle, raid.rfMoveContainer = true, true, true
+    entry.config.position = { -500, -100 }
+    cursorX, cursorY = 300, 400
+    RF.StartHandleDrag()
+    assert(RF.IsHandleDragging(), "drag started")
+    cursorX, cursorY = 340, 380
+    RF.handle.scripts.OnUpdate(RF.handle)
+    assert(entry.config.position[1] == -460 and entry.config.position[2] == -120, "position follows the cursor")
+    assert(entry.config.width == anchor:GetWidth() and entry.config.height == anchor:GetHeight(),
+        "the drag saves the size with the position")
+    local hp, hrel, hrp = RF.handle:GetPoint()
+    assert(hp == "BOTTOMLEFT" and hrel == anchor and hrp == "TOPLEFT", "the handle rides on the group while dragging")
+    cursorX, cursorY = 9999, -9999
+    RF.handle.scripts.OnUpdate(RF.handle)
+    assert(entry.config.position[1] == 0 and entry.config.position[2] == 100 - 800, "clamped on screen")
+    combat = true
+    RF.handle.scripts.OnUpdate(RF.handle)
+    assert(not RF.IsHandleDragging(), "combat ends the drag")
+    local saved = entry.config.position[1]
+    RF.StartHandleDrag()
+    assert(not RF.IsHandleDragging() and entry.config.position[1] == saved, "no drag in combat")
+    combat = false
+    raid.rfHandle = false
+    RF.StartHandleDrag()
+    assert(not RF.IsHandleDragging(), "handle can be turned off")
+    raid.rfHandle = true
+
+    -- A window over the group: the handle is not the cursor's target and must not catch the window's clicks.
+    assert(RF.FocusOnGroup(nil) and RF.FocusOnGroup(RF.handle) and RF.FocusOnGroup(anchor), "group or bare world")
+    local window = CreateFrame("Frame", "TestWindowOverGroup", UIParent)
+    local button = CreateFrame("Button", nil, window)
+    assert(not RF.FocusOnGroup(window) and not RF.FocusOnGroup(button), "a window's button is not the group")
+    assert(RF.handle:GetFrameStrata() ~= "HIGH", "the handle is not above the windows")
+
+    -- Talent set switch: the loaded spot replaces the remembered middle of the old one.
+    entry.config.position, entry.config.width, entry.config.height = { -600, -50 }, 300, 100
+    entry.config.pinX, entry.config.lastX, entry.config.pinMode = 123, -600, "center"
+    RF.ReapplyPosition(false)
+    local _, _, _, ax = anchor:GetPoint()
+    assert(entry.config.pinX ~= 123 and ax == -600, "the loaded spot is used, not the old middle")
+    entry.config.position, entry.config.width, entry.config.height = nil, nil, nil
+    entry.config.pinX, entry.config.lastX, entry.config.pinMode = nil, nil, nil
+end
+
+---------------------------------------------------------------------------------------------------
+-- Pets under owners, sample frames, profiles bound to the group type
+---------------------------------------------------------------------------------------------------
+do
+    assert(RF.PetOwner("partypet2") == "party2" and RF.PetOwner("raidpet11") == "raid11" and RF.PetOwner("pet") == "player"
+        and RF.PetOwner("party2") == nil and RF.PetOwner(nil) == nil, "pet tokens map to owners")
+
+    -- sample layout: 5 players in a row, pets of players 4 and 5
+    local has = { false, false, false, true, true }
+    local under = RF.TemplateLayout(has, 5, 100, 40, 22, 2, true)
+    assert(under.cells[1][1] == 0 and under.cells[2][1] == 102 and under.cells[5][1] == 408 and under.cells[5][2] == 0)
+    assert(#under.pets == 2 and under.pets[1].owner == 4 and under.pets[1].x == under.cells[4][1]
+        and under.pets[1].y == -42 and under.pets[2].x == under.cells[5][1], "pets hang under their owners")
+    assert(under.width == 508 and under.height == 40 + 2 + 22, "size with the pet row")
+    local apart = RF.TemplateLayout(has, 5, 100, 40, 22, 2, false)
+    assert(apart.pets[1].x == 0 and apart.pets[2].x == 102 and apart.pets[1].y == -42, "pets in their own row at the end")
+    local two = RF.TemplateLayout({ false, false, false, false, false, false }, 5, 100, 40, 22, 2, true)
+    assert(two.cells[6][1] == 0 and two.cells[6][2] == -42 and two.height == 82, "second row of players")
+    assert(RF.TemplateLayout({}, 5, 100, 40, 22, 2, true).height == 0)
+
+    -- real buttons: owners side by side, the client put the pet at the end of the row
+    local raid = Suite.Part("raid")
+    raid.rfEnabled, raid.rfPetsUnder = true, true
+    local function make(name, unit, left)
+        local f = CreateFrame("Button", name, UIParent)
+        f.healthBar = CreateFrame("StatusBar", nil, f)
+        f.attributes.unit = unit
+        f.GetLeft = function() return left end
+        f.GetRight = function() return left + 100 end
+        f.GetTop = function() return 600 end
+        f.GetBottom = function() return 560 end
+        f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", left, -100)
+        return f
+    end
+    local owner1 = make("FuiTestOwner1", "raid1", 0)
+    local owner2 = make("FuiTestOwner2", "raid2", 102)
+    local pet = make("FuiTestPet", "raidpet2", 204)
+    for _, frame in ipairs({ owner1, owner2, pet }) do RF.Register(frame) end
+    fire("RAID_ROSTER_UPDATE")
+    tick(0.05)
+    RF.LayoutPets()
+    local point, relative, relativePoint, x, y = pet:GetPoint()
+    assert(point == "TOPLEFT" and relative == owner2 and relativePoint == "BOTTOMLEFT" and x == 0 and y == -2,
+        "the pet is hung under its owner")
+    -- off: the client lays it out again (nothing is moved by us)
+    local before = pet.points[1]
+    raid.rfPetsUnder = false
+    RF.LayoutPets()
+    assert(pet.points[1] == before, "turned off: no more moves")
+    -- vertical layout: nothing is moved
+    raid.rfPetsUnder = true
+    owner2.GetLeft = function() return 0 end
+    owner2.GetTop = function() return 560 end
+    pet:ClearAllPoints()
+    RF.LayoutPets()
+    assert(pet:GetNumPoints() == 0, "vertical layout: the client keeps the pets")
+    -- combat: queued, not moved
+    owner2.GetLeft = function() return 102 end
+    owner2.GetTop = function() return 600 end
+    combat = true
+    RF.LayoutPets()
+    assert(pet:GetNumPoints() == 0 and ui.HasCombatQueue(), "no move in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(pet:GetNumPoints() == 1 and select(2, pet:GetPoint()) == owner2, "moved after combat")
+
+    -- sample frames take the size of the real buttons
+    owner1.width, owner1.height, owner2.width, owner2.height = 165, 62, 165, 62
+    pet.width, pet.height = 165, 24
+    RF.EachFrame(function(f) if f ~= owner1 and f ~= owner2 and f ~= pet then f.shown = false end end)
+    local mw, mh, mpw, mph = RF.TemplateMetrics()
+    assert(mw == 165 and mh == 62 and mpw == 165 and mph == 24, "metrics follow the real buttons")
+    RF.SetEditKind(nil)
+    RF.SetTemplate(true)
+    local template = RF.template
+    assert(template:IsShown() and RF.templateShown and #template.cells == 5 and #template.pets == 2)
+    assert(template.cells[1].shown and not template.cells[6], "five players")
+    assert(template.cells[1].width == 165 and template.cells[1].height == 62 and template.pets[1].height == 24,
+        "sample cells have the real size")
+    owner1.width, owner1.height = 90, 36
+    owner2.width, owner2.height = 90, 36
+    RF.LayoutTemplate()
+    assert(template.cells[1].width == 90 and template.cells[1].height == 36, "a new size gets new cells")
+    -- one state per cell: one target, one hovered (none), one drinking, one threat
+    do
+        local targets, hovered, drinking, threat = 0, 0, 0, 0
+        for i = 1, 25 do
+            local _, data = RF.TemplateMember("raid25", i)
+            if data.target then targets = targets + 1 end
+            if data.hover then hovered = hovered + 1 end
+            if data.drink then drinking = drinking + 1 end
+            if data.threat then threat = threat + 1 end
+        end
+        assert(targets == 1 and hovered == 0 and drinking == 1 and threat == 1, "each state on one sample cell only")
+    end
+    RF.editKind = "raid25"
+    RF.LayoutTemplate()
+    assert(#template.cells == 25 and template.cells[25].shown and #template.pets == 4, "raid of 25 with four pets")
+    RF.editKind = nil
+    RF.LayoutTemplate()
+    assert(template.cells[5].shown and #template.cells == 5 and #template.pets == 2, "party again: its own cells")
+    -- vertical client layout: groups become columns, pets a column to the right
+    local vert = RF.TemplateLayout({ false, false, false, true, true, false, false, false, false, false },
+        5, 100, 40, 22, 2, true, true)
+    assert(vert.cells[2][1] == 0 and vert.cells[2][2] == -42 and vert.cells[6][1] == 102 and vert.cells[6][2] == 0,
+        "vertical: groups are columns")
+    assert(vert.pets[1].x == 204 and vert.pets[1].y == 0 and vert.pets[2].y == -24 and vert.width == 304
+        and vert.height == 5 * 42 - 2, "vertical: pets in a column of their own")
+    fire("PLAYER_REGEN_DISABLED")
+    assert(not template:IsShown() and not RF.templateShown, "combat hides the sample frames")
+    assert(RF.ToggleTemplate() and template:IsShown())
+    RF.SetTemplate(false)
+    assert(not template:IsShown())
+
+    -- profiles bound to the group type
+    assert(Suite.NewProfile("Raider", Suite.ActiveProfileName()) and Suite.NewProfile("Dungeon", Suite.ActiveProfileName()))
+    Suite.SetSpecProfile(2, "")
+    Suite.SetProfile(Suite.DEFAULT_PROFILE)
+    Suite.SetGroupProfile("raid10", "Raider")
+    Suite.SetGroupProfile("party", "Dungeon")
+    assert(Suite.ActiveProfileName() == Suite.DEFAULT_PROFILE, "solo: nothing switches")
+    local realRaid, realParty = GetNumRaidMembers, GetNumPartyMembers
+    GetNumPartyMembers = function() return 4 end
+    fire("PARTY_MEMBERS_CHANGED")
+    assert(Suite.ActiveProfileName() == "Dungeon", "a party takes the dungeon profile")
+    GetNumRaidMembers = function() return 10 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(Suite.ActiveProfileName() == "Raider", "a raid takes the raid profile")
+    GetNumRaidMembers = function() return 20 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(Suite.ActiveProfileName() == "Raider" or Suite.ActiveProfileName() == "Dungeon"
+        or Suite.ActiveProfileName() == Suite.DEFAULT_PROFILE, "raid 25 without a binding")
+    Suite.SetGroupProfile("raid25", "Dungeon")
+    assert(Suite.ActiveProfileName() == "Dungeon", "a raid of 20 takes the raid 25 profile")
+    Suite.SetGroupProfile("raid25", "")
+    GetNumRaidMembers = function() return 10 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(Suite.ActiveProfileName() == "Raider")
+    GetNumRaidMembers = realRaid
+    combat = true
+    fire("PARTY_MEMBERS_CHANGED")
+    assert(Suite.ActiveProfileName() == "Raider" and ui.HasCombatQueue(), "no switch in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(Suite.ActiveProfileName() == "Dungeon", "after combat the party profile")
+    GetNumPartyMembers = realParty
+    fire("PARTY_MEMBERS_CHANGED")
+    assert(Suite.ActiveProfileName() == Suite.DEFAULT_PROFILE, "leaving the group brings the earlier profile back")
+    assert(Suite.RenameProfile("Raider", "Raid25") and Suite.GroupProfile("raid10") == "Raid25", "rename follows the binding")
+    assert(Suite.DeleteProfile("Raid25") and Suite.GroupProfile("raid10") == nil, "delete clears the binding")
+    -- the old single raid binding counts for both raid sizes
+    Suite.CharDB().groupProfiles.raid = Suite.DEFAULT_PROFILE
+    assert(Suite.GroupProfile("raid10") == Suite.DEFAULT_PROFILE and Suite.GroupProfile("raid25") == Suite.DEFAULT_PROFILE
+        and Suite.CharDB().groupProfiles.raid == nil, "old raid binding migrates")
+    Suite.SetGroupProfile("raid10", "")
+    Suite.SetGroupProfile("raid25", "")
+    Suite.SetGroupProfile("party", "")
+    assert(Suite.DeleteProfile("Dungeon"))
+end
+
+---------------------------------------------------------------------------------------------------
+-- Raid frame settings per group type (party, raid 10, raid 25) and copying between them
+---------------------------------------------------------------------------------------------------
+do
+    local base = Suite.Part("raid")
+    base.rfNameSize, base.rfEnabled, base.rfPartyShow = 11, true, "client"
+    assert(RF.LiveKind() == "party" and RF.Settings() == base, "solo and party use the base table")
+    local r10 = RF.KindSettings("raid10")
+    assert(r10.rfNameSize == 11 and type(base.kinds.raid10) == "table", "raid 10 starts as a copy of the party")
+    assert(base.kinds.raid10.rfEnabled == nil and base.kinds.raid10.kinds == nil, "shared keys are not copied")
+    r10.rfNameSize = 14
+    assert(base.rfNameSize == 11 and base.kinds.raid10.rfNameSize == 14, "tuned apart")
+    r10.rfPartyShow = "always"
+    assert(base.rfPartyShow == "always" and base.kinds.raid10.rfPartyShow == nil, "shared keys go to the base")
+    base.rfPartyShow = "client"
+    r10.indicators[#r10.indicators + 1] = { name = "Only in raid 10", spell = "139", enabled = true }
+    local function has(list, name)
+        for _, entry in ipairs(list) do if entry.name == name then return true end end
+    end
+    assert(not has(base.indicators, "Only in raid 10"), "indicators are per group type too")
+    -- the live type follows the raid size
+    local realRaid = GetNumRaidMembers
+    GetNumRaidMembers = function() return 8 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(RF.LiveKind() == "raid10" and RF.Settings().rfNameSize == 14, "a raid of 8 uses the raid 10 settings")
+    GetNumRaidMembers = function() return 18 end
+    fire("RAID_ROSTER_UPDATE")
+    assert(RF.LiveKind() == "raid25" and RF.Settings().rfNameSize == 11, "a raid of 18 uses the raid 25 settings")
+    -- the options page edits another type: its sample frames show, the real ones fade
+    local partyFrame = CompactPartyFrame or CreateFrame("Frame", "CompactPartyFrame", UIParent)
+    partyFrame:SetAlpha(1)
+    local kindEvents = 0
+    ui.RegisterCallback("RaidFramesKindChanged", function() kindEvents = kindEvents + 1 end, "TestKind")
+    RF.SetEditKind("raid10")
+    assert(RF.ViewKind() == "raid10" and RF.Settings().rfNameSize == 14 and kindEvents == 1)
+    assert(RF.templateShown and RF.autoTemplate and #RF.template.cells == 10, "editing another type shows its samples")
+    assert(partyFrame:GetAlpha() == 0, "the real frames fade under the samples")
+    assert(ui.GetOption("raidframes", "rfNameSize") == 14, "the options page reads the edited type")
+    ui.SetOption("raidframes", "rfNameSize", 15)
+    assert(base.kinds.raid10.rfNameSize == 15 and base.rfNameSize == 11, "the options page writes the edited type")
+    -- copy from: raid 25 takes the raid 10 settings
+    RF.SetEditKind("raid25")
+    assert(not RF.templateShown or RF.ViewKind() == "raid25")
+    assert(RF.CopyKind("raid10", "raid25") and RF.Settings().rfNameSize == 15 and has(RF.Settings().indicators, "Only in raid 10"),
+        "copy from raid 10")
+    assert(base.kinds.raid25.indicators ~= base.kinds.raid10.indicators, "a copy, not the same table")
+    assert(not RF.CopyKind("raid25", "raid25") and not RF.CopyKind("nope", "party"), "bad copies are refused")
+    assert(RF.CopyKind("raid10", "party") and base.rfNameSize == 15 and base.rfEnabled == true and type(base.kinds) == "table",
+        "copy into the party keeps the shared keys and the other types")
+    base.rfNameSize = 11
+    RF.SetEditKind(nil)
+    assert(RF.ViewKind() == "raid25" and not RF.editKind, "back to the live type")
+    assert(not RF.templateShown and partyFrame:GetAlpha() == 1, "the auto samples go, the real frames come back")
+    -- profile copies, exports and resets carry the group types
+    local text = Suite.Export({ raid = true })
+    local name = Suite.Import(text)
+    assert(name and Suite.DB().profiles[name].raid.kinds.raid10.rfNameSize == 15, "export keeps the group types")
+    Suite.DeleteProfile(name)
+    GetNumRaidMembers = realRaid
+    fire("RAID_ROSTER_UPDATE")
+    base.kinds = nil
+end
+
+---------------------------------------------------------------------------------------------------
+-- Party frames at login: client code defined late, frames generated after login, the client setup
+-- putting its own texture back, and a reset nobody hooks (restored by the sweep)
+---------------------------------------------------------------------------------------------------
+do
+    local CLIENT_BAR = "Interface\\RaidFrame\\Raid-Bar-Hp-Fill"
+    local raid = Suite.Part("raid")
+    raid.rfEnabled = true
+    assert(not RF.hookedGlobals.DefaultCompactUnitFrameSetup, "the mock client has no setup function at login")
+    function DefaultCompactUnitFrameSetup(frame) frame.healthBar:SetStatusBarTexture(CLIENT_BAR) end
+    function CompactUnitFrame_SetUpFrame(frame, func) func(frame) end
+    fire("ADDON_LOADED", "Blizzard_CompactRaidFrames")
+    assert(RF.hookedGlobals.DefaultCompactUnitFrameSetup and RF.hookedGlobals.CompactUnitFrame_SetUpFrame,
+        "client functions defined after login are hooked")
+    fire("PLAYER_ENTERING_WORLD")
+    local party = CompactPartyFrame or CreateFrame("Frame", "CompactPartyFrame", UIParent)
+    local partyWasShown = party.shown
+    party.shown = true
+    local function decoOf(frame)
+        local found
+        RF.EachFrame(function(f, d) if f == frame then found = d end end)
+        return found
+    end
+    local function newMember(name)
+        local member = CreateFrame("Button", name, party)
+        member.healthBar = CreateFrame("StatusBar", nil, member)
+        member.healthBar.width, member.healthBar.height = 70, 30
+        member.attributes.unit = "player"
+        return member
+    end
+    local member = newMember("ForeverTestPartyMember1")
+    CompactUnitFrame_SetUpFrame(member, DefaultCompactUnitFrameSetup)
+    local styled = member.healthBar.barTexture
+    assert(decoOf(member) and styled and styled ~= CLIENT_BAR, "a party frame generated after login is styled")
+    -- the client frame profile loads later and runs the setup again on the decorated frame
+    CompactUnitFrame_SetUpFrame(member, DefaultCompactUnitFrameSetup)
+    assert(member.healthBar.barTexture == styled, "the client setup does not leave its own texture")
+    DefaultCompactUnitFrameSetup(member)
+    assert(member.healthBar.barTexture == styled, "nor does the setup function alone")
+    -- a reset through a path that is not hooked: the half-second sweep restyles
+    member.healthBar:SetStatusBarTexture(CLIENT_BAR)
+    tick(0.6)
+    assert(member.healthBar.barTexture == styled, "the sweep puts the ForeverUI texture back")
+    -- entering the world in combat: the frame is styled once combat ends
+    combat = true
+    local late = newMember("ForeverTestPartyMember2")
+    CompactUnitFrame_SetUpFrame(late, DefaultCompactUnitFrameSetup)
+    assert(not decoOf(late) and late.healthBar.barTexture == CLIENT_BAR, "nothing is decorated in combat")
+    combat = false
+    fire("PLAYER_REGEN_ENABLED")
+    assert(decoOf(late) and late.healthBar.barTexture == styled, "decorated and styled after combat")
+    -- the ForeverUI style off: the sweep leaves the client texture alone
+    raid.rfEnabled = false
+    RF.Apply()
+    member.healthBar:SetStatusBarTexture(CLIENT_BAR)
+    tick(0.6)
+    assert(member.healthBar.barTexture == CLIENT_BAR, "no restyle while the style is off")
+    raid.rfEnabled = true
+    RF.Apply()
+    for _, frame in ipairs({ member, late }) do frame.shown = false end
+    party.shown = partyWasShown
+end
+
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
-    .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators), "
-    .. "option pages, action bar key binding, options window resizing; %d frames"):format(#objects))
+    .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators, visibility, exclusions), "
+    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets under owners, sample frames, group type profiles, frame settings per group type and copy; %d frames"):format(#objects))

@@ -20,6 +20,10 @@ local backdrop = {
     insets = { left = 3, right = 3, top = 3, bottom = 3 },
 }
 local overlayBackdrop = { bgFile = backdrop.bgFile, edgeFile = backdrop.bgFile, edgeSize = 1 }
+-- Frames switched off in the editor are parented here: the stock UI may Show() them again,
+-- but a frame under a hidden parent stays invisible and takes no clicks.
+local hider = CreateFrame("Frame", nil, UIParent)
+hider:Hide()
 
 local function panel(frame, width, height)
     frame:SetSize(width, height)
@@ -38,6 +42,35 @@ editor:SetPoint("TOP", UIParent, "TOP", 0, -26)
 panel(editor, 408, 196)
 editor:Hide()
 tinsert(UISpecialFrames, editor:GetName())
+
+-- The panel itself is dragged with the left button; its spot is kept in editPanelPosition.
+-- A right click on the panel returns it to the default spot under the top of the screen.
+local function placeEditor()
+    local spot = settings and settings.editPanelPosition
+    editor:ClearAllPoints()
+    if type(spot) == "table" and type(spot[2]) == "number" and type(spot[3]) == "number" then
+        editor:SetPoint(spot[1] or "CENTER", UIParent, spot[1] or "CENTER", spot[2], spot[3])
+    else
+        editor:SetPoint("TOP", UIParent, "TOP", 0, -26)
+    end
+end
+editor:SetMovable(true)
+editor:SetClampedToScreen(true)
+editor:RegisterForDrag("LeftButton")
+editor:SetScript("OnDragStart", function(self) self:StartMoving() end)
+editor:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local point, _, _, x, y = self:GetPoint(1)
+    if settings and point then settings.editPanelPosition = { point, x, y } end
+    -- StartMoving can leave the frame anchored to the screen; keep it anchored to UIParent.
+    placeEditor()
+end)
+editor:SetScript("OnMouseUp", function(_, mouseButton)
+    if mouseButton == "RightButton" and settings then
+        settings.editPanelPosition = nil
+        placeEditor()
+    end
+end)
 
 local instructions = editor:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 instructions:SetPoint("TOP", 0, -13)
@@ -102,6 +135,12 @@ local detach = CreateFrame("CheckButton", "ForeverStockUIEditDetached", options,
 detach:SetPoint("TOPLEFT", 12, -77)
 ForeverStockUIEditDetachedText:SetText(ru and "Отделить полосу заклинаний" or "Detach cast bar")
 detach:Hide()
+
+-- "Show": switches the selected frame off or on right in the editor (config.hidden).
+local shown = CreateFrame("CheckButton", "ForeverStockUIEditShown", options, "InterfaceOptionsCheckButtonTemplate")
+shown:SetPoint("BOTTOMLEFT", 12, 38)
+ForeverStockUIEditShownText:SetText(ru and "Показывать" or "Show")
+shown:Hide()
 
 local scale = CreateFrame("Slider", "ForeverStockUIEditScale", options, "OptionsSliderTemplate")
 scale:SetPoint("TOP", 0, -54)
@@ -180,6 +219,9 @@ local function getPosition(entry)
     if type(position) == "table" and number(position[1]) and number(position[2]) then return position end
 end
 
+-- True while Edit Mode itself sets a point (the SetPoint watch of the unit frames ignores it).
+local placing = false
+
 local function move(entry, x, y)
     local frame = entry.frame
     local ratio = screenScale(frame)
@@ -188,8 +230,10 @@ local function move(entry, x, y)
     if frame:GetNumPoints() == 1 and point == "TOPRIGHT" and relative == UIParent and relativePoint == "TOPRIGHT"
         and math.abs((currentX or 0) - x) < 0.001 and math.abs((currentY or 0) - y) < 0.001 then return end
     if not entry.points then entry.points = points(frame) end
+    placing = true
     frame:ClearAllPoints()
     frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x, y)
+    placing = false
 end
 
 local function groupMembers(names, visit)
@@ -209,16 +253,30 @@ local function setScale(entry, value)
 end
 
 -- Action bar grids: rows and button count per bar, stored in the entry config (config.rows, config.count).
+-- `max` is the number of cells of the bar (12 by default), `gap` the stock space between them (6 by default).
+-- The totem bar lays out its four slots: the client anchors each totem action button (three pages of four) to
+-- its slot, so the buttons follow; the summon button stays left of the first slot, the recall button is put
+-- after the last active slot by the client.
 local barSpecs = {
-    MainMenuBar = { prefix = "ActionButton", rows = 1 },
+    -- `mirror`: the bonus bar (shadowform, stances, forms) shows its buttons in place of the main ones; they
+    -- take the same grid.
+    MainMenuBar = { prefix = "ActionButton", rows = 1, mirror = "BonusActionButton" },
     MultiBarBottomLeft = { prefix = "MultiBarBottomLeftButton", rows = 1 },
     MultiBarBottomRight = { prefix = "MultiBarBottomRightButton", rows = 1 },
     MultiBarLeft = { prefix = "MultiBarLeftButton", rows = 12, vertical = true },
     MultiBarRight = { prefix = "MultiBarRightButton", rows = 12, vertical = true, leftward = true },
+    PetActionBarFrame = { prefix = "PetActionButton", rows = 1, max = 10, gap = 8 },
+    MultiCastActionBarFrame = { prefix = "MultiCastSlotButton", rows = 1, max = 4,
+        extra = { "MultiCastSummonSpellButton", "MultiCastRecallSpellButton" } },
 }
 
+local function barMax(entry)
+    return entry.bar.max or 12
+end
+
 local function barCount(entry)
-    return math.max(1, math.min(12, math.floor(tonumber(entry.config.count) or 12)))
+    local max = barMax(entry)
+    return math.max(1, math.min(max, math.floor(tonumber(entry.config.count) or max)))
 end
 
 local function barRows(entry)
@@ -232,49 +290,143 @@ local function applyBar(entry)
     local custom = config.count ~= nil or config.rows ~= nil
     local signature = custom and (barCount(entry) .. ":" .. barRows(entry)) or "stock"
     if entry.barSignature == signature or (signature == "stock" and not entry.barStock) then return end
+    local prefixes = { spec.prefix }
+    if spec.mirror and _G[spec.mirror .. "1"] then prefixes[2] = spec.mirror end
     if not entry.barStock then
         entry.barStock = {}
-        for index = 1, 12 do
-            local button = _G[spec.prefix .. index]
-            if button then entry.barStock[index] = points(button) end
+        for _, prefix in ipairs(prefixes) do
+            local saved = {}
+            for index = 1, barMax(entry) do
+                local button = _G[prefix .. index]
+                if button then saved[index] = points(button) end
+            end
+            entry.barStock[prefix] = saved
         end
     end
     entry.barSignature = signature
     local function restore(button, saved)
+        if not button or not saved then return end
         button:ClearAllPoints()
         for _, point in ipairs(saved) do button:SetPoint(unpack(point, 1, 5)) end
     end
     if not custom then
-        for index, saved in pairs(entry.barStock) do restore(_G[spec.prefix .. index], saved) end
+        for prefix, stock in pairs(entry.barStock) do
+            for index, saved in pairs(stock) do restore(_G[prefix .. index], saved) end
+        end
         entry.bounds, entry.boundsOnly = nil, nil
         if ui.ApplyGryphons and entry.frame == MainMenuBar then ui.ApplyGryphons() end
         return
     end
     local _, offsets, count = ui.ComputeBarGrid(barCount(entry), barRows(entry), spec.vertical, spec.leftward,
-        first:GetWidth() + 6)
+        first:GetWidth() + (spec.gap or 6))
     local corner = spec.vertical and (spec.leftward and "TOPRIGHT" or "TOPLEFT") or "BOTTOMLEFT"
     local bounds = {}
-    for index = 1, 12 do
-        local button = _G[spec.prefix .. index]
-        if button then
-            if index == 1 then
-                restore(button, entry.barStock[1])
-            elseif offsets[index] then
-                button:ClearAllPoints()
-                button:SetPoint(corner, first, corner, offsets[index].x, offsets[index].y)
-            else
-                -- Parked off screen: a hidden protected button cannot be kept hidden by addon code.
-                button:ClearAllPoints()
-                button:SetPoint("RIGHT", UIParent, "LEFT", -500, 0)
+    for _, prefix in ipairs(prefixes) do
+        local stock, head = entry.barStock[prefix] or {}, _G[prefix .. "1"]
+        for index = 1, barMax(entry) do
+            local button = _G[prefix .. index]
+            if button then
+                if index == 1 then
+                    restore(button, stock[1])
+                elseif offsets[index] then
+                    button:ClearAllPoints()
+                    button:SetPoint(corner, head, corner, offsets[index].x, offsets[index].y)
+                else
+                    -- Parked off screen: a hidden protected button cannot be kept hidden by addon code.
+                    button:ClearAllPoints()
+                    button:SetPoint("RIGHT", UIParent, "LEFT", -500, 0)
+                end
+                -- Only the main bar's own buttons make its outline.
+                if prefix == spec.prefix and index <= count then bounds[#bounds + 1] = button:GetName() end
             end
-            if index <= count then bounds[#bounds + 1] = button:GetName() end
         end
+    end
+    -- Buttons that stay chained to the grid (totem summon and recall) belong to the bar's outline too.
+    for _, name in ipairs(spec.extra or {}) do
+        if _G[name] then bounds[#bounds + 1] = name end
     end
     entry.bounds, entry.boundsOnly = bounds, true
     if ui.ApplyGryphons and entry.frame == MainMenuBar then ui.ApplyGryphons() end
 end
 
 -- Union of the counted buttons of a bar, whatever their shown state (empty slots may be hidden by the stock UI).
+-- Parks a frame under the hidden parent or brings it back to the parent it had before.
+local function park(frame, hide)
+    if not frame or (InCombatLockdown() and frame:IsProtected()) then return end
+    local parent = frame:GetParent()
+    if hide and parent ~= hider then
+        frame.foreverParent, frame.foreverLevel = parent, frame:GetFrameLevel()
+        frame:SetParent(hider)
+    elseif not hide and parent == hider then
+        frame:SetParent(frame.foreverParent or UIParent)
+        if frame.foreverLevel then frame:SetFrameLevel(frame.foreverLevel) end
+    end
+end
+
+-- Buff and debuff grids: icons per row (config.columns) and rows (config.rows, nil = all).
+local auraSpecs = {
+    ConsolidatedBuffs = { prefix = "BuffButton", max = function() return BUFF_MAX_DISPLAY or 32 end,
+        extra = { "ConsolidatedBuffs", "TemporaryEnchantFrame" } },
+    DebuffButton1 = { prefix = "DebuffButton", max = function() return DEBUFF_MAX_DISPLAY or 16 end },
+}
+
+local function auraColumns(entry)
+    local max = entry.aura.max()
+    return math.max(1, math.min(max, math.floor(tonumber(entry.config.columns) or BUFFS_PER_ROW or 8)))
+end
+
+local function auraMaxRows(entry)
+    return math.ceil(entry.aura.max() / auraColumns(entry))
+end
+
+local function auraRows(entry)
+    local rows = tonumber(entry.config.rows)
+    return rows and math.max(1, math.min(auraMaxRows(entry), math.floor(rows))) or auraMaxRows(entry)
+end
+
+local function layoutAuras(entry)
+    local spec, config = entry and entry.aura, entry and entry.config
+    if not spec or not config then return end
+    local hidden = config.hidden == true
+    for _, name in ipairs(spec.extra or {}) do park(_G[name], hidden) end
+    local custom = config.columns ~= nil or config.rows ~= nil
+    local list = {}
+    for index = 1, spec.max() do
+        local button = _G[spec.prefix .. index]
+        -- Consolidated buffs live in the stock tooltip container and keep its layout.
+        if button and button:IsShown() and not button.consolidated then list[#list + 1] = button end
+    end
+    local first = list[1]
+    local columns, rows = auraColumns(entry), auraRows(entry)
+    local stepX = first and first:GetWidth() + 5
+    local stepY = first and first:GetHeight() + 15
+    for k, button in ipairs(list) do
+        local slot = k - 1
+        local row = math.floor(slot / columns)
+        park(button, hidden or (custom and row >= rows))
+        if custom and k > 1 and row < rows then
+            button:ClearAllPoints()
+            button:SetPoint("TOPRIGHT", first, "TOPRIGHT", -(slot % columns) * stepX, -row * stepY)
+        end
+    end
+    -- Icons the stock UI no longer shows go back to their parent, ready for the next aura.
+    if not hidden then
+        for index = 1, spec.max() do
+            local button = _G[spec.prefix .. index]
+            if button and not button:IsShown() then park(button, false) end
+        end
+    end
+end
+
+-- The frame and its members, parked or restored by the "Show" switch of the editor.
+local function applyShown(entry)
+    if not entry.config or entry.noToggle then return end
+    if entry.aura then layoutAuras(entry) return end
+    local hidden = entry.config.hidden == true
+    park(entry.frame, hidden)
+    groupMembers(entry.members, function(member) park(member, hidden) end)
+end
+
 local function boundsRect(entry)
     local left, bottom, right, top
     groupMembers(entry.bounds, function(member)
@@ -288,6 +440,7 @@ end
 
 local function apply(entry)
     if entry.bar and not InCombatLockdown() then applyBar(entry) end
+    applyShown(entry)
     if entry.removed or entry.docked or held(entry) then return end
     if entry.castOwner and entry.config.detached ~= true then return end
     local saved = entry.config.scale
@@ -324,6 +477,11 @@ local function refreshOverlay(entry)
         return
     end
     local right, top = left + width, bottom + height
+    local off = entry.config and entry.config.hidden == true
+    if overlay.label then
+        overlay.label:SetText(off and (entry.label .. (ru and " (скрыт)" or " (hidden)")) or entry.label)
+        overlay.label:SetAlpha(off and 0.6 or 1)
+    end
     local visible = entry.frame:IsVisible()
     local function include(member)
         if not member:IsShown() then return end
@@ -388,7 +546,23 @@ local settingBar = false
 
 local function showBarValues(entry)
     settingBar = true
+    if entry.aura then
+        local max, columns, maxRows, rows = entry.aura.max(), auraColumns(entry), auraMaxRows(entry), auraRows(entry)
+        countSlider:SetMinMaxValues(1, max)
+        ForeverStockUIEditCountHigh:SetText(max)
+        countSlider:SetValue(columns)
+        rowsSlider:SetMinMaxValues(1, maxRows)
+        rowsSlider:SetValue(rows)
+        ForeverStockUIEditRowsHigh:SetText(maxRows)
+        ForeverStockUIEditCountText:SetText((ru and "В ряду" or "Per row") .. "  " .. columns)
+        ForeverStockUIEditRowsText:SetText((ru and "Рядов" or "Rows") .. "  " .. rows)
+        settingBar = false
+        return
+    end
     local count, rows = barCount(entry), barRows(entry)
+    local max = barMax(entry)
+    countSlider:SetMinMaxValues(1, max)
+    ForeverStockUIEditCountHigh:SetText(max)
     countSlider:SetValue(count)
     rowsSlider:SetMinMaxValues(1, count)
     rowsSlider:SetValue(rows)
@@ -399,7 +573,7 @@ local function showBarValues(entry)
 end
 
 local function configureBar(entry)
-    if entry.bar and entry.config then
+    if (entry.bar or entry.aura) and entry.config then
         showBarValues(entry)
         countSlider:Show()
         rowsSlider:Show()
@@ -409,9 +583,26 @@ local function configureBar(entry)
     end
 end
 
-local function barChanged()
+local function barChanged(slider)
     local entry = selected
-    if settingBar or not entry or not entry.bar or InCombatLockdown() then return end
+    if settingBar or not entry or InCombatLockdown() then return end
+    if entry.aura then
+        local value = math.floor(slider:GetValue() + 0.5)
+        if slider == countSlider then
+            -- "All rows" stays all rows when the row width changes.
+            local all = entry.config.rows == nil
+            entry.config.columns = value
+            if not all and auraRows(entry) >= auraMaxRows(entry) then entry.config.rows = nil end
+        else
+            entry.config.columns = auraColumns(entry)
+            entry.config.rows = value < auraMaxRows(entry) and value or nil
+        end
+        layoutAuras(entry)
+        showBarValues(entry)
+        schedule()
+        return
+    end
+    if not entry.bar then return end
     entry.config.count = math.floor(countSlider:GetValue() + 0.5)
     entry.config.rows = math.min(entry.config.count, math.floor(rowsSlider:GetValue() + 0.5))
     applyBar(entry)
@@ -443,6 +634,17 @@ local reset = button(options, 104, ru and "Сбросить" or "Reset", functio
     if entry.bar then
         entry.config.count, entry.config.rows = nil, nil
         applyBar(entry)
+    elseif entry.aura then
+        entry.config.columns, entry.config.rows = nil, nil
+        -- The stock layout comes back with the next anchor update.
+        if entry.aura.prefix == "BuffButton" and BuffFrame_UpdateAllBuffAnchors then BuffFrame_UpdateAllBuffAnchors()
+        elseif DebuffButton_UpdateAnchors then
+            for index = 1, entry.aura.max() do
+                local button = _G["DebuffButton" .. index]
+                if button and button:IsShown() then DebuffButton_UpdateAnchors("DebuffButton", index) end
+            end
+        end
+        layoutAuras(entry)
     end
     resetPosition(entry)
     if entry.slider then
@@ -477,6 +679,18 @@ local close = ui.Widgets and ui.Widgets.CloseButton(options, function() options:
     or CreateFrame("Button", nil, options, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", -4, -4)
 close:SetScript("OnClick", function() options:Hide() end)
+
+shown:SetScript("OnClick", function(self)
+    local entry = selected
+    if not entry or not entry.config or entry.noToggle or InCombatLockdown() then
+        self:SetChecked(not (entry and entry.config and entry.config.hidden))
+        return
+    end
+    entry.config.hidden = not self:GetChecked() or nil
+    applyShown(entry)
+    refreshOverlay(entry)
+    schedule()
+end)
 
 detach:SetScript("OnClick", function(self)
     local entry = selected and selected.castBar
@@ -626,12 +840,15 @@ local function measureLayout()
     return measures
 end
 
--- The Retail look hides the stock bar art and the empty-slot backgrounds; the gryphons move to the button row.
+-- The Retail look hides the stock bar art; the gryphons move to the button row. The winged slot backdrops of
+-- the main bar stay in both layouts.
+local swapGryphonSpots -- defined with the gryphon entries below
 local function setBarArt(classic)
+    local previous = settings.barLayout == "retail" and "retail" or "classic"
     settings.barLayout = classic and "classic" or "retail"
+    if swapGryphonSpots and previous ~= settings.barLayout then swapGryphonSpots(previous) end
     settings.showGryphons = true
-    settings.barStockArt = classic
-    settings.barSlotBackgrounds = classic
+    settings.barSlotBackgrounds = true
     if ui.ActionBars then ui.ActionBars.Apply() end
     if ui.UnitFrames and ui.UnitFrames.ApplyLayout then ui.UnitFrames.ApplyLayout() end
     if ui.Minimap and ui.Minimap.ApplyLayout then ui.Minimap.ApplyLayout() end
@@ -671,7 +888,9 @@ function ui.ApplyEditLayout(name)
     resetLayoutFrames()
     layoutWait:SetScript("OnUpdate", nil)
     if name == "retail" then
-        -- Measure once the stock layout has settled after the reset.
+        -- The Retail look first (smaller micro buttons with their own spacing, the big backpack), so the frames
+        -- are measured as they will be shown; then measure once the layout has settled after the reset.
+        setBarArt(false)
         local frames = 0
         layoutWait:SetScript("OnUpdate", function(self)
             frames = frames + 1
@@ -705,6 +924,7 @@ local function createOverlay(entry)
     local label = overlay:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     label:SetPoint("CENTER")
     label:SetText(entry.label)
+    overlay.label = label
     overlay:SetScript("OnEnter", function() paint(true) end)
     overlay:SetScript("OnLeave", function() paint(false) end)
     overlay:SetScript("OnClick", function()
@@ -718,7 +938,15 @@ local function createOverlay(entry)
         configureScale(entry)
         title:SetText(entry.label)
         configureBar(entry)
-        options:SetHeight(entry.castBar and 156 or (entry.bar and 204 or 128))
+        local height = entry.castBar and 156 or ((entry.bar or entry.aura) and 204 or 128)
+        if entry.config and not entry.noToggle then
+            shown:SetChecked(entry.config.hidden ~= true)
+            shown:Show()
+            height = height + 28
+        else
+            shown:Hide()
+        end
+        options:SetHeight(height)
         if entry.castBar then
             detach:Show()
             detach:SetChecked(entry.castBar.config.detached == true)
@@ -768,6 +996,17 @@ function ui.RegisterEditFrame(frame, label, category, slider, legacyPosition)
     return entry
 end
 
+-- The saved spot of a stock unit frame goes back to the client (its own mover took the frame). Said in the chat,
+-- with the reason, so a spot that disappears can be traced.
+local function releaseToClient(entry, reason)
+    if not entry.config or not getPosition(entry) then return end
+    entry.config.position, entry.points = nil, nil
+    if ui.Print then
+        ui.Print((ru and "позиция «%s» передана клиенту (%s)." or "the spot of \"%s\" went back to the client (%s)."):format(
+            entry.label or entry.name, reason))
+    end
+end
+
 local function add(name, russian, english, members)
     local entry = ui.RegisterEditFrame(_G[name], ru and russian or english)
     if not entry then return end
@@ -775,8 +1014,22 @@ local function add(name, russian, english, members)
     entry.native = nativeUnits[name] and windows and windows.Apply
     entry.holder = nativeUnits[name] and name or name == "CastingBarFrame" and "castbar"
     if entry.native then
+        -- A frame the player really dragged with the client's own mover (drag start and stop) is the client's
+        -- again; a stray OnDragStop without a drag keeps the saved spot.
+        entry.frame:HookScript("OnDragStart", function() entry.clientDrag = true end)
         entry.frame:HookScript("OnDragStop", function()
-            if entry.config then entry.config.position, entry.points = nil, nil end
+            if not entry.clientDrag then return end
+            entry.clientDrag = nil
+            releaseToClient(entry, "drag")
+        end)
+    end
+    -- After login the Nozdor client puts the player, target and focus frames back on its own spot later than Edit
+    -- Mode places them (the target frame went back to the stock place after a relog). A saved spot wins: whenever
+    -- someone else re-anchors the frame, the next pass puts it back (out of combat; the pass waits for that).
+    if nativeUnits[name] and hooksecurefunc then
+        hooksecurefunc(entry.frame, "SetPoint", function()
+            if placing or dragging == entry or not entry.config or held(entry) then return end
+            if getPosition(entry) and ui.RefreshEditLayout then ui.RefreshEditLayout() end
         end)
     end
     return entry
@@ -800,6 +1053,8 @@ add("MainMenuBarVehicleLeaveButton", "Покинуть транспорт", "Exi
 local micro = add("CharacterMicroButton", "Микроменю", "Micro menu", {
     "SpellbookMicroButton", "TalentMicroButton", "AchievementMicroButton", "QuestLogMicroButton",
     "SocialsMicroButton", "PVPMicroButton", "LFDMicroButton", "MainMenuMicroButton", "HelpMicroButton",
+    -- Buttons of the Nozdor client patch (they may appear after login; names are looked up when used).
+    "EncounterJournalMicroButton", "StoreMicroButton", "CollectionsMicroButton", "CollectionMicroButton",
 })
 -- After a reset the stock point is back; the micro menu centres its (wider) row again.
 if micro then
@@ -807,6 +1062,52 @@ if micro then
         if ui.MicroMenu and ui.MicroMenu.Centre then ui.MicroMenu.Centre() end
     end
 end
+-- Gryphons: each end cap moves on its own (holder frames from StockPanels.lua). Classic and Retail keep separate
+-- spots in config.positions.classic/retail; config.position is the spot of the current layout (swapGryphonSpots).
+local gryphonEntries = {}
+local function barLayoutKey()
+    return settings and settings.barLayout == "retail" and "retail" or "classic"
+end
+local function gryphonSpots(entry)
+    if type(entry.config.positions) ~= "table" then entry.config.positions = {} end
+    return entry.config.positions
+end
+for index, name in ipairs(ui.GryphonHolders or {}) do
+    local entry = _G[name] and add(name, index == 1 and "Левый грифон" or "Правый грифон",
+        index == 1 and "Left gryphon" or "Right gryphon")
+    if entry then
+        entry.resetPosition = function() if ui.ApplyGryphons then ui.ApplyGryphons() end end
+        entry.beforeResetPosition = function()
+            if entry.config then gryphonSpots(entry)[barLayoutKey()] = nil end
+        end
+        entry.onDragStop = function()
+            local position = entry.config and entry.config.position
+            if type(position) == "table" then gryphonSpots(entry)[barLayoutKey()] = { position[1], position[2] } end
+        end
+        gryphonEntries[#gryphonEntries + 1] = entry
+    end
+end
+-- Called once settings.barLayout holds the new layout, before the caps are placed for it.
+swapGryphonSpots = function(previous)
+    for _, entry in ipairs(gryphonEntries) do
+        local config = entry.config
+        if config then
+            local spots = gryphonSpots(entry)
+            -- Spots saved before the per-layout table existed belong to the layout they were made in.
+            if type(config.position) == "table" and spots[previous] == nil then
+                spots[previous] = { config.position[1], config.position[2] }
+            end
+            local spot = spots[barLayoutKey()]
+            if type(spot) == "table" and number(spot[1]) and number(spot[2]) then
+                config.position = { spot[1], spot[2] }
+            else
+                config.position = nil
+                restorePoints(entry)
+            end
+        end
+    end
+end
+
 add("MainMenuBarBackpackButton", "Кнопки сумок", "Bag buttons", {
     "CharacterBag0Slot", "CharacterBag1Slot", "CharacterBag2Slot", "CharacterBag3Slot",
 })
@@ -828,6 +1129,14 @@ add("DurabilityFrame", "Прочность", "Durability")
 
 for name, spec in pairs(barSpecs) do
     if byName[name] then byName[name].bar = spec end
+end
+if byName.ConsolidatedBuffs then byName.ConsolidatedBuffs.aura = auraSpecs.ConsolidatedBuffs end
+-- Stock code reads the unit of these frames from their parent, so they cannot be parked.
+for _, name in ipairs({ "TargetFrameToT", "FocusFrameToT" }) do
+    if byName[name] then byName[name].noToggle = true end
+end
+if BuffFrame_UpdateAllBuffAnchors then
+    hooksecurefunc("BuffFrame_UpdateAllBuffAnchors", function() layoutAuras(byName.ConsolidatedBuffs) end)
 end
 
 local function pinCastBar(bar)
@@ -851,7 +1160,7 @@ local function registerCastBar(frame)
         or (ru and "Полоса заклинаний фокуса" or "Focus cast bar")
     local entry = ui.RegisterEditFrame(bar, label)
     -- Stock cast and aura handling still reads the original unit frame via GetParent().
-    entry.castOwner, entry.nativeScale = owner, bar:GetScale()
+    entry.castOwner, entry.nativeScale, entry.noToggle = owner, bar:GetScale(), true
     owner.castBar = entry
     -- The XML OnShow script holds a direct reference to the stock positioning function.
     bar:HookScript("OnShow", pinCastBar)
@@ -877,20 +1186,24 @@ local debuffs = {}
 for i = 2, DEBUFF_MAX_DISPLAY or 16 do debuffs[#debuffs + 1] = "DebuffButton" .. i end
 local function registerDebuffs()
     if DebuffButton1 and not byName.DebuffButton1 then
-        add("DebuffButton1", "Дебафы", "Debuffs", debuffs)
+        local entry = add("DebuffButton1", "Дебафы", "Debuffs", debuffs)
+        if entry then entry.aura = auraSpecs.DebuffButton1 end
         if editor:IsShown() then createOverlay(byName.DebuffButton1) end
     end
 end
 registerDebuffs()
 if DebuffButton_UpdateAnchors then
     hooksecurefunc("DebuffButton_UpdateAnchors", function(_, index)
+        layoutAuras(byName.DebuffButton1)
         if index ~= 1 then return end
         registerDebuffs()
+        layoutAuras(byName.DebuffButton1)
         schedule()
     end)
 end
 
 editor:SetScript("OnShow", function()
+    placeEditor()
     redrawGrid()
     for _, entry in ipairs(entries) do
         if not entry.overlay then createOverlay(entry) end
@@ -911,6 +1224,96 @@ local function openEditor()
     editor:Show()
 end
 
+-- Setup wizard and per-character layouts (Setup/Profile.lua) -----------------------------------------------------
+-- Every entry is put back on its saved spot, or on the stock spot when it has none (a layout loaded in place may
+-- have dropped the position the frame stands on now).
+local function reapplyAll()
+    if InCombatLockdown() or not settings then return false end
+    stopDrag(true)
+    for _, entry in ipairs(entries) do
+        if entry.config and not entry.removed and not entry.docked and not held(entry) then
+            if not getPosition(entry) and entry.points then
+                restorePoints(entry)
+                if entry.resetPosition then entry.resetPosition() end
+            end
+            if not entry.slider and not number(entry.config.scale) and entry.defaultScale
+                and not entry.castOwner then
+                setScale(entry, entry.defaultScale)
+            end
+        end
+    end
+    if UIParent_ManageFramePositions then UIParent_ManageFramePositions() end
+    schedule()
+    return true
+end
+
+-- Copies a saved layout into the live table in place: every module keeps its reference to layout[name].
+-- skip(name) leaves an entry as it is (the Cooldown Manager swaps its own spots per talent tree).
+local function deepCopy(value)
+    if type(value) ~= "table" then return value end
+    local result = {}
+    for k, v in pairs(value) do result[k] = deepCopy(v) end
+    return result
+end
+
+local function loadLayout(source, skip)
+    if not settings then return false end
+    if type(settings.editLayout) ~= "table" then settings.editLayout = {} end
+    local live = settings.editLayout
+    source = type(source) == "table" and source or {}
+    for name, config in pairs(live) do
+        if type(config) == "table" and not (skip and skip(name)) and type(source[name]) ~= "table" then
+            for key in pairs(config) do config[key] = nil end
+        end
+    end
+    for name, config in pairs(source) do
+        if type(config) == "table" and not (skip and skip(name)) then
+            if type(live[name]) ~= "table" then live[name] = {} end
+            local target = live[name]
+            for key in pairs(target) do target[key] = nil end
+            for key, value in pairs(config) do target[key] = deepCopy(value) end
+        end
+    end
+    layout = live
+    for _, entry in ipairs(entries) do
+        if type(layout[entry.name]) ~= "table" then layout[entry.name] = {} end
+        entry.config = layout[entry.name]
+    end
+    return reapplyAll()
+end
+
+-- Size of a frame as Edit Mode measures it (UIParent units), members included.
+local function entrySize(entry)
+    local left, bottom, width, height = rect(entry.frame)
+    if not left then
+        local ratio = screenScale(entry.frame)
+        return (entry.frame:GetWidth() or 0) * ratio, (entry.frame:GetHeight() or 0) * ratio
+    end
+    local right, top = left + width, bottom + height
+    local function include(member)
+        if not member:IsShown() then return end
+        local x, y, w, h = rect(member)
+        if not x then return end
+        left, bottom = math.min(left, x), math.min(bottom, y)
+        right, top = math.max(right, x + w), math.max(top, y + h)
+    end
+    groupMembers(entry.members, include)
+    return right - left, top - bottom
+end
+
+-- Saves a spot for the named frame and moves it there on the next pass. size = { w, h } overrides the measure.
+local function place(name, point, relativePoint, x, y, size)
+    local entry = byName[name]
+    if not entry or not entry.config or not settings then return false end
+    local w, h = entrySize(entry)
+    if size then w, h = size[1] or w, size[2] or h end
+    local px, py = ui.ComputeEditPosition(point, relativePoint, x, y, w, h, UIParent:GetWidth(), UIParent:GetHeight())
+    -- The "Show" switch stays as the player left it.
+    entry.config.position = { px, py }
+    schedule()
+    return true
+end
+
 ui.EditMode = {
     Open = openEditor,
     ApplyLayout = function(name) return ui.ApplyEditLayout(name) end,
@@ -920,6 +1323,32 @@ ui.EditMode = {
             if entry.overlay then entry.overlay.paint(false) end
         end
     end,
+    -- Switches the bar look (Classic / Retail art) without moving the bars.
+    SetBarStyle = function(style)
+        if not settings then return false end
+        setBarArt(style ~= "retail")
+        schedule()
+        return true
+    end,
+    LoadLayout = loadLayout,
+    Reapply = reapplyAll,
+    -- Back to the frame's stock spot (the saved position is dropped), as "Reset position" in the editor does.
+    Reset = function(name)
+        local entry = byName[name]
+        if not entry or not entry.config or not settings then return false end
+        resetPosition(entry)
+        schedule()
+        return true
+    end,
+    Place = place,
+    Size = function(name)
+        local entry = byName[name]
+        if entry then return entrySize(entry) end
+    end,
+    Entry = function(name) return byName[name] end,
+    Entries = function() return entries end,
+    IsOpen = function() return editor:IsShown() end,
+    Close = function() editor:Hide() end,
 }
 
 local menu = CreateFrame("Button", "ForeverStockUIEditModeButton", GameMenuFrame, "GameMenuButtonTemplate")
@@ -1010,6 +1439,6 @@ end
 if UnitFrameMove_Do then
     hooksecurefunc("UnitFrameMove_Do", function(name, command)
         local entry = byName[name]
-        if command == "reset" and entry and entry.config then entry.config.position, entry.points = nil, nil end
+        if command == "reset" and entry then releaseToClient(entry, "UnitFrameMove_Do reset") end
     end)
 end
