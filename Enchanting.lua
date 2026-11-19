@@ -1,13 +1,13 @@
 local addonName, ui = ...
--- Enchanting helpers: (1) a disenchant button in the bags: the disenchant cursor, with every item that cannot be
--- disenchanted dimmed while it is up; (2) repeat the selected enchant on one remembered item N times; while that
+-- Enchanting helpers: (1) disenchant and prospect buttons in the bags: the spell's cursor, with every item it
+-- cannot take dimmed while it is up; (2) repeat the selected enchant on one remembered item N times; while that
 -- session runs the session key presses "Yes" on REPLACE_ENCHANT.
 --
 -- Protected-API notes (3.3.5a):
 --  * Casting a spell from addon code is forbidden; it needs a hardware event on a secure button. Disenchant
---    therefore goes through ForeverStockUIDisenchantSecure (SecureActionButtonTemplate, type "spell"). The
---    secure button is parented to UIParent and only *placed* over the bag button by absolute coordinates, so
---    the bag window never gets protected children or anchors.
+--    and Prospecting therefore go through ForeverStockUIDisenchantSecure / ForeverStockUIProspectSecure
+--    (SecureActionButtonTemplate, type "spell"). The secure buttons are parented to UIParent and only *placed*
+--    over the bag buttons by absolute coordinates, so the bag window never gets protected children or anchors.
 --  * DoTradeSkill and Pickup*/Use*Item while SpellIsTargeting are not protected: the repeat button is a
 --    plain button. Whether the client lets DoTradeSkill run outside a click is checked at run time: if the
 --    targeting cursor does not appear (or the client reports ADDON_ACTION_FORBIDDEN), the session falls back
@@ -112,16 +112,47 @@ local driver = CreateFrame("Frame")
 driver:Hide()
 
 ----------------------------------------------------------------------------------------------------------
--- Feature 1: disenchant button in the bags
+-- Feature 1: disenchant and prospect buttons in the bags
 ----------------------------------------------------------------------------------------------------------
--- A click on the button casts Disenchant like the spell from the spellbook: the cursor waits for an item and
--- the player clicks it. The cast needs a hardware click on a secure button, so a secure spell button
--- (ForeverStockUIDisenchantSecure) lies over the visible one. While the disenchant cursor is up (from this
--- button or the spellbook) every bag item that cannot be disenchanted is dimmed; the dim layer takes no clicks.
-local de = { dimmed = false }
-E.disenchant = de
+-- A click on a button casts its spell like the spellbook does: the cursor waits for an item and the player
+-- clicks it. The cast needs a hardware click on a secure button, so a secure spell button
+-- (ForeverStockUI<Name>Secure) lies over each visible one. While a cursor is up (from the button or the
+-- spellbook) every bag item that spell cannot take is dimmed; the dim layer takes no clicks.
+-- Disenchant sits next to the close cross, Prospecting left of it; a spell the player does not know has no
+-- button, and the other one moves up to the cross.
+local PROSPECT_ID, JEWELCRAFTING_ID = 31252, 25229
+-- Ores that Prospecting takes (five per cast).
+local PROSPECT_ORES = { [2770] = true, [2771] = true, [2772] = true, [3858] = true, [10620] = true,
+    [23424] = true, [23425] = true, [36909] = true, [36912] = true, [36910] = true }
+E.prospectOres = PROSPECT_ORES
+
+function E.CanProspect(bag, slot)
+    local link = GetContainerItemLink(bag, slot)
+    if not link then return false end
+    local id = tonumber(link:match("item:(%d+)"))
+    if not (id and PROSPECT_ORES[id]) then return false, link end
+    local _, count = GetContainerItemInfo(bag, slot)
+    return (count or 0) >= 5, link
+end
+
+local de = { dimmed = false, key = "disenchant", spell = DISENCHANT_ID, profession = ENCHANTING_ID,
+    frame = "Disenchant", setting = "enchantDisenchantButton", can = E.CanDisenchant,
+    icon = "Interface\\Icons\\INV_Enchant_Disenchant", fallbackName = "Disenchant", professionName = "Enchanting",
+    combatText = { "В бою кнопка распыления недоступна.", "The disenchant button is not available in combat." },
+    hint = { "Клик — затем кликните по предмету. Предметы, которые нельзя распылить, затемняются.",
+        "Click, then click an item. Items that cannot be disenchanted are dimmed." } }
+local pr = { dimmed = false, key = "prospect", spell = PROSPECT_ID, profession = JEWELCRAFTING_ID,
+    frame = "Prospect", setting = "enchantProspectButton", can = E.CanProspect,
+    icon = "Interface\\Icons\\INV_Misc_Gem_Bloodgem_01", fallbackName = "Prospecting", professionName = "Jewelcrafting",
+    combatText = { "В бою кнопка просеивания недоступна.", "The prospecting button is not available in combat." },
+    hint = { "Клик — затем кликните по руде (нужно 5 штук). Остальные предметы затемняются.",
+        "Click, then click an ore (5 needed). Everything else is dimmed." } }
+E.disenchant, E.prospect = de, pr
+-- Right to left from the close cross.
+local tools = { de, pr }
 local overlays = {}
-local ctrl, deButton, deIcon, secure
+local ctrl, dimTool
+local GAP = 3
 
 local function eachBagButton(fn)
     if ui.Bags and ui.Bags.Window and ui.Bags.Window() then
@@ -142,7 +173,7 @@ local function eachBagButton(fn)
     end
 end
 
--- The frame the disenchant control lives on: the combined backpack, else the stock backpack container.
+-- The frame the controls live on: the combined backpack, else the stock backpack container.
 local function bagHost()
     local window = ui.Bags and ui.Bags.Window and ui.Bags.Window()
     if window then return window, ui.Bags.Footer() end
@@ -169,34 +200,39 @@ function E.Overlay(button)
     return overlay
 end
 
--- The cursor waits for a disenchant target (cast from the button, or Disenchant from the spellbook).
-local function disenchantTargeting()
+-- The cursor waits for a target of this tool's spell (cast from its button, or from the spellbook).
+local function toolTargeting(tool)
     if not SpellIsTargeting() then return false end
-    if de.armed then return true end
-    local name = spellName(DISENCHANT_ID)
+    if tool.armed then return true end
+    local name = spellName(tool.spell)
     return (name and IsCurrentSpell and IsCurrentSpell(name)) and true or false
 end
+local function disenchantTargeting() return toolTargeting(de) end
 E.DisenchantTargeting = disenchantTargeting
+E.ProspectTargeting = function() return toolTargeting(pr) end
 
+-- The tool whose cursor is up dims the bags (one cursor at a time).
 local function refreshDim()
-    de.dirty = nil
+    de.dirty, pr.dirty = nil, nil
     -- Stock container buttons are reused for other bags, so every layer is hidden and re-bound each pass.
     for _, overlay in pairs(overlays) do overlay:Hide() end
-    if not de.dimmed then return end
+    if not dimTool then return end
+    local can = dimTool.can
     eachBagButton(function(button, bag, slot)
         local overlay = E.Overlay(button)
         local link = GetContainerItemLink(bag, slot)
-        overlay.dim:SetAlpha((link and not E.CanDisenchant(bag, slot)) and 0.7 or 0)
+        overlay.dim:SetAlpha((link and not can(bag, slot)) and 0.7 or 0)
         overlay:Show()
     end)
 end
 E.RefreshDim = refreshDim
 
-local function setSecure()
+local function setSecure(tool)
+    local secure = tool.secure
     if not secure or InCombatLockdown() then return end
-    if knowsSpell(DISENCHANT_ID) then
+    if knowsSpell(tool.spell) then
         secure:SetAttribute("type", "spell")
-        secure:SetAttribute("spell", spellName(DISENCHANT_ID))
+        secure:SetAttribute("spell", spellName(tool.spell))
     else
         secure:SetAttribute("type", nil)
         secure:SetAttribute("spell", nil)
@@ -204,27 +240,31 @@ local function setSecure()
 end
 
 local function updateControl()
-    if not deButton then return end
-    local known = knowsSpell(DISENCHANT_ID)
-    deIcon:SetDesaturated(not known)
-    if known then deButton:Enable() else deButton:Disable() end
-    setSecure()
+    for _, tool in ipairs(tools) do
+        if tool.button then
+            local known = knowsSpell(tool.spell)
+            tool.iconTexture:SetDesaturated(not known)
+            if known then tool.button:Enable() else tool.button:Disable() end
+            setSecure(tool)
+        end
+    end
 end
 
--- Keep the secure button exactly over the visible one (absolute UIParent coordinates, never an anchor: the
+-- Keep each secure button exactly over its visible one (absolute UIParent coordinates, never an anchor: the
 -- bag window must not get protected children). Shown only out of combat, while the visible button is.
-local placed = {}
-local function syncSecure()
+local function syncOne(tool)
+    local secure, button = tool.secure, tool.button
     if not secure or InCombatLockdown() then return end
-    if not (deButton and deButton:IsVisible() and knowsSpell(DISENCHANT_ID)) then
+    if not (button and button:IsVisible() and knowsSpell(tool.spell)) then
         if secure:IsShown() then secure:Hide() end
         return
     end
-    local scale = deButton:GetEffectiveScale() / UIParent:GetEffectiveScale()
-    local x, y = deButton:GetLeft(), deButton:GetBottom()
+    local scale = button:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    local x, y = button:GetLeft(), button:GetBottom()
     if not x then return end
     x, y = x * scale, y * scale
-    local w, h = deButton:GetWidth() * scale, deButton:GetHeight() * scale
+    local w, h = button:GetWidth() * scale, button:GetHeight() * scale
+    local placed = tool.placed
     if placed.x ~= x or placed.y ~= y or placed.w ~= w or placed.h ~= h then
         placed.x, placed.y, placed.w, placed.h = x, y, w, h
         secure:ClearAllPoints()
@@ -233,8 +273,11 @@ local function syncSecure()
     end
     if not secure:IsShown() then secure:Show() end
 end
+local function syncSecure()
+    for _, tool in ipairs(tools) do syncOne(tool) end
+end
 
--- The close cross of the bag window: the button sits just left of it, in its size (the header row has room
+-- The close cross of the bag window: the buttons sit just left of it, in its size (the header row has room
 -- there: the title keeps 44 px from the edge).
 local function closeButton(host)
     local close = ui.Bags and ui.Bags.CloseButton and ui.Bags.CloseButton()
@@ -243,11 +286,34 @@ local function closeButton(host)
     return close, true
 end
 
+local function toolShown(tool)
+    return tool.button ~= nil and enabled(tool.setting) and knowsSpell(tool.spell)
+end
+
+-- Lay the shown buttons out right to left inside the control (a moved button also moves its secure cover:
+-- syncSecure compares the coordinates every tick).
+local function layoutButtons(size)
+    local x = 0
+    for _, tool in ipairs(tools) do
+        local button = tool.button
+        if button then
+            if toolShown(tool) then
+                button:ClearAllPoints()
+                button:SetPoint("RIGHT", ctrl, "RIGHT", -x, 0)
+                button:Show()
+                x = x + size + GAP
+            else
+                button:Hide()
+            end
+        end
+    end
+end
+
 -- The WoW Forever window skin draws its frame over every inner frame of the bag and lifts only the cross above
--- it (WindowSkin.lua, lift(close)); the button goes to the cross's level, or the frame hides it (only the
--- secure button over it answered: its tooltip showed, the icon did not). Checked again every tick, since the
--- skin may lift the cross after the button was placed.
--- The button takes the cross's size. The window skin resizes the cross (WindowSkin.lua, skinClose) after the
+-- it (WindowSkin.lua, lift(close)); the buttons go to the cross's level, or the frame hides them (only the
+-- secure button over one answered: its tooltip showed, the icon did not). Checked again every tick, since the
+-- skin may lift the cross after the buttons were placed.
+-- The buttons take the cross's size. The window skin resizes the cross (WindowSkin.lua, skinClose) after the
 -- bag opened or when its scale option changes, so the size is checked again whenever the cross changes and on
 -- every tick; reading it only on OnShow left the button at the old cross's size ("the button sometimes grows").
 local function fitSize(close, stock)
@@ -255,10 +321,25 @@ local function fitSize(close, stock)
     if height < 8 then height = 18 end
     -- 0.85 of the ForeverUI bag's cross: a little smaller than the cross itself.
     local size = math.floor(height * (stock and 0.6 or 0.85) + 0.5)
-    if math.abs((ctrl:GetHeight() or 0) - size) > 0.01 or math.abs((deButton:GetHeight() or 0) - size) > 0.01
-        or math.abs((deButton:GetWidth() or 0) - size) > 0.01 then
-        ctrl:SetSize(size, size)
-        deButton:SetSize(size, size)
+    local count, key = 0, ""
+    for _, tool in ipairs(tools) do
+        if toolShown(tool) then count, key = count + 1, key .. tool.key end
+    end
+    local width = math.max(1, count) * size + math.max(0, count - 1) * GAP
+    local changed = ctrl.layoutKey ~= key or math.abs((ctrl:GetHeight() or 0) - size) > 0.01
+        or math.abs((ctrl:GetWidth() or 0) - width) > 0.01
+    for _, tool in ipairs(tools) do
+        local button = tool.button
+        if button and (math.abs((button:GetHeight() or 0) - size) > 0.01
+            or math.abs((button:GetWidth() or 0) - size) > 0.01) then
+            changed = true
+        end
+    end
+    if changed then
+        ctrl.layoutKey = key
+        ctrl:SetSize(width, size)
+        for _, tool in ipairs(tools) do if tool.button then tool.button:SetSize(size, size) end end
+        layoutButtons(size)
     end
 end
 
@@ -275,35 +356,43 @@ local function watchClose(close, stock)
 end
 
 function E.Raise()
-    if not (ctrl and deButton and ctrl:IsShown()) then return end
+    if not (ctrl and ctrl:IsShown()) then return end
     local close, stock = closeButton(ctrl:GetParent())
     if not close then return end
     fitSize(close, stock)
     local level = close:GetFrameLevel() or 0
-    if ctrl:GetFrameStrata() ~= close:GetFrameStrata() then
-        ctrl:SetFrameStrata(close:GetFrameStrata())
-        deButton:SetFrameStrata(close:GetFrameStrata())
-    end
+    local strata = close:GetFrameStrata()
+    if ctrl:GetFrameStrata() ~= strata then ctrl:SetFrameStrata(strata) end
     if (ctrl:GetFrameLevel() or 0) < level then ctrl:SetFrameLevel(level) end
-    if (deButton:GetFrameLevel() or 0) <= level then deButton:SetFrameLevel(level + 1) end
+    for _, tool in ipairs(tools) do
+        local button = tool.button
+        if button then
+            if button:GetFrameStrata() ~= strata then button:SetFrameStrata(strata) end
+            if (button:GetFrameLevel() or 0) <= level then button:SetFrameLevel(level + 1) end
+        end
+    end
 end
 
 local function placeControl()
     if not ctrl then return end
     local host = bagHost()
-    -- No Enchanting: no button at all (it comes back with SPELLS_CHANGED once the profession is learned).
-    if not host or not enabled("enchantDisenchantButton") or not knowsSpell(DISENCHANT_ID) then
+    local any = false
+    for _, tool in ipairs(tools) do if toolShown(tool) then any = true end end
+    -- No profession: no button for it (it comes back with SPELLS_CHANGED once the profession is learned).
+    if not host or not any then
         ctrl:Hide()
         updateControl()
         syncSecure()
         return
     end
     local close, stock = closeButton(host)
+    ctrl.layoutKey = nil
     -- The stock cross is a 32 px texture with a smaller glyph in it.
     fitSize(close, stock)
     watchClose(close, stock)
     ctrl:SetParent(host)
     ctrl:ClearAllPoints()
+    ctrl:Show()
     if close then
         -- A gap from the cross, so a click meant for the button does not close the bag.
         ctrl:SetPoint("RIGHT", close, "LEFT", stock and -2 or -9, stock and 0 or -2)
@@ -312,7 +401,6 @@ local function placeControl()
         ctrl:SetPoint("TOPRIGHT", host, "TOPRIGHT", -30, -6)
         ctrl:SetFrameLevel(host:GetFrameLevel() + 3)
     end
-    ctrl:Show()
     updateControl()
     syncSecure()
     driver:Show()
@@ -322,58 +410,65 @@ local function hostHidden()
     syncSecure()
 end
 
-local function showTooltip(self)
-    GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:SetText(spellName(DISENCHANT_ID) or "Disenchant")
-    if not knowsSpell(DISENCHANT_ID) then
-        GameTooltip:AddLine((L("Нужна профессия «%s».", "Requires %s.")):format(spellName(ENCHANTING_ID) or "Enchanting"),
-            1, 0.3, 0.3)
-    else
-        GameTooltip:AddLine(L("Клик — затем кликните по предмету. Предметы, которые нельзя распылить, затемняются.",
-            "Click, then click an item. Items that cannot be disenchanted are dimmed."), 1, 1, 1, true)
+local function tooltipFor(tool)
+    return function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(spellName(tool.spell) or tool.fallbackName)
+        if not knowsSpell(tool.spell) then
+            GameTooltip:AddLine((L("Нужна профессия «%s».", "Requires %s.")):format(spellName(tool.profession)
+                or tool.professionName), 1, 0.3, 0.3)
+        else
+            GameTooltip:AddLine(L(tool.hint[1], tool.hint[2]), 1, 1, 1, true)
+        end
+        GameTooltip:Show()
     end
-    GameTooltip:Show()
 end
 
-local function createSecure()
-    secure = CreateFrame("Button", "ForeverStockUIDisenchantSecure", UIParent, "SecureActionButtonTemplate")
+local function createSecure(tool)
+    local secure = CreateFrame("Button", "ForeverStockUI" .. tool.frame .. "Secure", UIParent, "SecureActionButtonTemplate")
+    tool.secure, tool.placed = secure, {}
     secure:SetFrameStrata("TOOLTIP")
     secure:RegisterForClicks("LeftButtonUp")
     secure:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
     secure:Hide()
     -- The cast itself is the secure action ("spell" without a target): the cursor then waits for an item.
     secure:SetScript("PreClick", function()
-        de.armed, de.armedAt = true, GetTime()
+        for _, other in ipairs(tools) do other.armed = nil end
+        tool.armed, tool.armedAt = true, GetTime()
         driver:Show()
     end)
-    secure:SetScript("OnEnter", showTooltip)
+    secure:SetScript("OnEnter", tooltipFor(tool))
     secure:SetScript("OnLeave", GameTooltip_Hide)
-    setSecure()
+    setSecure(tool)
+end
+
+local function createButton(tool)
+    local button = CreateFrame("Button", "ForeverStockUI" .. tool.frame .. "Button", ctrl)
+    tool.button = button
+    button:SetSize(18, 18)
+    button:SetPoint("RIGHT", ctrl, "RIGHT", 0, 0)
+    button:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    local icon = button:CreateTexture(nil, "ARTWORK")
+    tool.iconTexture = icon
+    -- A little inside the button, so it weighs like the cross next to it.
+    icon:SetPoint("TOPLEFT", button, "TOPLEFT", 2, -2)
+    icon:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -2, 2)
+    icon:SetTexture(select(3, GetSpellInfo(tool.spell)) or tool.icon)
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    -- Reached only while the secure button is not over it (combat).
+    button:SetScript("OnClick", function()
+        if InCombatLockdown() then say(L(tool.combatText[1], tool.combatText[2]), true) end
+    end)
+    button:SetScript("OnEnter", tooltipFor(tool))
+    button:SetScript("OnLeave", GameTooltip_Hide)
+    createSecure(tool)
 end
 
 local function createControl()
     ctrl = CreateFrame("Frame", "ForeverStockUIDisenchantControl", UIParent)
     ctrl:SetSize(18, 18)
     ctrl:Hide()
-    deButton = CreateFrame("Button", "ForeverStockUIDisenchantButton", ctrl)
-    deButton:SetSize(18, 18)
-    deButton:SetPoint("LEFT", ctrl, "LEFT", 0, 0)
-    deButton:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    deIcon = deButton:CreateTexture(nil, "ARTWORK")
-    -- A little inside the button, so it weighs like the cross next to it.
-    deIcon:SetPoint("TOPLEFT", deButton, "TOPLEFT", 2, -2)
-    deIcon:SetPoint("BOTTOMRIGHT", deButton, "BOTTOMRIGHT", -2, 2)
-    deIcon:SetTexture(select(3, GetSpellInfo(DISENCHANT_ID)) or "Interface\\Icons\\INV_Enchant_Disenchant")
-    deIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    -- Reached only while the secure button is not over it (combat).
-    deButton:SetScript("OnClick", function()
-        if InCombatLockdown() then
-            say(L("В бою кнопка распыления недоступна.", "The disenchant button is not available in combat."), true)
-        end
-    end)
-    deButton:SetScript("OnEnter", showTooltip)
-    deButton:SetScript("OnLeave", GameTooltip_Hide)
-    createSecure()
+    for _, tool in ipairs(tools) do createButton(tool) end
 
     local window = ui.Bags and ui.Bags.Window and ui.Bags.Window()
     if window then
@@ -389,13 +484,18 @@ end
 local function disenchantTick(now)
     E.Raise()
     syncSecure()
-    -- The cast from the button may take a moment to bring the cursor up; after that "armed" ends with it.
-    if de.armed and not SpellIsTargeting() and now - (de.armedAt or 0) > 0.5 then de.armed = nil end
-    local want = disenchantTargeting()
-    if want ~= de.dimmed then
-        de.dimmed = want
+    local want
+    for _, tool in ipairs(tools) do
+        -- The cast from the button may take a moment to bring the cursor up; after that "armed" ends with it.
+        if tool.armed and not SpellIsTargeting() and now - (tool.armedAt or 0) > 0.5 then tool.armed = nil end
+        local on = toolTargeting(tool) and not want
+        tool.dimmed = on
+        if on then want = tool end
+    end
+    if want ~= dimTool then
+        dimTool = want
         refreshDim()
-    elseif de.dirty then
+    elseif de.dirty or pr.dirty then
         refreshDim()
     end
 end
@@ -920,8 +1020,12 @@ driver:SetScript("OnUpdate", function(self)
     local now = GetTime()
     disenchantTick(now)
     repeatTick(now)
-    -- Runs while a repeat session, the disenchant cursor or the bag button (its secure cover follows it) is up.
-    local busy = re.active or de.dimmed or de.armed or (secure and secure:IsShown()) or (deButton and deButton:IsVisible())
+    -- Runs while a repeat session, a disenchant/prospect cursor or the bag buttons (their secure covers follow
+    -- them) are up.
+    local busy = re.active or dimTool or de.armed or pr.armed or (ctrl and ctrl:IsVisible())
+    for _, tool in ipairs(tools) do
+        if tool.secure and tool.secure:IsShown() then busy = true end
+    end
     if not busy then
         bindKey(nil)
         self:Hide()
@@ -956,8 +1060,10 @@ events:SetScript("OnEvent", function(self, event, a, b)
         return
     elseif event == "PLAYER_REGEN_DISABLED" then
         -- Handlers of this event still run before the lockdown: the last moment to hide the secure button.
-        if secure then secure:Hide() end
-        de.armed = nil
+        for _, tool in ipairs(tools) do
+            if tool.secure then tool.secure:Hide() end
+            tool.armed = nil
+        end
         stopRepeat(L("Переналожение остановлено: бой.", "Re-enchanting stopped: combat."))
         bindKey(nil)
         return
@@ -965,7 +1071,7 @@ events:SetScript("OnEvent", function(self, event, a, b)
         placeControl()
         return
     elseif event == "CURRENT_SPELL_CAST_CHANGED" then
-        -- Disenchant from the spellbook brings the cursor up too: the tick dims the bags.
+        -- Disenchant or Prospecting from the spellbook brings the cursor up too: the tick dims the bags.
         driver:Show()
         return
     elseif event == "ADDON_ACTION_FORBIDDEN" or event == "ADDON_ACTION_BLOCKED" then
@@ -984,11 +1090,11 @@ events:SetScript("OnEvent", function(self, event, a, b)
             .. " - switched to key press per step")
         return
     elseif event == "SPELLS_CHANGED" then
-        -- Enchanting learned or dropped: the button appears or goes away.
+        -- Enchanting or Jewelcrafting learned or dropped: its button appears or goes away.
         placeControl()
         return
     elseif event == "BAG_UPDATE" or event == "ITEM_LOCK_CHANGED" or event == "UNIT_INVENTORY_CHANGED" then
-        if de.dimmed then de.dirty = true end
+        if dimTool then dimTool.dirty = true end
         return
     end
     repeatEvent(event, a, b)
@@ -1008,9 +1114,11 @@ SlashCmdList.FOREVERUIENCHANT = function(msg)
     local host = bagHost()
     local p = function(s) DEFAULT_CHAT_FRAME:AddMessage("|cffe8c27aForever UI|r " .. s) end
     p(("disenchant known=%s spell=%s"):format(tostring(knowsSpell(DISENCHANT_ID)), tostring(GetSpellInfo(DISENCHANT_ID) ~= nil)))
-    p(("bag host=%s combined=%s secure=%s targeting=%s dimmed=%s"):format(host and (host:GetName() or "?") or "none",
-        tostring(ui.Bags and ui.Bags.Window and ui.Bags.Window() ~= nil), tostring(secure and secure:IsShown()),
-        tostring(disenchantTargeting()), tostring(de.dimmed)))
+    p(("prospecting known=%s spell=%s"):format(tostring(knowsSpell(PROSPECT_ID)), tostring(GetSpellInfo(PROSPECT_ID) ~= nil)))
+    p(("bag host=%s combined=%s secure de=%s pr=%s targeting de=%s pr=%s dimmed=%s"):format(
+        host and (host:GetName() or "?") or "none", tostring(ui.Bags and ui.Bags.Window and ui.Bags.Window() ~= nil),
+        tostring(de.secure and de.secure:IsShown()), tostring(pr.secure and pr.secure:IsShown()),
+        tostring(disenchantTargeting()), tostring(toolTargeting(pr)), tostring(dimTool and dimTool.key)))
     p(("tradeskill enchanting=%s repeat active=%s phase=%s done=%d/%d stepMode=%s target=%s"):format(
         tostring(isEnchanting()), tostring(re.active), tostring(re.phase), re.done, re.total, tostring(re.stepMode),
         re.target and (re.target.type .. " " .. (re.target.bag or "") .. " " .. re.target.slot) or "none"))

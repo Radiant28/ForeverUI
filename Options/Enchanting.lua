@@ -4,8 +4,8 @@ local function apply() if ui.Enchanting then ui.Enchanting.Apply() end end
 
 ui.RegisterOptions("enchanting", {
     title = L("Наложение чар", "Enchanting"),
-    description = L("Кнопка распыления в сумке и переналожение чар на один предмет. Диагностика: /fuienchant.",
-        "A disenchant button in the bags and repeating an enchant on one item. Diagnostics: /fuienchant."),
+    description = L("Кнопки распыления и просеивания в сумке и переналожение чар на один предмет. Диагностика: /fuienchant.",
+        "Disenchant and prospecting buttons in the bags and repeating an enchant on one item. Diagnostics: /fuienchant."),
     icon = "Interface\\Icons\\Trade_Engraving",
     group = "items", order = 35,
     enable = "enchantEnabled",
@@ -30,6 +30,9 @@ ui.RegisterOptions("enchanting", {
             { "toggle", "enchantDisenchantButton", L("Кнопка распыления в сумке", "Disenchant button in bags"), default = true,
                 tooltip = L("Слева от крестика сумки; без профессии «Наложение чар» кнопки нет. Клик — курсор распыления, затем кликните по предмету. Пока курсор активен, предметы, которые нельзя распылить, затемнены (и при распылении из книги заклинаний).",
                     "Left of the bag close cross; without Enchanting there is no button. Click for the disenchant cursor, then click an item. While the cursor is up, items that cannot be disenchanted are dimmed (also with Disenchant from the spellbook).") },
+            { "toggle", "enchantProspectButton", L("Кнопка просеивания в сумке", "Prospecting button in bags"), default = true,
+                tooltip = L("Слева от кнопки распыления (или от крестика, если её нет); без профессии «Ювелирное дело» кнопки нет. Клик — курсор просеивания, затем кликните по руде. Пока курсор активен, всё, что нельзя просеять (не руда или меньше 5 штук), затемнено.",
+                    "Left of the disenchant button (or of the cross without it); without Jewelcrafting there is no button. Click for the prospecting cursor, then click an ore. While the cursor is up, everything that cannot be prospected (not an ore, or fewer than 5) is dimmed.") },
         } },
         { title = L("Переналожение", "Re-enchanting"), options = {
             { "toggle", "enchantReenchant", L("Кнопка «Повторить» в окне профессии", "\"Repeat\" button in the profession window"),

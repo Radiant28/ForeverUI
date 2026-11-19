@@ -40,6 +40,9 @@ local function newFrame(kind, name, parent)
     function f:SetSize(w, h) self.w, self.h = w, h end
     function f:GetWidth() return self.w end
     function f:GetHeight() return self.h end
+    function f:SetPoint(...) self.point = { ... } end
+    function f:GetPoint() if self.point then return unpack(self.point) end end
+    function f:ClearAllPoints() self.point = nil end
     function f:GetLeft() return 100 end
     function f:GetBottom() return 50 end
     function f:GetEffectiveScale() return 1 end
@@ -80,7 +83,7 @@ end
 
 -- Spells, items, bags.
 local known = { [13262] = true }
-local spells = { [13262] = "Disenchant", [7411] = "Enchanting" }
+local spells = { [13262] = "Disenchant", [7411] = "Enchanting", [31252] = "Prospecting", [25229] = "Jewelcrafting" }
 function GetSpellInfo(id)
     if type(id) == "string" then
         for sid, n in pairs(spells) do if n == id and known[sid] then return n end end
@@ -111,7 +114,8 @@ end
 local bags = { [0] = {}, {}, {}, {}, {} }
 local sizes = { [0] = 16, 0, 0, 0, 0 }
 function GetContainerItemLink(b, s) return bags[b] and bags[b][s] end
-function GetContainerItemInfo(b, s) if bags[b][s] then return "tex", 1, false, 2 end end
+local counts = {}
+function GetContainerItemInfo(b, s) if bags[b][s] then return "tex", counts[b .. ":" .. s] or 1, false, 2 end end
 function GetContainerItemQuestInfo() return false end
 function GetContainerNumSlots(b) return sizes[b] or 0 end
 function GetContainerNumFreeSlots(b)
@@ -318,6 +322,63 @@ fire("SPELLS_CHANGED")
 tick(0.05)
 assert(ctrl.shown and secure.shown and secure.attrs.type == "spell", "back with the profession")
 
+-- Prospecting: a second button left of Disenchant, same size; Disenchant stays next to the cross.
+local prButton, prSecure = _G.ForeverStockUIProspectButton, _G.ForeverStockUIProspectSecure
+local pr = E.prospect
+assert(prButton and not prButton.shown and not prSecure.shown, "no Jewelcrafting, no prospect button")
+known[31252] = true
+fire("SPELLS_CHANGED")
+tick(0.05)
+assert(prButton.shown and prSecure.shown and prSecure.attrs.type == "spell" and prSecure.attrs.spell == "Prospecting",
+    "a plain Prospecting cast")
+assert(prButton:GetWidth() == deButton:GetWidth() and prButton:GetHeight() == deButton:GetHeight(), "same size")
+assert(prSecure.w == 20 and prSecure.h == 20, "its secure cover takes the size too")
+local dePoint = { deButton:GetPoint() }
+local prPoint = { prButton:GetPoint() }
+assert(dePoint[2] == ctrl and dePoint[4] == 0 and prPoint[2] == ctrl and prPoint[4] < -20, "right to left from the cross")
+assert(ctrl:GetWidth() > 40, "the control holds both")
+assert(prButton.level > close.level, "drawn above the window frame too")
+-- Ores (5 or more) stay bright, everything else is dimmed.
+bags[0][7], bags[0][8] = link(2770), link(36909)
+counts["0:7"], counts["0:8"] = 20, 4
+assert(E.CanProspect(0, 7) and not E.CanProspect(0, 8) and not E.CanProspect(0, 1), "ore x20, ore x4, sword")
+prSecure.scripts.PreClick(prSecure, "LeftButton")
+targeting = true
+tick(0.05)
+assert(pr.dimmed and not de.dimmed, "the prospect cursor dims for prospecting")
+assert(overlay(7).dim.alpha == 0 and overlay(8).dim.alpha > 0 and overlay(1).dim.alpha > 0, "only ores x5 stay bright")
+targeting = false
+tick(0.6)
+assert(not pr.dimmed and pr.armed == nil and not overlay(7).shown, "undimmed after the cast")
+targeting, currentSpell = true, "Prospecting"
+tick(0.05)
+assert(pr.dimmed, "spellbook Prospecting dims")
+targeting, currentSpell = false, nil
+tick(0.05)
+-- Combat hides both covers.
+fire("PLAYER_REGEN_DISABLED")
+assert(not prSecure.shown and not secure.shown, "both hidden for combat")
+fire("PLAYER_REGEN_ENABLED")
+tick(0.05)
+assert(prSecure.shown and secure.shown)
+-- Without Enchanting the prospect button moves up to the cross.
+known[13262] = nil
+fire("SPELLS_CHANGED")
+tick(0.05)
+prPoint = { prButton:GetPoint() }
+assert(ctrl.shown and prButton.shown and not deButton.shown and not secure.shown and prPoint[4] == 0, "next to the cross")
+known[13262] = true
+-- The option turns it off.
+ui.settings.enchantProspectButton = false
+E.Apply()
+tick(0.05)
+assert(not prButton.shown and not prSecure.shown and deButton.shown, "option off")
+ui.settings.enchantProspectButton = nil
+known[31252] = nil
+fire("SPELLS_CHANGED")
+tick(0.05)
+bags[0][7], bags[0][8] = nil, nil
+
 -- Re-enchant: the repeat row and the one-time target pick.
 fire("ADDON_LOADED", "Blizzard_TradeSkillUI")
 local reButton = _G.ForeverStockUIReenchantButton
@@ -453,4 +514,4 @@ assert(not _G.ForeverStockUIReenchant.shown)
 
 assert(addonReplaced == 0 and addonTouchedPopup == 0, "the addon never calls ReplaceEnchant or StaticPopup_Hide")
 
-print("Enchanting OK: session key (Blizzard Yes, Next, sink, released, combat), forbidden-action fallback, item keys, eligibility, disenchant button (plain cast, dimming, spellbook cast, bag changes, combat, bag close, no spell), re-enchant (pick, replace only in session, auto chain, step mode, recipe change, target check, reagents)")
+print("Enchanting OK: session key (Blizzard Yes, Next, sink, released, combat), forbidden-action fallback, item keys, eligibility, disenchant button (plain cast, dimming, spellbook cast, bag changes, combat, bag close, no spell), prospect button (place, size, ores x5, spellbook, combat, alone, option), re-enchant (pick, replace only in session, auto chain, step mode, recipe change, target check, reagents)")
