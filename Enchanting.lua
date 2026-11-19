@@ -234,22 +234,84 @@ local function syncSecure()
     if not secure:IsShown() then secure:Show() end
 end
 
+-- The close cross of the bag window: the button sits just left of it, in its size (the header row has room
+-- there: the title keeps 44 px from the edge).
+local function closeButton(host)
+    local close = ui.Bags and ui.Bags.CloseButton and ui.Bags.CloseButton()
+    if close then return close, false end
+    close = host and _G[(host:GetName() or "") .. "CloseButton"]
+    return close, true
+end
+
+-- The WoW Forever window skin draws its frame over every inner frame of the bag and lifts only the cross above
+-- it (WindowSkin.lua, lift(close)); the button goes to the cross's level, or the frame hides it (only the
+-- secure button over it answered: its tooltip showed, the icon did not). Checked again every tick, since the
+-- skin may lift the cross after the button was placed.
+-- The button takes the cross's size. The window skin resizes the cross (WindowSkin.lua, skinClose) after the
+-- bag opened or when its scale option changes, so the size is checked again whenever the cross changes and on
+-- every tick; reading it only on OnShow left the button at the old cross's size ("the button sometimes grows").
+local function fitSize(close, stock)
+    local height = close and close:GetHeight() or 0
+    if height < 8 then height = 18 end
+    -- 0.85 of the ForeverUI bag's cross: a little smaller than the cross itself.
+    local size = math.floor(height * (stock and 0.6 or 0.85) + 0.5)
+    if math.abs((ctrl:GetHeight() or 0) - size) > 0.01 or math.abs((deButton:GetHeight() or 0) - size) > 0.01
+        or math.abs((deButton:GetWidth() or 0) - size) > 0.01 then
+        ctrl:SetSize(size, size)
+        deButton:SetSize(size, size)
+    end
+end
+
+local sizeHooked = {}
+local function watchClose(close, stock)
+    if not close or sizeHooked[close] or not close.HookScript then return end
+    sizeHooked[close] = true
+    close:HookScript("OnSizeChanged", function(self)
+        if ctrl and ctrl:IsShown() and closeButton(ctrl:GetParent()) == self then
+            fitSize(self, stock)
+            syncSecure()
+        end
+    end)
+end
+
+function E.Raise()
+    if not (ctrl and deButton and ctrl:IsShown()) then return end
+    local close, stock = closeButton(ctrl:GetParent())
+    if not close then return end
+    fitSize(close, stock)
+    local level = close:GetFrameLevel() or 0
+    if ctrl:GetFrameStrata() ~= close:GetFrameStrata() then
+        ctrl:SetFrameStrata(close:GetFrameStrata())
+        deButton:SetFrameStrata(close:GetFrameStrata())
+    end
+    if (ctrl:GetFrameLevel() or 0) < level then ctrl:SetFrameLevel(level) end
+    if (deButton:GetFrameLevel() or 0) <= level then deButton:SetFrameLevel(level + 1) end
+end
+
 local function placeControl()
     if not ctrl then return end
-    local host, footer = bagHost()
-    if not host or not enabled("enchantDisenchantButton") then
+    local host = bagHost()
+    -- No Enchanting: no button at all (it comes back with SPELLS_CHANGED once the profession is learned).
+    if not host or not enabled("enchantDisenchantButton") or not knowsSpell(DISENCHANT_ID) then
         ctrl:Hide()
+        updateControl()
         syncSecure()
         return
     end
-    ctrl:SetParent(footer or host)
+    local close, stock = closeButton(host)
+    -- The stock cross is a 32 px texture with a smaller glyph in it.
+    fitSize(close, stock)
+    watchClose(close, stock)
+    ctrl:SetParent(host)
     ctrl:ClearAllPoints()
-    if footer then
-        ctrl:SetPoint("LEFT", footer, "LEFT", 3, 0)
+    if close then
+        -- A gap from the cross, so a click meant for the button does not close the bag.
+        ctrl:SetPoint("RIGHT", close, "LEFT", stock and -2 or -9, stock and 0 or -2)
+        E.Raise()
     else
-        ctrl:SetPoint("TOPLEFT", host, "BOTTOMLEFT", 12, 2)
+        ctrl:SetPoint("TOPRIGHT", host, "TOPRIGHT", -30, -6)
+        ctrl:SetFrameLevel(host:GetFrameLevel() + 3)
     end
-    ctrl:SetFrameLevel((footer or host):GetFrameLevel() + 3)
     ctrl:Show()
     updateControl()
     syncSecure()
@@ -298,7 +360,9 @@ local function createControl()
     deButton:SetPoint("LEFT", ctrl, "LEFT", 0, 0)
     deButton:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
     deIcon = deButton:CreateTexture(nil, "ARTWORK")
-    deIcon:SetAllPoints(deButton)
+    -- A little inside the button, so it weighs like the cross next to it.
+    deIcon:SetPoint("TOPLEFT", deButton, "TOPLEFT", 2, -2)
+    deIcon:SetPoint("BOTTOMRIGHT", deButton, "BOTTOMRIGHT", -2, 2)
     deIcon:SetTexture(select(3, GetSpellInfo(DISENCHANT_ID)) or "Interface\\Icons\\INV_Enchant_Disenchant")
     deIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     -- Reached only while the secure button is not over it (combat).
@@ -323,6 +387,7 @@ local function createControl()
 end
 
 local function disenchantTick(now)
+    E.Raise()
     syncSecure()
     -- The cast from the button may take a moment to bring the cursor up; after that "armed" ends with it.
     if de.armed and not SpellIsTargeting() and now - (de.armedAt or 0) > 0.5 then de.armed = nil end
@@ -919,7 +984,8 @@ events:SetScript("OnEvent", function(self, event, a, b)
             .. " - switched to key press per step")
         return
     elseif event == "SPELLS_CHANGED" then
-        updateControl()
+        -- Enchanting learned or dropped: the button appears or goes away.
+        placeControl()
         return
     elseif event == "BAG_UPDATE" or event == "ITEM_LOCK_CHANGED" or event == "UNIT_INVENTORY_CHANGED" then
         if de.dimmed then de.dirty = true end

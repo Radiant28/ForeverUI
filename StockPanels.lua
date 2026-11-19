@@ -46,6 +46,7 @@ local events = CreateFrame("Frame")
 local tinted = { MainMenuBarLeftEndCap, MainMenuBarRightEndCap }
 local slotEdges, progressBorders = {}, {}
 local layoutWings -- winged slot backdrops of ActionButton1..12, defined at the end of the file
+local applyBonusArt -- the bonus bar's own strip (shadowform, stances, forms), defined at the end of the file
 
 -- The stock strip between the caps (MainMenuBarTexture0..3: slot recesses, page buttons, micro menu and bag
 -- frames) keeps the plain Blizzard look: its texture, its coordinates, no tint. Coordinates are those of the
@@ -510,6 +511,7 @@ local function applyArt()
         local maxLevel = _G["MainMenuMaxLevelBar" .. i]
         if maxLevel then maxLevel:SetAlpha(retail and 0 or 1) end
     end
+    applyBonusArt(stockArt, settings.barStockTint == true)
     local edges = settings.barSlotEdges ~= false and 1 or 0
     for edge in pairs(slotEdges) do edge:SetAlpha(edges) end
     layoutWings()
@@ -594,7 +596,7 @@ end
 local SLOT_WING = art .. "Forever\\ActionBar-SlotWing"
 local WING_COORDS = { 8 / 128, 122 / 128, 6 / 128, 120 / 128 }
 local WING_OUTSET = 2
-local wings = {}
+local wings, bonusWings = {}, {}
 
 -- Pure: how far (button units) the backdrop may reach past `rect` on each side. Rects are { l, r, b, t } in one
 -- space (screen px); `fences` are rects it must not cover; `bar` is the main bar rect it must stay inside when the
@@ -645,35 +647,66 @@ layoutWings = function()
     end
     local bar = screenRect(MainMenuBar)
     for index = 1, 12 do
-        local button, wing = _G["ActionButton" .. index], wings[index]
-        if button and wing then
-            local rect = screenRect(button)
-            -- Unknown geometry (before the first layout): stay exactly on the button.
-            local left, right, bottom, top = 0, 0, 0, 0
-            if rect then
-                left, right, bottom, top = wingOutsets(rect, fences, bar, WING_OUTSET, button:GetEffectiveScale())
+        local main = _G["ActionButton" .. index]
+        -- The outsets are measured on the main button: its bonus twin (Edit Mode moves both the same way) slides
+        -- in from below when the bonus bar shows, so its own rect is not its resting place.
+        local rect = screenRect(main)
+        for _, set in ipairs({ { "ActionButton", wings }, { "BonusActionButton", bonusWings } }) do
+            local button, wing = _G[set[1] .. index], set[2][index]
+            if button and wing then
+                -- Unknown geometry (before the first layout): stay exactly on the button.
+                local left, right, bottom, top = 0, 0, 0, 0
+                if rect then
+                    left, right, bottom, top = wingOutsets(rect, fences, bar, WING_OUTSET, button:GetEffectiveScale())
+                end
+                wing:ClearAllPoints()
+                wing:SetPoint("TOPLEFT", button, "TOPLEFT", -left, top)
+                wing:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", right, -bottom)
+                if enabled and index <= count then wing:Show() else wing:Hide() end
             end
-            wing:ClearAllPoints()
-            wing:SetPoint("TOPLEFT", button, "TOPLEFT", -left, top)
-            wing:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", right, -bottom)
-            if enabled and index <= count then wing:Show() else wing:Hide() end
         end
     end
 end
 
-for index = 1, 12 do
-    local button = _G["ActionButton" .. index]
-    local parent = button and button:GetParent()
-    if parent then
-        local wing = parent:CreateTexture(nil, "BACKGROUND", nil, 1)
-        wing:SetTexture(SLOT_WING)
-        wing:SetTexCoord(unpack(WING_COORDS, 1, 4))
-        wing:SetAllPoints(button)
-        wings[index] = wing
+-- The bonus bar (shadowform, stealth, stances, forms: BonusActionBarFrame, a toplevel child of MainMenuBar drawn
+-- above the bar art) covers the main buttons with BonusActionButton1..12 and its own copy of the stock strip
+-- (BonusActionBarTexture0/1). Its buttons get the same backdrops, on the bonus frame, above its strip.
+local wingSet = {}
+for _, set in ipairs({ { "ActionButton", wings }, { "BonusActionButton", bonusWings } }) do
+    for index = 1, 12 do
+        local button = _G[set[1] .. index]
+        local parent = button and button:GetParent()
+        if parent then
+            local wing = parent:CreateTexture(nil, "BACKGROUND", nil, 1)
+            wing:SetTexture(SLOT_WING)
+            wing:SetTexCoord(unpack(WING_COORDS, 1, 4))
+            wing:SetAllPoints(button)
+            set[2][index] = wing
+            wingSet[wing] = true
+        end
+    end
+end
+
+-- The bonus strip follows the main strip: shown in Classic, hidden in Retail, white or tinted (`barStockTint`).
+-- Its texture and coordinates stay the client's. Every texture region of the frame counts, but our backdrops.
+applyBonusArt = function(alpha, tint)
+    local frame = BonusActionBarFrame
+    if not frame or not frame.GetRegions then return end
+    for _, region in ipairs({ frame:GetRegions() }) do
+        if region:GetObjectType() == "Texture" and not wingSet[region] then
+            if tint then
+                local r, g, b = artColor()
+                region:SetVertexColor(r, g, b, 1)
+            else
+                region:SetVertexColor(1, 1, 1, 1)
+            end
+            region:SetAlpha(alpha)
+        end
     end
 end
 ui.ActionBars.WingOutsets = wingOutsets
 ui.ActionBars.wings = wings
+ui.ActionBars.bonusWings = bonusWings
 ui.ActionBars.LayoutWings = layoutWings
 -- The XP and reputation bars come and go (level cap, watched faction); keep the backdrops off them.
 if ReputationWatchBar_Update then hooksecurefunc("ReputationWatchBar_Update", layoutWings) end

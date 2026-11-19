@@ -242,6 +242,24 @@ tick(0.05)
 assert(secure.shown and secure.attrs.type == "spell" and secure.attrs.spell == "Disenchant"
     and secure.attrs["target-bag"] == nil, "a plain Disenchant cast, no target")
 assert(not _G.ForeverStockUIDisenchantCancel and deButton.scripts.OnClick, "no list mode left")
+-- Place: just left of the bag's close cross, in its size; the secure button takes the same size.
+local close = newFrame("Button", "ForeverStockInventoryCloseButton", window)
+close:SetSize(23, 23)
+close.level = 7
+ui.Bags.CloseButton = function() return close end
+local ctrl = _G.ForeverStockUIDisenchantControl
+local anchored
+ctrl.SetPoint = function(_, point, relative, relativePoint, x, y) anchored = { point, relative, relativePoint, x, y } end
+E.Apply()
+tick(0.05)
+assert(anchored and anchored[1] == "RIGHT" and anchored[2] == close and anchored[3] == "LEFT", "left of the close cross")
+assert(deButton:GetWidth() == 20 and deButton:GetHeight() == 20 and ctrl.parent == window, "85% of the cross")
+assert(secure.w == 20 and secure.h == 20, "the secure button covers all of it")
+assert(anchored[4] <= -8, "a gap from the cross against misclicks")
+assert(deButton.level > close.level and ctrl.level >= close.level, "drawn above the window frame, like the cross")
+close.level = 12   -- the window skin lifts the cross later
+tick(0.05)
+assert(deButton.level > 12, "follows the cross when the skin lifts it")
 -- Click: the cursor waits for an item; items that cannot be disenchanted are dimmed, the layer takes no clicks.
 secure.scripts.PreClick(secure, "LeftButton")
 targeting = true
@@ -290,15 +308,15 @@ assert(not secure.shown, "bag closed")
 window:Show()
 tick(0.05)
 assert(secure.shown)
--- No disenchant spell: the button is disabled and casts nothing.
+-- No Enchanting: no button at all, and nothing to cast; it comes back with the profession.
 known[13262] = nil
 fire("SPELLS_CHANGED")
 tick(0.05)
-assert(deButton.enabled == false and not secure.shown and secure.attrs.type == nil, "no spell, no cast")
+assert(not ctrl.shown and not secure.shown and secure.attrs.type == nil, "no profession, no button")
 known[13262] = true
 fire("SPELLS_CHANGED")
 tick(0.05)
-assert(secure.shown and secure.attrs.type == "spell")
+assert(ctrl.shown and secure.shown and secure.attrs.type == "spell", "back with the profession")
 
 -- Re-enchant: the repeat row and the one-time target pick.
 fire("ADDON_LOADED", "Blizzard_TradeSkillUI")

@@ -217,6 +217,7 @@ ui.EditMode = {
         return true
     end,
     Reapply = record("reapply"),
+    Reset = function(name) entry(name).config.position = nil; return true end,
     SetBarStyle = function(style) ui.Settings().barLayout = style; calls.barStyle = style; return true end,
     IsOpen = function() return false end,
     Close = function() end,
@@ -306,8 +307,7 @@ assert(cvars.uiScale == "0.711" and cvars.useUiScale == "1" and UIParent.scale =
 wizard.Next()
 -- Layout: the healer preset is on screen as soon as the page opens.
 local layout = ui.Settings().editLayout
-local px, py = ui.ComputeEditPosition("RIGHT", "CENTER", -200, -20, 232, 100, 1365, 768)
-assert(layout.PlayerFrame.position[1] == px and layout.PlayerFrame.position[2] == py, "player on the healer spot")
+assert(layout.PlayerFrame.position == nil and layout.TargetFrame.position == nil, "healer: unit frames on the stock place")
 assert(ui.Settings().prdX == 0 and ui.Settings().prdY == -42, "resource panel")
 assert(layout.ForeverStockUIRaidAnchor.width == 300, "raid width kept for the left pin")
 local cdm1, cdm2 = layout.ForeverStockUICDM1.position, layout.ForeverStockUICDM2.position
@@ -317,7 +317,7 @@ assert(calls.prdPosition and calls.raidRestore and calls.cdmRefresh, "modules fo
 find(page("layout"), "Оставить мои позиции"):Click()
 assert(layout.PlayerFrame.position == nil and ui.Settings().prdY == nil, "my positions back")
 find(page("layout"), "Раскладка: Лекарь"):Click()
-assert(layout.PlayerFrame.position, "role layout again")
+assert(layout.CastingBarFrame.position and layout.PlayerFrame.position == nil, "role layout again")
 wizard.Next()
 assert(suiteParts.clicks.enabled == true, "click-cast on for a healer")
 local bags = find(page("modules"), "Единая сумка *")
@@ -355,7 +355,7 @@ wizard.Next()
 assert(reloaded and not Setup.IsOpen(), "done: closed and reloaded")
 local rec = Setup.Char(false)
 assert(rec.installed and rec.specs[1].role == "HEALER" and rec.specs[1].scaleMode == "auto", "saved for the character")
-assert(rec.specs[1].style == "retail" and rec.specs[1].layout.PlayerFrame.position, "style and layout saved")
+assert(rec.specs[1].style == "retail" and rec.specs[1].layout.CastingBarFrame.position, "style and layout saved")
 assert(rec.specs[1].modules.cursor == false, "cursor outline saved for the set")
 assert(chat.saved == ChatFrame1 and ChatFrame1.points[1][5] == Layouts.presets.HEALER.chat.retailY, "chat placed for Retail")
 assert(chat.opened == "Каналы" and #chat.added == 3 and #chat.removed == 3, "server channels moved to their tab")
@@ -458,6 +458,15 @@ combat = false
 fire("PLAYER_REGEN_ENABLED")
 assert(Setup.IsOpen(), "opens after combat")
 Setup.Cancel()
+
+-- Healer layout: the unit frames go back to their stock place; the other roles place them.
+Setup.ApplyPreset("TANK")
+assert(type(liveLayout().PlayerFrame.position) == "table", "tank: player frame placed")
+Setup.ApplyPreset("HEALER")
+for _, name in ipairs({ "PlayerFrame", "TargetFrame", "FocusFrame" }) do
+    assert(liveLayout()[name].position == nil, "healer: " .. name .. " on its stock place")
+end
+assert(type(liveLayout().CastingBarFrame.position) == "table", "healer: the cast bar is still placed")
 
 -- Slash command wiring lives in Core/OptionsFrame.lua; the General page buttons call Setup.Open.
 assert(type(Setup.Open) == "function" and type(Setup.CopyFrom) == "function")

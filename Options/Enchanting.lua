@@ -28,8 +28,8 @@ ui.RegisterOptions("enchanting", {
         } },
         { title = L("Распыление", "Disenchanting"), options = {
             { "toggle", "enchantDisenchantButton", L("Кнопка распыления в сумке", "Disenchant button in bags"), default = true,
-                tooltip = L("Клик — курсор распыления, затем кликните по предмету. Пока курсор активен, предметы, которые нельзя распылить, затемнены (и при распылении из книги заклинаний).",
-                    "Click for the disenchant cursor, then click an item. While the cursor is up, items that cannot be disenchanted are dimmed (also with Disenchant from the spellbook).") },
+                tooltip = L("Слева от крестика сумки; без профессии «Наложение чар» кнопки нет. Клик — курсор распыления, затем кликните по предмету. Пока курсор активен, предметы, которые нельзя распылить, затемнены (и при распылении из книги заклинаний).",
+                    "Left of the bag close cross; without Enchanting there is no button. Click for the disenchant cursor, then click an item. While the cursor is up, items that cannot be disenchanted are dimmed (also with Disenchant from the spellbook).") },
         } },
         { title = L("Переналожение", "Re-enchanting"), options = {
             { "toggle", "enchantReenchant", L("Кнопка «Повторить» в окне профессии", "\"Repeat\" button in the profession window"),

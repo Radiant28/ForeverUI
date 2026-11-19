@@ -251,7 +251,9 @@ function Setup.RefreshPlaced()
     if PRD and PRD.ApplyPosition then ui.SafeCall(PRD.ApplyPosition) end
     local RF = ui.RaidFrames
     if RF then
-        if RF.RestoreAnchor then ui.SafeCall(RF.RestoreAnchor) end
+        -- The saved middle of the group belongs to the old spot: taken again from the loaded one (talent switch).
+        if RF.ReapplyPosition then ui.SafeCall(RF.ReapplyPosition)
+        elseif RF.RestoreAnchor then ui.SafeCall(RF.RestoreAnchor) end
         if RF.AttachContainer then ui.SafeCall(RF.AttachContainer) end
     end
     local CDM = ui.CooldownManager
@@ -360,7 +362,13 @@ function Setup.ApplyPreset(role)
     local preset = Layouts.presets[role]
     local EM = ui.EditMode
     if not preset or not (EM and EM.Place) or InCombatLockdown() then return false end
-    for name, spot in pairs(preset.frames) do EM.Place(name, spot[1], spot[2], spot[3], spot[4]) end
+    for name, spot in pairs(preset.frames) do
+        if spot == Layouts.STOCK then
+            if EM.Reset then EM.Reset(name) end
+        else
+            EM.Place(name, spot[1], spot[2], spot[3], spot[4])
+        end
+    end
     local s = settings()
     s.prdX, s.prdY = preset.prd.x, preset.prd.y
     placeRaid(preset.raid)

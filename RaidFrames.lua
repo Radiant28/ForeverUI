@@ -1765,6 +1765,35 @@ function RF.RestoreAnchor()
     anchor:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", position[1] / ratio, position[2] / ratio)  -- hook attaches
 end
 
+-- Another saved spot was loaded in place (talent set switch, setup wizard, profile): the remembered middle
+-- (pinX) belongs to the old spot, so it is taken again from the loaded one, and the anchor and the client
+-- container go there now and once more after the client has laid its frames out again.
+local reapplyTimer = CreateFrame("Frame")
+function RF.ReapplyPosition(delayed)
+    local entry = editEntry()
+    local config = entry and entry.config
+    if config then config.pinX, config.lastX, config.pinMode = nil, nil, nil end
+    local function run()
+        if InCombatLockdown() then
+            ui.RunOutOfCombat("rfReapply", run)
+            return
+        end
+        RF.RestoreAnchor()
+        RF.AttachContainer()
+        RF.SyncAnchor()
+    end
+    run()
+    if delayed == false then return end
+    local waited, marks = 0, { 0.3, 1.5 }
+    reapplyTimer:SetScript("OnUpdate", function(self, elapsed)
+        waited = waited + elapsed
+        if waited < marks[1] then return end
+        table.remove(marks, 1)
+        if #marks == 0 then self:SetScript("OnUpdate", nil) end
+        run()
+    end)
+end
+
 -- Puts the anchor over the shown buttons (when the user never moved it) and sizes it like them.
 -- Everything is measured before the anchor moves: the container may hang on the anchor, and clearing
 -- the anchor's points leaves the container (and its buttons) without a position until the next layout.
@@ -1820,7 +1849,8 @@ end
 local handle = CreateFrame("Button", "ForeverStockUIRaidHandle", UIParent)
 handle:SetWidth(84)
 handle:SetHeight(16)
-handle:SetFrameStrata("HIGH")
+-- The strata of the group buttons (placeHandle), not HIGH: windows over the group cover the handle too.
+handle:SetFrameStrata("LOW")
 handle:SetClampedToScreen(true)
 handle:EnableMouse(true)
 handle:Hide()
@@ -1923,7 +1953,36 @@ local function placeHandle()
     if not left then return false end
     handle:ClearAllPoints()
     handle:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left, top + 2)
+    -- Same strata as the buttons, just above them: a window that covers the group covers the handle as well.
+    local strata, level
+    for _, deco in ipairs(ordered) do
+        local frame = deco.frame
+        if frame:IsVisible() and frame.GetFrameStrata then
+            strata = strata or frame:GetFrameStrata()
+            level = max(level or 0, frame:GetFrameLevel() or 0)
+        end
+    end
+    if strata and handle:GetFrameStrata() ~= strata then handle:SetFrameStrata(strata) end
+    if level and handle:GetFrameLevel() ~= level + 5 then handle:SetFrameLevel(level + 5) end
     return true
+end
+
+-- Is the frame under the cursor the group itself (a button, its containers, the handle) or the bare world?
+-- Anything else (a window, a menu over the group) means the cursor is not on the group.
+local groupRoots = {}
+function RF.FocusOnGroup(focus)
+    if focus == nil or focus == WorldFrame or focus == UIParent then return true end
+    local raid, party = containers()
+    groupRoots[handle], groupRoots[anchor] = true, true
+    if raid then groupRoots[raid] = true end
+    if party then groupRoots[party] = true end
+    local frame, depth = focus, 0
+    while frame and frame ~= UIParent and depth < 20 do
+        if groupRoots[frame] or decos[frame] then return true end
+        frame = frame.GetParent and frame:GetParent()
+        depth = depth + 1
+    end
+    return false
 end
 
 -- Hover poll (4 times a second): shows the handle over the group, hides it shortly after the cursor leaves.
@@ -1935,6 +1994,13 @@ function RF.UpdateHandle(now)
         return
     end
     local cx, cy = cursor()
+    local focus = GetMouseFocus and GetMouseFocus()
+    if not RF.FocusOnGroup(focus) then
+        -- A window or menu is over the group: the handle must not catch its clicks.
+        if handle:IsShown() then handle:Hide() end
+        lastOver = 0
+        return
+    end
     if RF.CursorOverGroup(cx, cy) or MouseIsOver(handle) then lastOver = now end
     if now - lastOver < 0.6 then
         if placeHandle() and not handle:IsShown() then handle:Show() end
@@ -2995,6 +3061,27 @@ SlashCmdList.FOREVERUIRAID = function(input)
         return
     end
     RF.Scan()
+    if (input or ""):lower():match("pos") then
+        -- Where the group should stand (saved spot of this talent set) and where it really is. ASCII only.
+        local config = editEntry() and editEntry().config or {}
+        local position = type(config.position) == "table" and config.position or {}
+        ui.Print(("Talent set %s, move=%s, saved x=%s y=%s width=%s pinX=%s lastX=%s"):format(
+            tostring(GetActiveTalentGroup and GetActiveTalentGroup()), tostring(cfg().rfMoveContainer),
+            tostring(position[1]), tostring(position[2]), tostring(config.width), tostring(config.pinX),
+            tostring(config.lastX)))
+        local function where(frame)
+            if not frame then return "-" end
+            local point, relative, relativePoint, x, y = frame:GetPoint(1)
+            return ("%s %s %s %.1f %.1f (%d points) left=%s top=%s"):format(tostring(point),
+                relative and (relative:GetName() or "?") or "-", tostring(relativePoint), x or 0, y or 0,
+                frame:GetNumPoints(), tostring(frame:GetLeft()), tostring(frame:GetTop()))
+        end
+        ui.Print("Anchor: " .. where(anchor))
+        local raid, party = containers()
+        ui.Print("CompactRaidFrameContainer: " .. where(raid))
+        ui.Print("CompactPartyFrame: " .. where(party))
+        return
+    end
     if (input or ""):lower():match("aura") then
         -- What each frame believes: its unit, whose GUID that is, and which auras it draws.
         for _, deco in ipairs(ordered) do

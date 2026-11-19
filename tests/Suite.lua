@@ -317,6 +317,67 @@ assert(printed.sound == "RaidWarning", "stack alert sound")
 printed.sound = nil
 tick(0.2)
 assert(printed.sound == nil, "the alert sound plays once")
+-- ready sound: the group's sound, the entry's own wins, "none" mutes, hidden icons still sound, GCD is not a cooldown
+do
+    local penance = group.items[1]
+    local function step(cd)
+        cooldowns.Penance = cd
+        CDM.Evaluate(group, penance, r, now)
+        CDM.Alerts(group, penance, r, now)
+    end
+    local onCooldown, ready, gcd = { now - 2, 10, 1 }, { 0, 0, 1 }, { now - 0.5, 1.5, 1 }
+    group.soundReady, penance.soundReady = "ReadyCheck", ""
+    step(onCooldown)
+    printed.sound = nil
+    step(ready)
+    assert(printed.sound == "ReadyCheck", "group sound when the cooldown ends")
+    printed.sound = nil
+    step(ready)
+    assert(printed.sound == nil, "once per cooldown")
+    penance.soundReady = "RaidWarning"
+    step(onCooldown) step(ready)
+    assert(printed.sound == "RaidWarning", "the entry's own sound wins")
+    penance.soundReady = "none"
+    printed.sound = nil
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "muted entry")
+    penance.soundReady = ""
+    group.cdShow = "ready"
+    step(onCooldown)
+    assert(not r.show, "hidden while on cooldown")
+    step(ready)
+    assert(printed.sound == "ReadyCheck", "sound when an only-ready icon appears")
+    group.cdShow, group.showGCD = "always", true
+    step(ready)
+    printed.sound = nil
+    step(gcd) step(ready)
+    assert(printed.sound == nil, "no sound after a global cooldown")
+    group.soundCombatOnly = true
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "combat only: silent out of combat")
+    group.soundReady, group.soundCombatOnly, group.showGCD = "", false, false
+    -- one sound for every skill: the group and the entry take it unless they set their own
+    local cdmDb = Suite.Part("cdm")
+    cdmDb.soundReady = "MapPing"
+    step(onCooldown) step(ready)
+    assert(printed.sound == "MapPing", "common sound for every skill")
+    group.soundReady = "none"
+    printed.sound = nil
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "a muted group ignores the common sound")
+    penance.soundReady = "LEVELUP"
+    step(onCooldown) step(ready)
+    assert(printed.sound == "LEVELUP", "the entry still wins inside a muted group")
+    cdmDb.soundCombatOnly = true
+    printed.sound = nil
+    step(onCooldown) step(ready)
+    assert(printed.sound == nil, "combat only for every skill")
+    cdmDb.soundCombatOnly = false
+    assert(CDM.ClearOwnSounds() >= 2 and group.soundReady == "" and penance.soundReady == "", "own sounds cleared")
+    step(onCooldown) step(ready)
+    assert(printed.sound == "MapPing", "after clearing every skill uses the common sound")
+    cdmDb.soundReady = ""
+end
 -- load conditions
 group.load.when = "combat"
 assert(not CDM.LoadAllowed(group))
@@ -1037,6 +1098,30 @@ for _, module in ipairs({ "cooldowns", "raidframes", "clickcast", "profiles" }) 
     ui.OpenOptions(module)
     assert(ForeverUIOptions:IsShown(), module)
 end
+-- The Cooldown Manager page (one custom block) gets section tabs from the headers it marks.
+do
+    local cdmPage
+    local function findPage(frame)
+        for _, child in ipairs(frame.children or {}) do
+            if child.spec and child.spec.id == "cooldowns" and child.customTabs then return child end
+            local found = findPage(child)
+            if found then return found end
+        end
+    end
+    cdmPage = findPage(ForeverUIOptions)
+    assert(cdmPage and cdmPage.sectionTabs and #cdmPage.sectionTabs >= 8, "cooldown manager section tabs")
+    local titles, last = {}, -1
+    for i, tab in ipairs(cdmPage.sectionTabs) do
+        titles[tab.text:GetText()] = i
+        assert(tab.top >= last, "tabs in page order")
+        last = tab.top
+    end
+    assert(titles["Быстрый старт"] == 1 and titles["Звук для всех"] and titles["Группы"] and titles["Условия загрузки"]
+        and titles["Подсветка и звуки"] and not titles["Основное"], "cooldown manager tab titles")
+    local tab = cdmPage.sectionTabs[titles["Условия загрузки"]]
+    tab.scripts.OnClick(tab)
+    assert(cdmPage.activeTab == titles["Условия загрузки"], "a tab click selects it")
+end
 local side = RF.previews[#RF.previews]:GetParent()
 assert(#RF.previews >= 3 and side:GetParent() == ForeverUIOptions, "three previews beside the options window")
 -- the page holder drives the panel (the real client sends OnHide/OnShow to children; the mock does not)
@@ -1467,6 +1552,22 @@ do
     RF.StartHandleDrag()
     assert(not RF.IsHandleDragging(), "handle can be turned off")
     raid.rfHandle = true
+
+    -- A window over the group: the handle is not the cursor's target and must not catch the window's clicks.
+    assert(RF.FocusOnGroup(nil) and RF.FocusOnGroup(RF.handle) and RF.FocusOnGroup(anchor), "group or bare world")
+    local window = CreateFrame("Frame", "TestWindowOverGroup", UIParent)
+    local button = CreateFrame("Button", nil, window)
+    assert(not RF.FocusOnGroup(window) and not RF.FocusOnGroup(button), "a window's button is not the group")
+    assert(RF.handle:GetFrameStrata() ~= "HIGH", "the handle is not above the windows")
+
+    -- Talent set switch: the loaded spot replaces the remembered middle of the old one.
+    entry.config.position, entry.config.width, entry.config.height = { -600, -50 }, 300, 100
+    entry.config.pinX, entry.config.lastX, entry.config.pinMode = 123, -600, "center"
+    RF.ReapplyPosition(false)
+    local _, _, _, ax = anchor:GetPoint()
+    assert(entry.config.pinX ~= 123 and ax == -600, "the loaded spot is used, not the old middle")
+    entry.config.position, entry.config.width, entry.config.height = nil, nil, nil
+    entry.config.pinX, entry.config.lastX, entry.config.pinMode = nil, nil, nil
 end
 
 ---------------------------------------------------------------------------------------------------

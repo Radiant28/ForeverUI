@@ -5,9 +5,13 @@ local function start(mode) return function() if ui.BagSort then ui.BagSort.Start
 ui.RegisterOptions("bagsort", {
     title = L("Сортировка сумок", "Bag sorting"),
     description = L("Сортировка сумок и банка по кнопке: стопки объединяются, реагенты, руда, травы, самоцветы, "
-        .. "боеприпасы и осколки душ сначала ложатся в подходящие профессиональные сумки, серые предметы — в конец.",
+        .. "боеприпасы и осколки душ сначала ложатся в подходящие профессиональные сумки. Порядок: камень возвращения, "
+        .. "экипировка, ресурсы блоками (металл и камень, травы, ткань, кожа, чары, стихии, самоцветы…), рецепты и "
+        .. "символы, расходуемые, остальное, задания, серые — подряд, свободные ячейки в конце.",
         "Sorts the bags and the bank on a button: stacks merge, reagents, ore, herbs, gems, ammo and soul shards go "
-        .. "into matching profession bags first, grey items go last."),
+        .. "into matching profession bags first. Order: hearthstone, equipment, resources in blocks (metal and stone, "
+        .. "herbs, cloth, leather, enchanting, elemental, gems…), recipes and glyphs, consumables, the rest, quest "
+        .. "items, grey items, one after another with the free slots at the end."),
     icon = "Interface\\Icons\\INV_Misc_Bag_10",
     group = "items", order = 11,
     enable = "bagSortEnabled",
@@ -19,8 +23,9 @@ ui.RegisterOptions("bagsort", {
         } },
         { title = L("Порядок", "Order"), options = {
             { "toggle", "bagSortReverse", L("Заполнять с конца (свободные ячейки в начале)",
-                "Fill from the end (free slots first)"), default = false },
-            { "toggle", "bagSortJunkLast", L("Серые предметы в конец", "Grey items last"), default = true },
+                "Fill from the end (free slots first)"), default = false,
+                tooltip = L("Раскладка зеркальная: камень возвращения в последней ячейке, дальше к началу сумки.",
+                    "Mirrored layout: the hearthstone in the last slot, the rest towards the start.") },
         } },
         { title = L("Скорость", "Speed"), options = {
             { "range", "bagSortBatch", L("Перемещений за раз", "Moves at once"), min = 1, max = 5, step = 1, default = 2,

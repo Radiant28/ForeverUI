@@ -20,6 +20,15 @@ local MAX_PASSES = 40      -- plans per run (stack + sort + check normally take 
 local MAX_WASTED = 4       -- plans in a row after which nothing moved: give up
 local SETTLE = 0.6         -- unlocked slot without the expected contents: server answer still on its way
 local REFRESH_GAP = 0.3    -- bag window refresh while moving
+-- The guild bank answers slower and drops moves sent too fast: one move at a time and longer waits.
+local GUILD_LOCK_TIMEOUT, GUILD_SETTLE = 5, 2.5
+-- Nozdor also throttles guild bank moves (seen in game: a move sent right after the last one landed is dropped
+-- now and then). Pause between moves; every refusal doubles the pause and retries the move; an item is left in
+-- place only after GUILD_RETRIES refusals. A run may take more passes there.
+local GUILD_GAP, GUILD_GAP_MAX, GUILD_RETRIES, GUILD_MAX_PASSES = 0.4, 4, 3, 200
+-- Guild bank slots in the state: bag = GUILD_BASE + tab (only the tab that is open in the guild bank window).
+local GUILD_BASE = 1000
+B.GUILD_BASE = GUILD_BASE
 
 local function setting(key, fallback)
     local db = ui.Settings and ui.Settings()
@@ -52,6 +61,43 @@ for rank, names in ipairs(CLASS_ORDER) do
     for _, name in ipairs(names) do classRank[name] = rank end
 end
 local UNKNOWN_CLASS = #CLASS_ORDER + 1
+
+-- Groups in the bag, in this order, one after another without gaps.
+-- 1 equipment (and bags, quivers), 2 resources, 3 recipes and glyphs, 4 consumables and spell reagents,
+-- 5 everything else, 6 quest items, 7 grey items (always last, equipment included).
+local GROUP_CLASSES = {
+    [1] = { "Weapon", "Оружие", "Armor", "Доспехи", "Броня", "Container", "Сумки", "Контейнеры", "Контейнер",
+        "Quiver", "Амуниция", "Колчаны", "Колчан" },
+    [2] = { "Trade Goods", "Хозяйственные товары", "Ремесленные товары", "Материалы", "Gem", "Самоцветы", "Самоцвет" },
+    [3] = { "Recipe", "Рецепты", "Рецепт", "Glyph", "Символы", "Символ" },
+    [4] = { "Consumable", "Расходуемые", "Расходуемое", "Reagent", "Реагенты", "Реагент" },
+    [6] = { "Quest", "Задания", "Квестовые предметы", "Задание" },
+}
+local GROUP_OTHER, GROUP_JUNK = 5, 7
+local groupOf = {}
+for group, names in pairs(GROUP_CLASSES) do
+    for _, name in ipairs(names) do groupOf[name] = group end
+end
+local GEM_CLASS = { Gem = true, ["Самоцветы"] = true, ["Самоцвет"] = true }
+
+-- Resource blocks by trade goods subclass (enUS / ruRU); ore and bars share one subclass, so one block.
+local RESOURCE_BLOCKS = {
+    { "Metal & Stone", "Металл и камень", "Металлы и камни" },
+    { "Herb", "Трава", "Травы" },
+    { "Cloth", "Ткань", "Ткани" },
+    { "Leather", "Кожа" },
+    { "Enchanting", "Наложение чар", "Зачаровывание", "Armor Enchantment", "Weapon Enchantment",
+        "Чары для доспехов", "Чары для оружия" },
+    { "Elemental", "Стихии", "Стихийные" },
+    { "Jewelcrafting", "Ювелирное дело" }, -- and every item of the gem class
+    { "Meat", "Мясо" },
+    { "Parts", "Детали", "Devices", "Устройства", "Explosives", "Взрывчатка", "Взрывчатые вещества" },
+}
+local GEM_BLOCK, OTHER_BLOCK = 7, #RESOURCE_BLOCKS + 1
+local blockOf = {}
+for block, names in ipairs(RESOURCE_BLOCKS) do
+    for _, name in ipairs(names) do blockOf[name] = block end
+end
 
 local EQUIP_ORDER = { "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_CLOAK", "INVTYPE_CHEST",
     "INVTYPE_ROBE", "INVTYPE_BODY", "INVTYPE_TABARD", "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_WAIST",
@@ -121,6 +167,14 @@ local function itemInfo(id)
     local family = GetItemFamily and GetItemFamily(id) or 0
     local isBag = equipLoc == "INVTYPE_BAG" or equipLoc == "INVTYPE_QUIVER"
     if family and not isBag then family = family + customFamily(id, class) end
+    local group, block = class and groupOf[class] or GROUP_OTHER, 0
+    if PINNED[id] then
+        group = 1 -- the hearthstone opens the equipment row
+    elseif quality == 0 then
+        group = GROUP_JUNK
+    elseif group == 2 then
+        block = GEM_CLASS[class] and GEM_BLOCK or blockOf[subclass or ""] or OTHER_BLOCK
+    end
     r = {
         class = class,
         family = family or 0,
@@ -128,6 +182,8 @@ local function itemInfo(id)
         isBag = isBag,
         pin = PINNED[id] or 999,
         junk = quality == 0,
+        group = group,
+        block = block,
         classRank = class and classRank[class] or UNKNOWN_CLASS,
         subclass = subclass or "",
         equipRank = equipRank[equipLoc or ""] or 99,
@@ -159,6 +215,11 @@ local function bankGroups()
     return list
 end
 local CONTAINERS = { bagGroups(), bankGroups() }
+local guildOpen = false
+
+local function guildTab()
+    return GetCurrentGuildBankTab and GetCurrentGuildBankTab() or 1
+end
 
 -- Item string without the unique id and the level: equal keys are interchangeable copies.
 local function itemKey(link)
@@ -174,7 +235,18 @@ local function itemKey(link)
     return key
 end
 
+local function linkAt(bag, slot)
+    if bag > GUILD_BASE then return GetGuildBankItemLink(bag - GUILD_BASE, slot) end
+    return GetContainerItemLink(bag, slot)
+end
+
 local function readSlot(bag, slot)
+    if bag > GUILD_BASE then
+        local _, count, locked = GetGuildBankItemInfo(bag - GUILD_BASE, slot)
+        local link = GetGuildBankItemLink(bag - GUILD_BASE, slot)
+        local id = link and tonumber(link:match("item:(%-?%d+)"))
+        return id, id and (count or 1) or 0, locked, link
+    end
     local _, count, locked = GetContainerItemInfo(bag, slot)
     local link = GetContainerItemLink(bag, slot)
     local id = link and tonumber(link:match("item:(%-?%d+)"))
@@ -183,8 +255,13 @@ local function readSlot(bag, slot)
 end
 
 -- Item ID and name of the bag in container `bag` (nil for the backpack and the main bank).
+local function pickup(bag, slot)
+    if bag > GUILD_BASE then return PickupGuildBankItem(bag - GUILD_BASE, slot) end
+    PickupContainerItem(bag, slot)
+end
+
 local function bagItem(bag)
-    if bag <= 0 or not ContainerIDToInventoryID or not GetInventoryItemLink then return end
+    if bag <= 0 or bag > GUILD_BASE or not ContainerIDToInventoryID or not GetInventoryItemLink then return end
     local link = GetInventoryItemLink("player", ContainerIDToInventoryID(bag))
     if not link then return end
     return tonumber(link:match("item:(%d+)")), link:match("%[(.-)%]") or "", link
@@ -227,7 +304,7 @@ end
 
 -- The server refused item `id` in container `bag`. Returns true when this taught a rule (no need to freeze).
 local function learnRefusal(bag, id)
-    if not id then return false end
+    if not id or bag > GUILD_BASE then return false end
     local family = select(2, GetContainerNumFreeSlots(bag)) or 0
     local rule = ruleFor(bag, family, true)
     if not rule then return false end
@@ -246,9 +323,27 @@ local function learnRefusal(bag, id)
 end
 B.CustomRules = customRules
 
--- groupA / groupB: 1 bags, 2 bank. Returns the number of locked slots.
-local function scan(groupA, groupB, frozen)
+-- One guild bank tab (group 3): every slot is ordinary (family 0), no crafting bag rules.
+local function scanGuild(n, tab, frozen)
+    local locked = 0
+    local bag = GUILD_BASE + tab
+    for slot = 1, MAX_GUILDBANK_SLOTS_PER_TAB or 98 do
+        n = n + 1
+        local id, count, isLocked, link = readSlot(bag, slot)
+        S.bag[n], S.slot[n], S.group[n], S.family[n] = bag, slot, 3, 0
+        S.id[n], S.count[n], S.key[n] = id, count, link and itemKey(link) or (id and tostring(id))
+        S.fixed[n] = (isLocked or (frozen and S.key[n] and frozen[S.key[n]])) and true or false
+        if isLocked then locked = locked + 1 end
+    end
+    return n, locked
+end
+
+-- groupA / groupB: 1 bags, 2 bank, 3 the open guild bank tab. Returns the number of locked slots.
+local function scan(groupA, groupB, frozen, tab)
     local n, locked = 0, 0
+    if groupA == 3 or groupB == 3 then
+        n, locked = scanGuild(n, tab or guildTab(), frozen)
+    end
     for g = 1, 2 do
         if g == groupA or g == groupB then
             for _, bag in ipairs(CONTAINERS[g]) do
@@ -262,8 +357,7 @@ local function scan(groupA, groupB, frozen)
                     for slot = 1, size do
                         n = n + 1
                         local id, count, isLocked, link = readSlot(bag, slot)
-                        S.bag[n], S.slot[n], S.group[n], S.family[n] = bag, slot, g, family
-                        S.id[n], S.count[n], S.key[n] = id, count, link and itemKey(link) or (id and tostring(id))
+                        S.bag[n], S.slot[n], S.group[n], S.family[n] = bag, slot, g, family                        S.id[n], S.count[n], S.key[n] = id, count, link and itemKey(link) or (id and tostring(id))
                         S.fixed[n] = (isLocked or (frozen and S.key[n] and frozen[S.key[n]])) and true or false
                         if isLocked then locked = locked + 1 end
                         if rule and id then learnContent(rule, id) end
@@ -276,7 +370,7 @@ local function scan(groupA, groupB, frozen)
     S.n = n
     return locked
 end
-B.Scan = function(groupA, groupB) scan(groupA, groupB) return S end
+B.Scan = function(groupA, groupB, tab) scan(groupA, groupB, nil, tab) return S end
 B.State = S
 
 ------------------------------------------------------------------------------------------------------------------
@@ -285,8 +379,11 @@ B.State = S
 local MODES = {
     bags = { groups = { 1 }, sort = 1 },
     bank = { groups = { 2 }, sort = 2, bank = true },
-    deposit = { groups = { 1, 2 }, bank = true },
-    withdraw = { groups = { 1, 2 }, bank = true },
+    deposit = { groups = { 1, 2 }, bank = true, transfer = "deposit" },
+    withdraw = { groups = { 1, 2 }, bank = true, transfer = "withdraw" },
+    guild = { groups = { 3 }, sort = 3, guild = true },
+    guilddeposit = { groups = { 1, 3 }, guild = true, transfer = "deposit" },
+    guildwithdraw = { groups = { 1, 3 }, guild = true, transfer = "withdraw" },
 }
 B.modes = MODES
 
@@ -327,6 +424,12 @@ local MESSAGES = {
         L("Нечего складывать в банк", "Nothing to stack into the bank") },
     withdraw = { L("Стопки в сумках пополнены из банка", "Bag stacks topped up from the bank"),
         L("Нечего брать из банка", "Nothing to take from the bank") },
+    guild = { L("Вкладка банка гильдии отсортирована", "Guild bank tab sorted"),
+        L("Вкладка банка гильдии уже в порядке", "The guild bank tab is already in order") },
+    guilddeposit = { L("Предметы сложены в банк гильдии", "Items stacked into the guild bank"),
+        L("Нечего складывать в банк гильдии", "Nothing to stack into the guild bank") },
+    guildwithdraw = { L("Стопки в сумках пополнены из банка гильдии", "Bag stacks topped up from the guild bank"),
+        L("Нечего брать из банка гильдии", "Nothing to take from the guild bank") },
 }
 
 local function finish(reason)
@@ -353,10 +456,19 @@ local function finish(reason)
                 "Could not place: %d (no free slot that fits).")
                 :format(r.failures)
         end
+        if r.limited then
+            text = (text and text .. " " or "") .. L("Дневной лимит снятия с этой вкладки исчерпан.",
+                "The daily withdrawal limit of this tab is used up.")
+        end
     elseif reason == "stopped" then
         text = L("Сортировка остановлена.", "Sorting stopped.")
     elseif reason == "bank" then
         text = L("Банк закрыт — сортировка остановлена.", "The bank was closed: sorting stopped.")
+    elseif reason == "guild" then
+        text = L("Банк гильдии закрыт — сортировка остановлена.", "The guild bank was closed: sorting stopped.")
+    elseif reason == "tab" then
+        text = L("Открыта другая вкладка банка гильдии — сортировка остановлена.",
+            "Another guild bank tab was opened: sorting stopped.")
     elseif reason == "cursor" then
         text = L("На курсоре предмет — сортировка остановлена.", "An item is on the cursor: sorting stopped.")
     elseif reason == "passes" then
@@ -373,15 +485,24 @@ local function debugPrint(...)
 end
 
 local function bagText(bag)
+    if bag > GUILD_BASE then return ("guild bank tab %d"):format(bag - GUILD_BASE) end
     local _, family = GetContainerNumFreeSlots(bag)
     local link = bag > 0 and ContainerIDToInventoryID and GetInventoryItemLink
         and GetInventoryItemLink("player", ContainerIDToInventoryID(bag))
     return ("%d %s (family %d)"):format(bag, link or "", family or 0)
 end
 
+local sortOptions = {}
+-- noSwap: the guild bank tab (its server never swaps two occupied slots, seen in game).
+function B.SortOptions(noSwap)
+    sortOptions.reverse = setting("bagSortReverse", false)
+    sortOptions.noSwap = noSwap or nil
+    return sortOptions
+end
+
 local function plan(now)
     local mode = MODES[run.mode]
-    local locked = scan(mode.groups[1], mode.groups[2], run.frozen)
+    local locked = scan(mode.groups[1], mode.groups[2], run.frozen, run.tab)
     if locked > 0 then
         run.lockSince = run.lockSince or now
         if now - run.lockSince < LOCK_WAIT then return end -- the server has not released our last moves yet
@@ -395,7 +516,7 @@ local function plan(now)
         run.wasted = 0
     end
     run.doneAtPlan, run.learnedAtPlan = run.done, run.learned
-    if run.wasted >= MAX_WASTED or run.pass > MAX_PASSES then return finish("passes") end
+    if run.wasted >= MAX_WASTED or run.pass > run.maxPasses then return finish("passes") end
     P.ResetQueue(Q)
     run.pos = 1
     local failures = 0
@@ -405,15 +526,21 @@ local function plan(now)
             run.phase = "stack"
         else
             run.phase = "sort"
-            failures = P.SortMoves(S, mode.sort, itemInfo,
-                { reverse = setting("bagSortReverse", false), junkLast = setting("bagSortJunkLast", true) }, Q)
+            failures = P.SortMoves(S, mode.sort, itemInfo, B.SortOptions(mode.guild), Q)
         end
-    elseif run.mode == "deposit" then
+    elseif mode.transfer == "deposit" then
         run.phase = "deposit"
-        failures = P.DepositMoves(S, itemInfo, Q)
+        failures = P.DepositMoves(S, itemInfo, Q, mode.guild and 3 or 2)
     else
         run.phase = "withdraw"
-        failures = P.WithdrawMoves(S, itemInfo, Q)
+        local bank = mode.guild and 3 or 2
+        if run.withdrawLeft then
+            -- Without the limit first: more moves than the limit allows means the limit cut the plan.
+            P.WithdrawMoves(S, itemInfo, Q, bank)
+            run.limited = Q.n > run.withdrawLeft
+            P.ResetQueue(Q)
+        end
+        failures = P.WithdrawMoves(S, itemInfo, Q, bank, run.withdrawLeft)
     end
     run.failures = failures
     debugPrint("pass %d (%s): %d moves, %d unplaceable", run.pass, run.phase, Q.n, failures)
@@ -448,17 +575,33 @@ local function refuse(k, why)
     if learnRefusal(S.bag[d], Q.sid[k]) or (Q.did[k] and learnRefusal(S.bag[s], Q.did[k])) then
         run.learned = run.learned + 1
         run.wasted = 0
-        debugPrint("%s: %s -> %s (learned)", why, GetContainerItemLink(S.bag[s], S.slot[s]) or tostring(Q.sid[k]),
+        debugPrint("%s: %s -> %s (learned)", why, linkAt(S.bag[s], S.slot[s]) or tostring(Q.sid[k]),
             bagText(S.bag[d]))
         return dropQueue(why)
+    end
+    -- Guild bank: a refusal is usually the server's throttle. Slow down and try again before giving up.
+    if MODES[run.mode].guild then
+        run.gap = math.min(run.gap * 2, GUILD_GAP_MAX)
+        local key = S.key[s] or tostring(Q.sid[k])
+        local tries = (run.retries[key] or 0) + 1
+        run.retries[key] = tries
+        if tries < GUILD_RETRIES then
+            run.retried = run.retried + 1
+            -- The dropped move did not use a withdrawal: give it back for the retry.
+            if run.withdrawLeft and S.group[s] == 3 and S.group[d] ~= 3 then run.withdrawLeft = run.withdrawLeft + 1 end
+            run.landed = GetTime()
+            debugPrint("%s: %s -> %s (retry %d, pause %.1f s)", why, linkAt(S.bag[s], S.slot[s]) or tostring(Q.sid[k]),
+                bagText(S.bag[d]), tries, run.gap)
+            return dropQueue(why)
+        end
     end
     run.refused = run.refused + 1
     if S.key[s] then run.frozen[S.key[s]] = true end
     if S.key[d] then run.frozen[S.key[d]] = true end
-    local link = GetContainerItemLink(S.bag[s], S.slot[s]) or tostring(Q.sid[k])
+    local link = linkAt(S.bag[s], S.slot[s]) or tostring(Q.sid[k])
     debugPrint("%s: %s -> %s", why, link, bagText(S.bag[d]))
     if Q.did[k] then
-        debugPrint("   swap with %s -> %s", GetContainerItemLink(S.bag[d], S.slot[d]) or tostring(Q.did[k]),
+        debugPrint("   swap with %s -> %s", linkAt(S.bag[d], S.slot[d]) or tostring(Q.did[k]),
             bagText(S.bag[s]))
     end
     dropQueue(why)
@@ -480,11 +623,12 @@ local function pendingClear(now)
         id = id or false
         if not locked and id == run.wantId[i] and (not id or count == run.wantCount[i]) then
             pending[i] = nil
-        elseif now - issued > LOCK_TIMEOUT then
+            run.landed = now
+        elseif now - issued > run.lockTimeout then
             pending[i] = nil
             run.timeouts = run.timeouts + 1
             dropQueue("timeout")
-        elseif not locked and now - issued > SETTLE then
+        elseif not locked and now - issued > run.settle then
             pending[i] = nil
             if id == run.oldId[i] and (not id or count == run.oldCount[i]) then
                 refuse(run.moveOf[i], "server refused") -- nothing changed: the server said no
@@ -509,6 +653,10 @@ local function step(now)
     end
     run.paused = nil
     if MODES[run.mode].bank and not bankOpen then return finish("bank") end
+    if MODES[run.mode].guild then
+        if not guildOpen then return finish("guild") end
+        if guildTab() ~= run.tab then return finish("tab") end
+    end
     if CursorHasItem() then
         run.cursorSince = run.cursorSince or now
         if now - run.cursorSince > CURSOR_WAIT then finish("cursor") end
@@ -520,7 +668,10 @@ local function step(now)
         if not busy then plan(now) end
         return
     end
-    local batch = setting("bagSortBatch", 2)
+    -- The guild bank server handles one move at a time and drops a move sent while the previous one is still being
+    -- handled (seen in game: a burst of moves, every swap "refused"). The next move waits for the last one to land.
+    if MODES[run.mode].guild and (busy or now - run.landed < run.gap) then return end
+    local batch = MODES[run.mode].guild and 1 or setting("bagSortBatch", 2)
     local issued = 0
     while issued < batch and run.pos <= Q.n do
         local k = run.pos
@@ -532,7 +683,7 @@ local function step(now)
         if not slotIs(s, Q.sid[k], Q.scount[k]) or not slotIs(d, Q.did[k] or nil, Q.dcount[k]) then
             -- Late contents from the server settle within a moment; anything else (loot, another addon) replans.
             run.staleSince = run.staleSince or now
-            if now - run.staleSince > SETTLE then
+            if now - run.staleSince > run.settle then
                 run.staleSince = nil
                 run.desync = run.desync + 1
                 dropQueue("bags changed")
@@ -540,8 +691,8 @@ local function step(now)
             break
         end
         run.staleSince = nil
-        PickupContainerItem(S.bag[s], S.slot[s])
-        PickupContainerItem(S.bag[d], S.slot[d])
+        pickup(S.bag[s], S.slot[s])
+        pickup(S.bag[d], S.slot[d])
         if CursorHasItem() then
             ClearCursor() -- the client refused the drop; the item goes back to its slot
             refuse(k, "client refused")
@@ -555,6 +706,7 @@ local function step(now)
         run.pos = k + 1
         run.done = run.done + 1
         issued = issued + 1
+        if run.withdrawLeft and S.group[s] == 3 and S.group[d] ~= 3 then run.withdrawLeft = run.withdrawLeft - 1 end
     end
     if issued > 0 and now - run.refreshed > REFRESH_GAP then
         run.refreshed = now
@@ -580,9 +732,23 @@ function B.Start(mode)
         if ui.Print then ui.Print(L("Откройте банк.", "Open the bank first.")) end
         return false
     end
+    local guild = MODES[mode].guild
+    local tab, withdrawLeft
+    if guild then
+        local refusal = B.GuildRefusal(mode)
+        if refusal then
+            if ui.Print then ui.Print(refusal) end
+            return false
+        end
+        tab = guildTab()
+        withdrawLeft = B.GuildWithdrawals(tab)
+    end
     run = { mode = mode, started = GetTime(), pass = 0, done = 0, doneAtPlan = 0, wasted = 0, failures = 0,
         desync = 0, timeouts = 0, refused = 0, learned = 0, shown = 0, pos = 1, refreshed = 0,
-        pending = {}, wantId = {}, wantCount = {}, oldId = {}, oldCount = {}, moveOf = {}, frozen = {} }
+        pending = {}, wantId = {}, wantCount = {}, oldId = {}, oldCount = {}, moveOf = {}, frozen = {},
+        tab = tab, withdrawLeft = withdrawLeft,
+        lockTimeout = guild and GUILD_LOCK_TIMEOUT or LOCK_TIMEOUT, settle = guild and GUILD_SETTLE or SETTLE,
+        maxPasses = guild and GUILD_MAX_PASSES or MAX_PASSES, gap = GUILD_GAP, landed = GetTime(), retries = {}, retried = 0 }
     P.ResetQueue(Q)
     elapsedSum = TICK
     driver:Show()
@@ -601,15 +767,53 @@ end
 function B.Busy() return run ~= nil end
 function B.Mode() return run and run.mode end
 function B.BankOpen() return bankOpen end
+function B.GuildOpen() return guildOpen end
+
+-- Withdrawals left today on guild bank tab `tab`: a number, or nil when unlimited.
+function B.GuildWithdrawals(tab)
+    if not GetGuildBankTabInfo then return nil end
+    local _, _, _, _, _, remaining = GetGuildBankTabInfo(tab)
+    if remaining and remaining >= 0 then return remaining end
+    return nil
+end
+
+-- Why a guild bank mode cannot start now (nil = it can).
+function B.GuildRefusal(mode)
+    if not guildOpen then return L("Откройте банк гильдии.", "Open the guild bank first.") end
+    local tab = guildTab()
+    local _, _, viewable, canDeposit = GetGuildBankTabInfo(tab)
+    if not viewable then
+        return L("Эта вкладка банка гильдии вам недоступна.", "You cannot view this guild bank tab.")
+    end
+    if mode == "guilddeposit" and not canDeposit then
+        return L("На эту вкладку банка гильдии вам нельзя класть предметы.",
+            "You may not deposit items on this guild bank tab.")
+    end
+    if mode == "guildwithdraw" and B.GuildWithdrawals(tab) == 0 then
+        return L("Дневной лимит снятия с этой вкладки исчерпан.", "The daily withdrawal limit of this tab is used up.")
+    end
+end
 
 events:RegisterEvent("BANKFRAME_OPENED")
 events:RegisterEvent("BANKFRAME_CLOSED")
+events:RegisterEvent("GUILDBANKFRAME_OPENED")
+events:RegisterEvent("GUILDBANKFRAME_CLOSED")
+events:RegisterEvent("GUILDBANKBAGSLOTS_CHANGED")
+events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("ITEM_LOCK_CHANGED")
 events:RegisterEvent("BAG_UPDATE")
 events:RegisterEvent("PLAYER_LEAVING_WORLD")
 pcall(events.RegisterEvent, events, "GET_ITEM_INFO_RECEIVED")
-events:SetScript("OnEvent", function(_, event)
-    if event == "BANKFRAME_OPENED" then
+events:SetScript("OnEvent", function(_, event, arg)
+    if event == "ADDON_LOADED" then
+        if arg == "Blizzard_GuildBankUI" then B.CreateGuildButtons() end
+    elseif event == "GUILDBANKFRAME_OPENED" then
+        guildOpen = true
+        B.CreateGuildButtons()
+    elseif event == "GUILDBANKFRAME_CLOSED" then
+        guildOpen = false
+        if run and MODES[run.mode].guild then finish("guild") end
+    elseif event == "BANKFRAME_OPENED" then
         bankOpen = true
     elseif event == "BANKFRAME_CLOSED" then
         bankOpen = false
@@ -630,6 +834,7 @@ local ICONS = {
     deposit = "Interface\\Icons\\INV_Box_02",
     withdraw = "Interface\\Icons\\INV_Misc_Bag_09",
 }
+ICONS.guild, ICONS.guilddeposit, ICONS.guildwithdraw = ICONS.bank, ICONS.deposit, ICONS.withdraw
 local LABELS = {
     bags = L("Сортировать сумки\n|cffffffffЛКМ|r — сортировка, стопки объединяются сами\n|cffffffffПКМ|r — остановить",
         "Sort bags\n|cffffffffLeft click|r: sort, stacks merge on their own\n|cffffffffRight click|r: stop"),
@@ -639,6 +844,14 @@ local LABELS = {
         "Stack into the bank\nStackable items the bank already holds move there from the bags"),
     withdraw = L("Взять из банка\nНеполные стопки в сумках пополняются из банка",
         "Take from the bank\nPartial stacks in the bags are topped up from the bank"),
+    guild = L("Сортировать вкладку банка гильдии\nСортируется открытая вкладка, стопки объединяются сами\n"
+        .. "|cffffffffЛКМ|r — сортировка, |cffffffffПКМ|r — остановить", "Sort the guild bank tab\nThe open tab is "
+        .. "sorted, stacks merge on their own\n|cffffffffLeft click|r: sort, |cffffffffRight click|r: stop"),
+    guilddeposit = L("Сложить в банк гильдии\nСтопки, которые уже есть на открытой вкладке, переносятся туда из сумок",
+        "Stack into the guild bank\nStackable items the open tab already holds move there from the bags"),
+    guildwithdraw = L("Взять из банка гильдии\nНеполные стопки в сумках пополняются с открытой вкладки\n"
+        .. "Каждое перемещение тратит одно снятие из дневного лимита вкладки", "Take from the guild bank\nPartial "
+        .. "stacks in the bags are topped up from the open tab\nEvery move uses one of the tab's daily withdrawals"),
 }
 
 local function sortProgress(button, state)
@@ -683,6 +896,60 @@ function B.CreateButtons(window, relative, isBank, factory)
     return relative
 end
 
+-- Plain toolbar button for when the bag module's factory is missing.
+local function plainButton(window, name, relative, label, texture)
+    local button = CreateFrame("Button", window:GetName() .. name, window)
+    button:SetSize(21, 21)
+    button:SetPoint("RIGHT", relative, "LEFT", -3, 0)
+    button:SetNormalTexture(texture)
+    button:GetNormalTexture():SetTexCoord(0.09, 0.91, 0.09, 0.91)
+    button:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(label)
+    end)
+    button:SetScript("OnLeave", GameTooltip_Hide)
+    return button
+end
+
+-- The same three buttons as in the bank, on the client's guild bank window (Blizzard_GuildBankUI loads on demand):
+-- top right under the header, right to left: sort the open tab, stack into it, take from it. Shown on the item
+-- page of the window only (not on the logs and the tab info).
+local guildHolder
+local GUILD_LEVEL = 10 -- above the window's own children (the WoW Forever chrome sits on top of them)
+
+local function placeGuildButtons()
+    local frame = GuildBankFrame
+    if not (guildHolder and frame) then return end
+    local onItems = frame.mode == nil or frame.mode == "bank"
+    if setting("bagSortEnabled", true) ~= false and onItems then guildHolder:Show() else guildHolder:Hide() end
+    local level = frame:GetFrameLevel() + GUILD_LEVEL
+    guildHolder:SetFrameLevel(level)
+    for _, button in ipairs(guildHolder.buttons) do button:SetFrameLevel(level) end
+end
+B.PlaceGuildButtons = placeGuildButtons
+
+function B.CreateGuildButtons()
+    local frame = GuildBankFrame
+    if guildHolder or not frame then return guildHolder end
+    guildHolder = CreateFrame("Frame", "ForeverStockUIGuildBankSort", frame)
+    guildHolder:SetSize(1, 21)
+    guildHolder:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -40)
+    guildHolder.buttons = {}
+    local factory = ui.Bags and ui.Bags.ToolbarButton or plainButton
+    local relative = guildHolder
+    local names = { guild = "Sort", guilddeposit = "Deposit", guildwithdraw = "Withdraw" }
+    for _, mode in ipairs({ "guild", "guilddeposit", "guildwithdraw" }) do
+        relative = B.AttachButton(factory(guildHolder, names[mode], relative, LABELS[mode], ICONS[mode], nil), mode)
+        guildHolder.buttons[#guildHolder.buttons + 1] = relative
+    end
+    frame:HookScript("OnShow", placeGuildButtons)
+    if GuildBankFrame_Update then hooksecurefunc("GuildBankFrame_Update", placeGuildButtons) end
+    placeGuildButtons()
+    return guildHolder
+end
+if GuildBankFrame then B.CreateGuildButtons() end
+
 ------------------------------------------------------------------------------------------------------------------
 -- Slash command and key binding.
 
@@ -715,11 +982,21 @@ local function report()
         print(("crafting bag %d %s: takes [%s], refuses [%s], refused items %d"):format(bagId, rule.name or "",
             table.concat(accept, ", "), table.concat(deny, ", "), items))
     end
+    -- Resource subclasses without a block (their client names are guesses for ruRU): they go to "other resources".
+    local loose, seen = {}, {}
+    for i = 1, S.n do
+        local r = S.id[i] and itemInfo(S.id[i])
+        if r and r.group == 2 and r.block == OTHER_BLOCK and not seen[r.subclass] then
+            seen[r.subclass] = true
+            loose[#loose + 1] = r.subclass
+        end
+    end
+    table.sort(loose)
+    print(("resources without a block: [%s]"):format(table.concat(loose, ", ")))
     P.ResetQueue(Q)
     local stacks = P.StackMoves(S, 1, itemInfo, Q)
     P.ResetQueue(Q)
-    local fails = P.SortMoves(S, 1, itemInfo, { reverse = setting("bagSortReverse", false),
-        junkLast = setting("bagSortJunkLast", true) }, Q)
+    local fails = P.SortMoves(S, 1, itemInfo, B.SortOptions(), Q)
     print(("slots %d, stack moves %d, sort moves %d (before stacking), unplaceable %d"):format(S.n, stacks, Q.n, fails))
     P.ResetQueue(Q)
 end
@@ -728,7 +1005,8 @@ SLASH_FOREVERUISORT1 = "/fuisort"
 SlashCmdList.FOREVERUISORT = function(msg)
     msg = (msg or ""):lower():match("^%s*(%S*)")
     if msg == "" or msg == "bags" then B.Toggle("bags")
-    elseif msg == "bank" or msg == "deposit" or msg == "withdraw" then B.Toggle(msg)
+    elseif msg == "bank" or msg == "deposit" or msg == "withdraw" or msg == "guild" or msg == "guilddeposit"
+        or msg == "guildwithdraw" then B.Toggle(msg)
     elseif msg == "stop" then B.Stop()
     elseif msg == "scan" then report()
     elseif msg == "forget" then
@@ -746,12 +1024,15 @@ SlashCmdList.FOREVERUISORT = function(msg)
     else
         local print = ui.Print or print
         print(L("/fuisort — сумки, /fuisort bank — банк, deposit — сложить в банк, withdraw — взять из банка, "
+            .. "guild, guilddeposit, guildwithdraw — то же для банка гильдии, "
             .. "stop — остановить, scan — сумки и их семейства, debug — отладка в чат, forget — забыть правила ремесленных сумок", "/fuisort: bags, /fuisort bank: bank, deposit: "
-            .. "stack into the bank, withdraw: take from the bank, stop, scan: bags and their families, debug: log to chat, forget: clear crafting bag rules"))
+            .. "stack into the bank, withdraw: take from the bank, guild, guilddeposit, guildwithdraw: the same for "
+            .. "the guild bank, stop, scan: bags and their families, debug: log to chat, forget: clear crafting bag rules"))
     end
 end
 
-BINDING_NAME_FOREVERUI_BAGSORT = L("Сортировать сумки (в банке — банк)", "Sort bags (bank when it is open)")
+BINDING_NAME_FOREVERUI_BAGSORT = L("Сортировать сумки (в банке — банк, в банке гильдии — его вкладку)",
+    "Sort bags (the bank or the guild bank tab when one is open)")
 function ForeverStockUI_SortBags()
-    B.Toggle(bankOpen and "bank" or "bags")
+    B.Toggle(guildOpen and "guild" or bankOpen and "bank" or "bags")
 end

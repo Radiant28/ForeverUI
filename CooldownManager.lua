@@ -54,6 +54,8 @@ local GROUP_DEFAULTS = {
     -- state clarity: buff of the spell itself on the icon, timer colours, range tint, look of the border
     showActive = true, activeColor = { 0.35, 1, 0.45, 1 }, timerColors = true, rangeTint = true,
     borderStyle = "forever", categoryBorder = false, oocAlpha = 1, sort = "manual",
+    -- sound when a cooldown of the group comes back (an entry's own sound wins; "none" on the entry mutes it)
+    soundReady = "", soundCombatOnly = false,
     load = { when = "always", group = "any", talentGroup = 0, tree = 0, form = 0, class = "",
         zone = { none = true, party = true, raid = true, pvp = true, arena = true } },
 }
@@ -458,6 +460,8 @@ Suite.RegisterProfilePart("cdm", function(db)
     -- Auto-adaptation, role, display mode and per-spec positions.
     if db.autoAdapt == nil then db.autoAdapt = true end
     if db.modeButton == nil then db.modeButton = true end
+    if type(db.soundReady) ~= "string" then db.soundReady = "" end
+    if db.soundCombatOnly == nil then db.soundCombatOnly = false end
     if not CDM.roleNames[db.role or ""] then db.role = "auto" end
     if not CDM.modeNames[db.mode or ""] then db.mode = "auto" end
     if type(db.autoModes) ~= "table" then db.autoModes = {} end
@@ -874,7 +878,7 @@ local needPoll = false     -- something on screen depends on the range to the ta
 local function evaluate(group, entry, r, now)
     r.show, r.icon, r.name, r.start, r.duration, r.count = false, nil, nil, nil, nil, nil
     r.desaturate, r.tint, r.glow, r.ready, r.expiration, r.inactive, r.warn = false, nil, false, false, nil, false, false
-    r.active = false
+    r.active, r.gcd = false, false
     local kind = entry.kind
     if conditionsBlock(entry) then return r end
     local list = spellList(entry.spell)
@@ -943,6 +947,7 @@ local function evaluate(group, entry, r, now)
         duration = duration or 0
         local isGCD = duration > 0 and duration <= 1.51
         if isGCD and not group.showGCD and not recharging then duration = 0 end
+        r.gcd = isGCD and not recharging and duration > 0
         if enabled == 0 then duration = 0 end
         local running = duration > 0 and (start or 0) + duration > now
         r.ready = not running or recharging or false
@@ -1278,17 +1283,61 @@ local function loadAllowed(group)
 end
 CDM.LoadAllowed = loadAllowed
 
+-- Sound for "ready again", from the closest level that sets one: the entry, its group, then the sound for
+-- every skill (profile part cdm.soundReady). "" = take the next level, "none" = silent from here down.
+local function soundLevel(value)
+    if value == "none" then return "" end
+    if type(value) == "string" and value ~= "" then return value end
+end
+function CDM.ReadySound(group, entry)
+    local sound = soundLevel(entry and entry.soundReady) or soundLevel(group and group.soundReady)
+    if sound then return sound end
+    local db = data()
+    return db and soundLevel(db.soundReady) or ""
+end
+
+-- Ready sounds only in combat: for every skill (cdm.soundCombatOnly) or for this group.
+function CDM.SoundCombatOnly(group)
+    local db = data()
+    return (db and db.soundCombatOnly) or (group and group.soundCombatOnly) or false
+end
+
+-- "One sound for every skill": the groups and entries drop their own ready sounds (muted ones too).
+function CDM.ClearOwnSounds()
+    local db = data()
+    local count = 0
+    for _, group in pairs(db and db.groups or {}) do
+        if group.soundReady ~= "" then group.soundReady, count = "", count + 1 end
+        for _, entry in ipairs(group.items or {}) do
+            if entry.soundReady ~= "" then entry.soundReady, count = "", count + 1 end
+        end
+    end
+    return count
+end
+
 -- Edge-triggered alerts: glow while the condition holds, a sound when it starts.
-local function alerts(entry, r, now)
+-- The ready edge is followed even while the icon is hidden ("only when ready" / "only on cooldown"
+-- groups), so the sound still plays when the icon appears.
+local function alerts(group, entry, r, now)
     local state = stateOf(entry)
     local glow = false
-    if r.show and not r.inactive then
-        local ready = entry.kind == "cooldown" and r.ready or (entry.kind == "icd" and r.ready)
-        if ready and (entry.glowReady or entry.soundReady ~= "") then
-            if state.ready == false then Suite.PlayAlert(entry.soundReady) end
-            if entry.glowReady then glow = true end
+    local tracksReady = (entry.kind == "cooldown" or entry.kind == "icd") and not r.inactive
+        and (r.show or r.name ~= nil or r.icon ~= nil)
+    if tracksReady then
+        -- Only the global cooldown running (shown with "Show the GCD"): still ready for the sound.
+        local ready = (r.ready or r.gcd) and true or false
+        if ready and state.ready == false then
+            local sound = CDM.ReadySound(group, entry)
+            if sound ~= "" and not (CDM.SoundCombatOnly(group) and not InCombatLockdown()) then
+                Suite.PlayAlert(sound)
+            end
         end
-        state.ready = ready and true or false
+        state.ready = ready
+    else
+        state.ready = nil
+    end
+    if r.show and not r.inactive then
+        if r.ready and (entry.kind == "cooldown" or entry.kind == "icd") and entry.glowReady then glow = true end
         local stacks = (entry.stacks or 0) > 0 and (r.count or 0) >= entry.stacks
         if stacks and not state.stacks then Suite.PlayAlert(entry.soundStacks) end
         state.stacks = stacks
@@ -1299,10 +1348,11 @@ local function alerts(entry, r, now)
         state.expiring = expiring
         if expiring and entry.glowExpire then glow = true end
     else
-        state.ready, state.stacks, state.expiring = nil, nil, nil
+        state.stacks, state.expiring = nil, nil
     end
     return glow
 end
+CDM.Alerts = alerts
 
 local animating = {}
 
@@ -1531,10 +1581,10 @@ local function drawGroup(group, now)
         if testing then
             if r.show then fakeState(group, entry, r, index, now) end
         elseif r.show then
-            local glow = alerts(entry, r, now)
+            local glow = alerts(group, entry, r, now)
             r.glow = r.glow or glow
         else
-            alerts(entry, r, now)
+            alerts(group, entry, r, now)
         end
         local el = element(container, group, index)
         el.sortKey = ((order and (order[r.category or ""] or UNCATEGORISED_RANK)) or 0) * 1000 + index

@@ -3,11 +3,12 @@ local _, ui = ...
 -- The scanner and the move executor live in BagSort.lua.
 --
 -- State S (parallel arrays, index i = one container slot, reused between runs):
---   S.n, S.bag[i], S.slot[i], S.group[i] (1 bags, 2 bank), S.family[i] (container family, 0 = ordinary bag),
+--   S.n, S.bag[i], S.slot[i], S.group[i] (1 bags, 2 bank, 3 guild bank tab), S.family[i] (container family, 0 = ordinary bag),
 --   S.fixed[i] (locked or ignored: never moved, never a target), S.id[i] (nil = empty), S.key[i] (item string
 --   without unique id: equal keys are interchangeable), S.count[i].
--- info(itemID) returns a record: family, maxStack, isBag, pin, junk, classRank, subclass, equipRank, quality,
---   ilvl, name (all present; the same table for the same id while cached).
+-- info(itemID) returns a record: family, maxStack, isBag, pin, group, block, classRank, subclass, equipRank,
+--   quality, ilvl, name (all present; the same table for the same id while cached). group: the order of groups in
+--   a bag; block: a block inside a group (resources). Items lie one after another, free slots at the end.
 -- Queue Q: Q.n moves; move k = PickupContainerItem(src) then PickupContainerItem(dst), with the expected
 --   contents before the move (sid/scount at src, did/dcount at dst; did == false means empty).
 
@@ -86,14 +87,15 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Comparators. They read module-level upvalues instead of closures created per sort.
 
-local cS, cInfo, cJunkLast, cCount
+local cS, cInfo, cCount
 
 local function itemBefore(a, b)
     local ia, ib = cS.id[a], cS.id[b]
     if ia ~= ib then
         local ra, rb = cInfo(ia), cInfo(ib)
         if ra.pin ~= rb.pin then return ra.pin < rb.pin end
-        if cJunkLast and ra.junk ~= rb.junk then return rb.junk end
+        if ra.group ~= rb.group then return ra.group < rb.group end
+        if ra.block ~= rb.block then return ra.block < rb.block end
         if ra.classRank ~= rb.classRank then return ra.classRank < rb.classRank end
         if ra.subclass ~= rb.subclass then return ra.subclass < rb.subclass end
         if ra.equipRank ~= rb.equipRank then return ra.equipRank < rb.equipRank end
@@ -200,7 +202,7 @@ end
 
 local function buildLayout(S, g, info, opts)
     local n = S.n
-    cS, cInfo, cJunkLast = S, info, not opts or opts.junkLast ~= false
+    cS, cInfo = S, info
     local reverse = opts and opts.reverse
 
     -- Pools in slot order; one pool per container family (two herb bags make one pool).
@@ -286,18 +288,15 @@ local function buildLayout(S, g, info, opts)
         end
     end
 
-    -- Sort each pool and lay it out (reverse: items at the end of the pool, free slots first).
+    -- Sort each pool and lay it out without gaps (reverse: mirrored from the last slot, free slots first).
     for i = 1, n do from[i] = 0 end
     for p = 1, poolCount do
         local pool = pools[p]
         local list = pool.items
         for k = pool.ni + 1, #list do list[k] = nil end
         sort(list, itemBefore)
-        local offset = reverse and (pool.ns - pool.ni) or 0
-        for k = 1, pool.ns do
-            local j = k - offset
-            if j >= 1 and j <= pool.ni then from[pool.slots[k]] = list[j] end
-        end
+        local ns, ni, slots = pool.ns, pool.ni, pool.slots
+        for k = 1, ni do from[slots[reverse and (ns - k + 1) or k]] = list[k] end
     end
 
     -- Empty targets take empty sources, an empty slot that stays empty first.
@@ -348,9 +347,12 @@ end
 -- permutation cycle of k slots costs k - 1 moves (a move into an empty slot costs one). A swap is only issued when
 -- both items fit the other container; otherwise the blocking item is first parked in a free slot it fits
 -- (only possible between two different profession bags).
+-- opts.noSwap (the guild bank: its server never swaps two occupied slots): the item in the way is always parked
+-- in a free slot first, so every move goes into an empty slot (a cycle of k slots costs k + 1 moves).
 -- Returns the number of slots that could not be arranged (no free slot to park in).
 function P.SortMoves(S, g, info, opts, Q)
     markEligible(S, g)
+    local noSwap = opts and opts.noSwap
     local n = S.n
     local failures = buildLayout(S, g, info, opts)
     for i = 1, n do
@@ -371,7 +373,7 @@ function P.SortMoves(S, g, info, opts, Q)
                         swapAt(t, s)
                     elseif not fits(info, nid, S.family[t]) then
                         failures = failures + 1
-                    elseif fits(info, xid, S.family[s]) then
+                    elseif fits(info, xid, S.family[s]) and not (noSwap and xid and nid) then
                         if nid then
                             push(Q, s, t, nid, S.count[need], xid, S.count[x])
                         else
@@ -414,7 +416,7 @@ function P.Layout(S, g, info, opts)
 end
 
 ------------------------------------------------------------------------------------------------------------------
--- Bank transfers (group 1 = bags, group 2 = bank).
+-- Bank transfers (group 1 = bags; bank = group 2, or 3 for the guild bank tab).
 
 -- Best free slot of group g for an item: the narrowest profession bag it fits, else an ordinary bag.
 local function freeSlot(S, g, info, id)
@@ -431,12 +433,14 @@ end
 
 -- Deposit: every stackable item that the bank already holds goes to the bank: first onto its partial stacks,
 -- the rest into a free bank slot (profession bags first). Returns the number of stacks that found no room.
-function P.DepositMoves(S, info, Q)
+-- bank: the bank group (default 2).
+function P.DepositMoves(S, info, Q, bank)
+    bank = bank or 2
     local n = S.n
     for i = 1, n do cid[i], ccount[i] = S.id[i], S.count[i] end
     local inBank = wipe(tgtOf)
     for k = 1, n do
-        if S.group[k] == 2 and cid[k] then inBank[cid[k]] = true end
+        if S.group[k] == bank and cid[k] then inBank[cid[k]] = true end
     end
     local failures = 0
     for b = 1, n do
@@ -444,7 +448,7 @@ function P.DepositMoves(S, info, Q)
         if id and not S.fixed[b] and S.group[b] == 1 and inBank[id] and info(id).maxStack > 1 then
             local max = info(id).maxStack
             for k = 1, n do
-                if cid[b] and cid[k] == id and not S.fixed[k] and S.group[k] == 2 and ccount[k] < max then
+                if cid[b] and cid[k] == id and not S.fixed[k] and S.group[k] == bank and ccount[k] < max then
                     push(Q, b, k, id, ccount[b], id, ccount[k])
                     local room = max - ccount[k]
                     local moved = room < ccount[b] and room or ccount[b]
@@ -454,7 +458,7 @@ function P.DepositMoves(S, info, Q)
                 end
             end
             if cid[b] then
-                local k = freeSlot(S, 2, info, id)
+                local k = freeSlot(S, bank, info, id)
                 if k then
                     push(Q, b, k, id, ccount[b], nil, 0)
                     cid[k], ccount[k] = id, ccount[b]
@@ -470,23 +474,27 @@ end
 
 -- Withdraw: partial stacks in the bags are topped up from the bank, smallest bank stacks first
 -- (they free bank slots). Returns 0 (nothing can fail here).
-function P.WithdrawMoves(S, info, Q)
+-- bank: the bank group (default 2); limit: at most this many moves (the guild bank's daily withdrawals), nil = any.
+function P.WithdrawMoves(S, info, Q, bank, limit)
+    bank = bank or 2
     local n = S.n
+    local left = limit
     for i = 1, n do cid[i], ccount[i] = S.id[i], S.count[i] end
     for b = 1, n do
         local id = cid[b]
         if id and not S.fixed[b] and S.group[b] == 1 then
             local max = info(id).maxStack
-            while max > 1 and ccount[b] < max do
+            while max > 1 and ccount[b] < max and (not left or left > 0) do
                 local source
                 for k = 1, n do
-                    if cid[k] == id and not S.fixed[k] and S.group[k] == 2
+                    if cid[k] == id and not S.fixed[k] and S.group[k] == bank
                         and (not source or ccount[k] < ccount[source]) then
                         source = k
                     end
                 end
                 if not source then break end
                 push(Q, source, b, id, ccount[source], id, ccount[b])
+                if left then left = left - 1 end
                 local room = max - ccount[b]
                 local moved = room < ccount[source] and room or ccount[source]
                 ccount[b] = ccount[b] + moved

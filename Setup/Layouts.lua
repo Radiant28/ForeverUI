@@ -97,6 +97,8 @@ local CHAT = { point = "BOTTOMLEFT", relativePoint = "BOTTOMLEFT", x = 42, class
 local METER = { point = "BOTTOMRIGHT", relativePoint = "BOTTOMRIGHT", x = -8, y = 108 }
 local MANA = { point = "TOP", relativePoint = "CENTER", x = 0, y = 190 }
 local SIDE_RAID = { point = "TOPLEFT", relativePoint = "TOPLEFT", x = 20, y = -200 }
+-- A frame spot that puts the frame back on its stock place (the saved Edit Mode position is dropped).
+Layouts.STOCK = "stock"
 
 Layouts.presets = {
     TANK = {
@@ -114,9 +116,10 @@ Layouts.presets = {
     },
     HEALER = {
         frames = {
-            PlayerFrame = { "RIGHT", "CENTER", -200, -20 },
-            TargetFrame = { "LEFT", "CENTER", 200, -20 },
-            FocusFrame = { "LEFT", "CENTER", 200, 110 },
+            -- The unit frames stay on their stock place (top left): the centre belongs to the group.
+            PlayerFrame = Layouts.STOCK,
+            TargetFrame = Layouts.STOCK,
+            FocusFrame = Layouts.STOCK,
             CastingBarFrame = { "TOP", "CENTER", -316, -84 },
             ForeverStockUIHealerManaBanner = { "TOP", "CENTER", 0, 160 },
         },

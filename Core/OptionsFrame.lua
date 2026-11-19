@@ -75,6 +75,11 @@ local function layoutSection(page, child, section, spec, y, width)
                 holder:SetWidth(width)
                 local height = opt.build(holder, width, spec) or 0
                 holder:SetHeight(max(1, height))
+                -- Headers the block marked as tabs (SuiteUI.Anchor): offsets from the top of the scroll child.
+                for _, anchor in ipairs(holder.anchors or {}) do
+                    page.customTabs[#page.customTabs + 1] = { title = anchor.title, top = -y + (anchor.top or 0),
+                        section = page.layingSection }
+                end
                 y = y - height - S.rowGap
                 page.customs[#page.customs + 1] = { frame = holder, opt = opt }
             else
@@ -266,24 +271,38 @@ local function buildPage(spec)
 
     ui.NormalizeModule(spec.id)
     local width = pageWidth(window:GetWidth())
-    local tabList = sectionTabs(spec)
-    local tabsHeight = 0
-    if #tabList >= 2 then tabsHeight = buildSectionTabs(page, tabList, width) + 8 end
     local scroll = W.Scroll(page)
-    scroll:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 14 - tabsHeight)
-    scroll:SetPoint("BOTTOMRIGHT", -24, 10)
     page.builtWidth = width
     scroll.child:SetWidth(width)
     local y = 0
     local sectionTop = {}
+    page.customTabs = {}
     for index, section in ipairs(spec.sections) do
         sectionTop[index] = -y
+        page.layingSection = index
         y = layoutSection(page, scroll.child, section, spec, y, width)
     end
+    page.layingSection = nil
     scroll:SetContentHeight(-y)
     page.scroll = scroll
+    -- Tabs: titled sections plus the headers custom blocks marked (a section with such headers loses its
+    -- automatic "General" tab), in page order. Built after the layout, so the scroll goes under them.
+    local marked = {}
+    for _, entry in ipairs(page.customTabs) do marked[entry.section] = true end
+    local tabList = {}
+    for _, entry in ipairs(sectionTabs(spec)) do
+        if spec.sections[entry.index].title or not marked[entry.index] then
+            tabList[#tabList + 1] = { title = entry.title, top = sectionTop[entry.index] or 0 }
+        end
+    end
+    for _, entry in ipairs(page.customTabs) do tabList[#tabList + 1] = { title = entry.title, top = entry.top } end
+    table.sort(tabList, function(a, b) return a.top < b.top end)
+    local tabsHeight = 0
+    if #tabList >= 2 then tabsHeight = buildSectionTabs(page, tabList, width) + 8 end
+    scroll:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 14 - tabsHeight)
+    scroll:SetPoint("BOTTOMRIGHT", -24, 10)
     if page.sectionTabs then
-        for _, tab in ipairs(page.sectionTabs) do tab.top = sectionTop[tab.entry.index] or 0 end
+        for _, tab in ipairs(page.sectionTabs) do tab.top = tab.entry.top or 0 end
         -- A click scrolls the section to the top; short sections at the end cannot reach the top, so the
         -- clicked tab stays lit until the page is scrolled by other means.
         function page:ShowSection(i)

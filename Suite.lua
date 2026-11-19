@@ -857,6 +857,10 @@ Suite.sounds = {
     { "TellMessage", L("Шёпот", "Whisper") },
     { "igQuestListComplete", L("Задание выполнено", "Quest complete") },
     { "LEVELUP", L("Новый уровень", "Level up") },
+    { "AlarmClockWarning2", L("Будильник (короткий)", "Alarm (short)") },
+    { "igPlayerInvite", L("Приглашение", "Invite") },
+    { "PVPTHROUGHQUEUE", L("Поле боя готово", "Battleground ready") },
+    { "LOOTWINDOWCOINSOUND", L("Монеты", "Coins") },
 }
 function Suite.SoundItems()
     local items = {}

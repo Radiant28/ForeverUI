@@ -222,7 +222,7 @@ local function buildManager(parent, width)
     for _, entry in ipairs(cdm.modes) do modeValues[#modeValues + 1] = entry end
 
     local intro = su.Grid(parent, 0, y, width, 2)
-    intro:Header(L("Быстрый старт", "Quick start"))
+    intro:Header(L("Быстрый старт", "Quick start"), true)
     intro:Text(L("Ничего настраивать не нужно: панели сами берут набор вашего класса и ветки талантов, прячут "
         .. "неизученное и смыкаются без дыр. При смене талантов набор, порядок и позиции меняются сами. "
         .. "Ниже — тест, роль и режимы; ещё ниже — тонкая настройка групп и заклинаний.",
@@ -268,7 +268,7 @@ local function buildManager(parent, width)
             .. "externals and raid cooldowns, damage — bursts and interrupts. “Auto” uses the role of the tree "
             .. "(a bear druid and a death knight in Frost Presence count as tanks).") }, d("role", "auto"))
 
-    intro:Header(L("Режимы панелей", "Panel modes"))
+    intro:Header(L("Режимы панелей", "Panel modes"), true)
     intro:Text(L("Режим решает, какие группы видны: «Полный» — все; «Только бой» — без напоминаний и только в бою; "
         .. "«Рейд» — без мобильности и утилити; «Подземелье» — как полный (настройте под себя); «PvP» — без полос, "
         .. "напоминаний и рейдовых сейвов; «Минимум» — только главные перезарядки. Видимость каждой группы в режиме "
@@ -292,6 +292,31 @@ local function buildManager(parent, width)
                 "Which mode to use in this kind of zone while the mode is “Auto”.") },
             d({ "autoModes", zone[1] }, cdm.autoModeDefaults[zone[1]]))
     end
+
+    intro:Header(L("Звук при откате", "Sound when ready"), L("Звук для всех", "Sound for all"))
+    intro:Text(L("Один звук для всех скиллов: играет, когда перезарядка любого заклинания или предмета в любой группе "
+        .. "закончилась. Индивидуально — в настройках группы (для её скиллов) и у каждого элемента ниже; "
+        .. "звук элемента важнее звука группы, звук группы важнее общего.",
+        "One sound for every skill: plays when the cooldown of any spell or item in any group ends. Individually — "
+        .. "in a group's settings (for its skills) and on each entry below; an entry's sound wins over its "
+        .. "group's, a group's over the common one."))
+    intro:Add({ "select", L("Звук для всех скиллов", "Sound for every skill"),
+        values = function() return ui.Suite.SoundItems() end }, d("soundReady", ""))
+    intro:Add({ "toggle", L("Звуки только в бою", "Sounds in combat only") }, d("soundCombatOnly", false))
+    intro:Add({ "button", L("Прослушать общий звук", "Play the common sound"),
+        func = function() ui.Suite.PlayAlert(db() and db().soundReady) end })
+    intro:Add({ "button", L("Один звук для всех: убрать свои", "One sound for all: clear own ones"),
+        func = function()
+            su.Confirm(L("Убрать свои звуки отката у всех групп и элементов (и выключенные тоже)? Дальше у всех скиллов "
+                .. "будет общий звук.", "Clear the own ready sounds of every group and entry (muted ones too)? "
+                .. "Every skill then uses the common sound."), function()
+                local count = cdm.ClearOwnSounds()
+                ui.Print((L("убрано своих звуков: %d.", "own sounds cleared: %d.")):format(count or 0))
+                settingsChanged()
+            end)
+        end,
+        tooltip = L("Сбрасывает «Звук группы» и «Звук при откате» элементов на «Как для всех» / «Как у группы».",
+            "Sets every “Group sound” and entry “Sound when ready” back to “As for all” / “As the group”.") })
     y = y - intro:Height() - 10
 
     -------------------------------------------------------------------------------------------
@@ -299,6 +324,7 @@ local function buildManager(parent, width)
     -------------------------------------------------------------------------------------------
     local header = W.Header(parent, L("Группы трекеров", "Tracker groups"), width)
     header:SetPoint("TOPLEFT", 0, y)
+    su.Anchor(parent, L("Группы", "Groups"), -y)
     y = y - 30
 
     local groupList = su.List(parent, 220, 8, 24, function(index, group)
@@ -399,7 +425,7 @@ local function buildManager(parent, width)
     -- Group settings
     -------------------------------------------------------------------------------------------
     local grid = hinted(su.Grid(parent, 0, y, width, 2))
-    grid:Header(L("Группа: вид и геометрия", "Group: look and geometry"))
+    grid:Header(L("Группа: вид и геометрия", "Group: look and geometry"), L("Вид группы", "Group look"))
     grid:Add({ "text", L("Название", "Name") }, g("name", ""), false, hasGroup)
     grid:Add({ "select", L("Тип отображения", "Display type"), values = {
         { "icons", L("Сетка / ряд иконок", "Icon grid / row") }, { "bars", L("Список полос", "Bar list") } } },
@@ -433,7 +459,7 @@ local function buildManager(parent, width)
     grid:Add({ "toggle", L("Серые на перезарядке", "Desaturate on cooldown") }, g("desaturate"), false, hasGroup)
     grid:Add({ "toggle", L("Показывать ГКД", "Show the GCD") }, g("showGCD"), false, hasGroup)
     grid:Add({ "color", L("Цвет рамки иконок", "Icon border colour"), alpha = true }, g("borderColor"), false, hasGroup)
-    grid:Header(L("Состояния иконок", "Icon states"))
+    grid:Header(L("Состояния иконок", "Icon states"), true)
     grid:Text(L("Готово — яркая иконка. Активно — цветная рамка и отсчёт баффа. Перезарядка — серая иконка, спираль и "
         .. "таймер (жёлтый с 10 с, красный с 3 с). Синий оттенок — нет ресурса, красный — цель далеко.",
         "Ready — a bright icon. Active — a coloured border and the buff countdown. Cooldown — a grey icon, the sweep "
@@ -446,12 +472,29 @@ local function buildManager(parent, width)
         { "forever", L("Рамка WoW Forever", "WoW Forever frame") }, { "pixel", L("Линия 1 пиксель", "One-pixel line") } } },
         g("borderStyle"), false, isIcons)
     grid:Add({ "toggle", L("Рамка цветом категории", "Border coloured by category") }, g("categoryBorder"), false, isIcons)
+    grid:Header(L("Звук при откате", "Sound when ready"), L("Звук группы", "Group sound"))
+    grid:Text(L("Звук, когда перезарядка заклинания или предмета этой группы закончилась. «Как для всех» — общий звук "
+        .. "(наверху страницы), «Без звука (выключить)» глушит группу. Свой звук элемента (ниже) важнее. Свои файлы — "
+        .. "через LibSharedMedia.",
+        "A sound when a spell or item of this group is ready again. “As for all” — the common sound (top of the "
+        .. "page), “Off (mute)” silences the group. An entry's own sound (below) wins. Own files — through LibSharedMedia."))
+    grid:Add({ "select", L("Звук группы", "Group sound"), values = function()
+        local items = ui.Suite.SoundItems()
+        items[1] = { "", L("Как для всех", "As for all") }
+        table.insert(items, 2, { "none", L("Без звука (выключить)", "Off (mute)") })
+        return items
+    end }, g("soundReady"), false, hasGroup)
+    grid:Add({ "toggle", L("Звуки только в бою", "Sounds in combat only") }, g("soundCombatOnly"), false, hasGroup)
+    grid:Add({ "button", L("Прослушать звук группы", "Play the group sound"), func = function()
+        local group = selectedGroup()
+        if group then ui.Suite.PlayAlert(cdm.ReadySound(group, nil)) end
+    end }, nil, false, hasGroup)
     grid:Header(L("В каких режимах видна группа", "Modes that show the group"))
     for _, mode in ipairs(cdm.modes) do
         grid:Add({ "toggle", mode[2], tooltip = L("Показывать эту группу в этом режиме панелей.",
             "Show this group in this panel mode.") }, modeAccess(mode[1]), false, hasGroup)
     end
-    grid:Header(L("Полосы прогресса", "Progress bars"))
+    grid:Header(L("Полосы прогресса", "Progress bars"), true)
     grid:Add({ "range", L("Ширина полосы", "Bar width"), min = 60, max = 500, step = 1 }, g("barWidth"), false, isBars)
     grid:Add({ "range", L("Высота полосы", "Bar height"), min = 8, max = 60, step = 1 }, g("barHeight"), false, isBars)
     grid:Add({ "select", L("Формат полосы", "Bar format"), values = {
@@ -463,7 +506,7 @@ local function buildManager(parent, width)
     grid:Add({ "color", L("Цвет заполнения", "Fill colour"), alpha = true }, g("barColor"), false, isBars)
     grid:Add({ "color", L("Фон полосы", "Bar background"), alpha = true }, g("barBackground"), false, isBars)
 
-    grid:Header(L("Условия загрузки", "Load conditions"))
+    grid:Header(L("Условия загрузки", "Load conditions"), true)
     grid:Add({ "select", L("Показывать", "Show"), values = {
         { "always", L("Всегда", "Always") }, { "combat", L("Только в бою", "In combat") },
         { "ooc", L("Только вне боя", "Out of combat") }, { "target", L("Есть цель", "With a target") },
@@ -500,6 +543,7 @@ local function buildManager(parent, width)
     -------------------------------------------------------------------------------------------
     local itemsHeader = W.Header(parent, L("Заклинания и предметы группы", "Spells and items of the group"), width)
     itemsHeader:SetPoint("TOPLEFT", 0, y)
+    su.Anchor(parent, L("Заклинания группы", "Group spells"), -y)
     y = y - 30
     local itemList = su.List(parent, 260, 9, 24, function(index)
         state.item = index
@@ -626,7 +670,7 @@ local function buildManager(parent, width)
     local categoryValues = { { "", L("Авто (из базы)", "Auto (built-in table)") }, { "none", L("Без категории", "None") } }
     for _, entry in ipairs(cdm.categories) do categoryValues[#categoryValues + 1] = { entry[1], entry[2] } end
     local itemGrid = hinted(su.Grid(parent, 0, y, width, 2))
-    itemGrid:Header(L("Выбранный элемент", "Selected entry"))
+    itemGrid:Header(L("Выбранный элемент", "Selected entry"), true)
     itemGrid:Add({ "select", L("Тип отслеживания", "Tracking type"), values = cdm.kinds }, it("kind"), false, hasItem)
     itemGrid:Add({ "text", L("Заклинание / предмет", "Spell / item"), spellDrop = { items = true } }, su.Access(selectedItem, "spell", "", function(key, value)
         local entry = selectedItem()
@@ -664,11 +708,22 @@ local function buildManager(parent, width)
     itemGrid:Add({ "color", L("Свой цвет полосы", "Own bar colour"), alpha = true },
         su.Access(selectedItem, "color", nil, itemChanged), false, function() return hasItem() and isBars() end)
     itemGrid:Add({ "toggle", L("Подсвечивать отсутствие", "Glow when missing") }, it("glowMissing"), false, itemKind("missing"))
-    itemGrid:Header(L("Подсветка и звуки", "Highlight and sounds"))
+    itemGrid:Header(L("Подсветка и звуки", "Highlight and sounds"), true)
     local sounds = function() return ui.Suite.SoundItems() end
+    -- Ready sound of an entry: "" follows the group, "none" mutes it, anything else is its own sound.
+    local readySounds = function()
+        local items = ui.Suite.SoundItems()
+        items[1] = { "", L("Как у группы", "As the group") }
+        table.insert(items, 2, { "none", L("Без звука (выключить)", "Off (mute)") })
+        return items
+    end
     itemGrid:Add({ "toggle", L("Подсветка при откате", "Glow when ready") }, it("glowReady"), false, itemKind("cooldown", "icd"))
-    itemGrid:Add({ "select", L("Звук при откате", "Sound when ready"), values = sounds }, it("soundReady"), false,
+    itemGrid:Add({ "select", L("Звук при откате", "Sound when ready"), values = readySounds }, it("soundReady"), false,
         itemKind("cooldown", "icd"))
+    itemGrid:Add({ "button", L("Прослушать звук отката", "Play the ready sound"), func = function()
+        local entry = selectedItem()
+        if entry then ui.Suite.PlayAlert(cdm.ReadySound(selectedGroup(), entry)) end
+    end }, nil, false, itemKind("cooldown", "icd"))
     itemGrid:Add({ "range", L("Порог стаков", "Stack threshold"), min = 0, max = 50, step = 1 }, it("stacks"), false, hasItem)
     itemGrid:Add({ "toggle", L("Подсветка на пороге стаков", "Glow at the stack threshold") }, it("glowStacks"), false, hasItem)
     itemGrid:Add({ "select", L("Звук на пороге стаков", "Sound at the stack threshold"), values = sounds },

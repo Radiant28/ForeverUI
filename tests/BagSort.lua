@@ -42,20 +42,36 @@ local DB = {
     [71] = { "Порванный мех", "Разное", "Хлам", 0, 1, 10, "", 0 },
     [80] = { "Зелье", "Расходуемые", "Зелья", 1, 80, 20, "", 0 },
     [90] = { "Сумка травника", "Сумки", "Сумка травника", 2, 70, 1, "INVTYPE_BAG", 32 },
+    [4] = { "Ржавый меч", "Оружие", "Мечи", 0, 5, 1, "INVTYPE_WEAPON", 0 },
+    [100] = { "Рецепт: зелье", "Рецепты", "Алхимия", 2, 70, 1, "", 0 },
+    [110] = { "Письмо", "Задания", "Задания", 1, 1, 1, "", 0 },
 }
-local ALL = { 6948, 1, 2, 3, 10, 11, 20, 30, 40, 50, 60, 70, 71, 80, 90 }
+local ALL = { 6948, 1, 2, 3, 4, 10, 11, 20, 30, 40, 50, 60, 70, 71, 80, 90, 100, 110 }
 
 local classRank = { ["Оружие"] = 1, ["Доспехи"] = 2, ["Сумки"] = 3, ["Расходуемые"] = 4,
     ["Хозяйственные товары"] = 6, ["Боеприпасы"] = 7, ["Самоцветы"] = 10, ["Разное"] = 12 }
 local equipRank = { INVTYPE_HEAD = 1, INVTYPE_FEET = 12, INVTYPE_WEAPON = 17, INVTYPE_AMMO = 26, INVTYPE_BAG = 27 }
+-- Groups and resource blocks as BagSort.lua gives them (part 2 checks the real ones against these).
+local groupRank = { ["Оружие"] = 1, ["Доспехи"] = 1, ["Сумки"] = 1, ["Хозяйственные товары"] = 2, ["Самоцветы"] = 2,
+    ["Рецепты"] = 3, ["Расходуемые"] = 4, ["Задания"] = 6 }
+local blockRank = { ["Металл и камень"] = 1, ["Трава"] = 2 }
+local function groupOf(id)
+    local d = DB[id]
+    if id == 6948 then return 1, 0 end
+    if d[4] == 0 then return 7, 0 end
+    local group = groupRank[d[2]] or 5
+    if group ~= 2 then return group, 0 end
+    return group, d[2] == "Самоцветы" and 7 or blockRank[d[3]] or 10
+end
 local infoCache = {}
 local function info(id)
     local r = infoCache[id]
     if r then return r end
     local d = DB[id]
+    local group, block = groupOf(id)
     r = { family = d[8], maxStack = d[6], isBag = d[7] == "INVTYPE_BAG", pin = id == 6948 and 1 or 999,
-        junk = d[4] == 0, classRank = classRank[d[2]] or 15, subclass = d[3], equipRank = equipRank[d[7]] or 99,
-        quality = d[4], ilvl = d[5], name = d[1] }
+        group = group, block = block, classRank = classRank[d[2]] or 15, subclass = d[3],
+        equipRank = equipRank[d[7]] or 99, quality = d[4], ilvl = d[5], name = d[1] }
     infoCache[id] = r
     return r
 end
@@ -249,25 +265,36 @@ do
     check(S.id[1] == 90 and S.id[4] == 10 and not S.id[5], "case 3: herb bag item stays in the ordinary bag")
 end
 
--- 4. Reverse fill: free slots first in every pool.
+-- 4. Reverse fill: the layout is mirrored, free slots first in every pool.
 do
     local S = newState({ { size = 6 }, { size = 3, family = 32 } })
     put(S, 1, 1, 1)
     put(S, 2, 10, 3)
     put(S, 3, 80, 4)
     runSort(S, 1, { reverse = true })
-    check(not S.id[1] and not S.id[2] and not S.id[3] and not S.id[4] and S.id[5] == 1 and S.id[6] == 80,
-        "case 4: ordinary bag fills from the end in order")
+    check(not S.id[1] and not S.id[2] and not S.id[3] and not S.id[4] and S.id[6] == 1 and S.id[5] == 80,
+        "case 4: ordinary bag fills from the last slot backwards")
     check(not S.id[7] and not S.id[8] and S.id[9] == 10, "case 4: herb bag fills from the end")
 end
 
--- 5. Junk not last when the option is off: sorted by class (junk is "Разное" after consumables).
+-- 5. Grey items always last, grey equipment too; order of the groups.
 do
-    local S = newState({ { size = 4 } })
+    local S = newState({ { size = 10 } })
     put(S, 1, 70, 1)
-    put(S, 2, 80, 1)
-    runSort(S, 1, { junkLast = false })
-    check(S.id[1] == 80 and S.id[2] == 70, "case 5: junkLast off sorts junk by class")
+    put(S, 2, 4, 1)      -- grey sword
+    put(S, 3, 80, 1)     -- potion
+    put(S, 4, 3, 1)      -- boots
+    put(S, 5, 110, 1)    -- quest
+    put(S, 6, 100, 1)    -- recipe
+    put(S, 7, 20, 1)     -- ore
+    put(S, 8, 6948, 1)
+    put(S, 9, 60, 1)     -- soul shard: "everything else"
+    runSort(S, 1, {})
+    local want = { 6948, 3, 20, 100, 80, 60, 110 }
+    local ok = true
+    for k, id in ipairs(want) do if S.id[k] ~= id then ok = false end end
+    check(ok, "case 5: hearthstone, equipment, resources, recipes, consumables, rest, quest")
+    check(info(S.id[8]).group == 7 and info(S.id[9]).group == 7 and not S.id[10], "case 5: grey items (sword too) last")
 end
 
 -- 6. Identical copies do not move: an unsorted bag of the same item costs nothing.
@@ -321,6 +348,34 @@ do
     check(not S.id[3], "withdraw: no new slots taken in the bags")
 end
 
+-- 9. No gaps: groups and resource blocks follow each other, free slots at the end.
+local function idsAt(S, slots)
+    for k, i in pairs(slots) do if S.id[i] ~= k then return false end end
+    return true
+end
+do
+    local S = newState({ { size = 24 } })
+    put(S, 1, 70, 1) put(S, 2, 10, 4) put(S, 3, 80, 2) put(S, 4, 20, 3) put(S, 5, 1, 1) put(S, 6, 6948, 1)
+    local passes, _, fails = runSort(S, 1, {})
+    check(fails == 0 and passes <= 2, "case 9: sorted")
+    check(idsAt(S, { [6948] = 1, [1] = 2, [20] = 3, [10] = 4, [80] = 5, [70] = 6 }),
+        "case 9: hearthstone, sword, ore, herb, potion, junk one after another")
+    for i = 7, 24 do if S.id[i] then check(false, "case 9: free slots at the end") break end end
+    local S2 = newState({ { size = 8 } })
+    put(S2, 1, 80, 1) put(S2, 2, 1, 1) put(S2, 3, 6948, 1)
+    runSort(S2, 1, { reverse = true })
+    check(idsAt(S2, { [6948] = 8, [1] = 7, [80] = 6 }), "case 9: mirrored from the last slot without gaps")
+end
+-- 9e. Profession bags keep their priority; blocks inside them follow each other too.
+do
+    local S = newState({ { size = 4 }, { size = 8, family = 1024 } })
+    put(S, 1, 20, 3) put(S, 2, 40, 2) put(S, 3, 1, 1)
+    runSort(S, 1, {})
+    check(S.id[1] == 1 and not S.id[2], "case 9e: the sword stays in the ordinary bag")
+    check(S.id[5] == 20 and S.id[6] == 40, "case 9e: ore, then the other reagent in the mining bag")
+    check(priorityOk(S, 1), "case 9e: profession bag used first")
+end
+
 -- 8. Random bags, including completely full ones.
 math.randomseed(12345)
 local CONTAINER_SETS = {
@@ -362,22 +417,28 @@ for case = 1, 400 do
     if fails == 0 and case % 7 ~= 0 then
         check(priorityOk(S, 1), "random " .. case .. ": profession bags used first")
         check(onePartialPerItem(S, 1), "random " .. case .. ": partial stacks merged")
-        local general = poolOrder(S, 1, 0)
-        local sawJunk, sawItem, sawOther, order = false, false, false, true
-        for _, i in ipairs(general) do
-            if S.id[i] then
-                sawItem = true
-                if info(S.id[i]).junk then sawJunk = true elseif sawJunk then order = false end
-                if S.id[i] == 6948 then
-                    if sawOther then order = false end
+        -- Every pool, read in layout order (backwards when filling from the end): hearthstone, then groups and
+        -- blocks in order, no free slot before the last item.
+        local order = true
+        local families = {}
+        for i = 1, S.n do families[S.family[i]] = true end
+        for family in pairs(families) do
+            local list = poolOrder(S, 1, family)
+            local prev, sawEmpty = nil, false
+            for k = 1, #list do
+                local i = list[reverse and (#list - k + 1) or k]
+                if S.id[i] then
+                    local r = info(S.id[i])
+                    local key = (r.pin < 999 and 0 or 1) * 10000 + r.group * 100 + r.block
+                    if prev and key < prev then order = false end
+                    if sawEmpty then order = false end
+                    prev = key
                 else
-                    sawOther = true
+                    sawEmpty = true
                 end
-            elseif reverse and sawItem then
-                order = false
             end
         end
-        check(order, "random " .. case .. ": hearthstone first, junk last, reverse keeps free slots first")
+        check(order, "random " .. case .. ": hearthstone first, groups and blocks in order, grey last, no gaps")
     end
 end
 check(notPermutation == 0, "layout is a permutation (" .. notPermutation .. ")")
@@ -542,8 +603,15 @@ local function worldSorted(groupA)
     local Q = P.NewQueue()
     P.StackMoves(S, groupA, B.ItemInfo, Q)
     if Q.n > 0 then return false end
-    P.SortMoves(S, groupA, B.ItemInfo, { junkLast = true }, Q)
+    P.SortMoves(S, groupA, B.ItemInfo, B.SortOptions(groupA == 3), Q)
     return Q.n == 0
+end
+
+-- The real groups and blocks match the planner tests above.
+for _, id in ipairs(ALL) do
+    local r, group, block = B.ItemInfo(id), groupOf(id)
+    check(r.group == group and r.block == block, ("item groups: %d is %s/%s, want %d/%d"):format(id,
+        tostring(r.group), tostring(r.block), group, block))
 end
 local function worldTotals()
     local t = {}
@@ -713,6 +781,173 @@ check(inBag[10] and inBag[20], "learned bag: trade goods moved in")
 for id in pairs(inBag) do check(tradeOrGem(id), "learned bag: only accepted items inside (" .. id .. ")") end
 check(B.Start("bags") and runUntilIdle() and (prints[#prints] or ""):find("уже в порядке", 1, true),
     "learned bag: second run already in order")
+fresh()
+
+-- /fuisort scan names the resource subclasses that got no block.
+container(0, 4)
+place(0, 1, 40, 2) place(0, 2, 20, 2)
+_G.SlashCmdList.FOREVERUISORT("scan")
+local loose
+for _, line in ipairs(prints) do if line:find("resources without a block", 1, true) then loose = line end end
+check(loose and loose:find("Другое", 1, true) and not loose:find("Металл", 1, true), "scan: loose resource subclasses, got "
+    .. tostring(loose))
+fresh()
+
+-- Guild bank: the open tab is container GUILD_BASE + tab in the mock world (98 ordinary slots); the server counts
+-- withdrawals (tab → bags moves) and refuses them past the daily limit.
+local GB = B.GUILD_BASE
+local guildTabNow, guildRemaining, guildCanDeposit = 1, -1, true
+_G.MAX_GUILDBANK_SLOTS_PER_TAB = 98
+_G.GetCurrentGuildBankTab = function() return guildTabNow end
+_G.GetGuildBankTabInfo = function() return "ГБ", "icon", true, guildCanDeposit, 5, guildRemaining end
+_G.GetGuildBankItemInfo = function(tab, slot) return GetContainerItemInfo(GB + tab, slot) end
+_G.GetGuildBankItemLink = function(tab, slot) return GetContainerItemLink(GB + tab, slot) end
+_G.PickupGuildBankItem = track("PickupGuildBankItem", function(tab, slot) PickupContainerItem(GB + tab, slot) end)
+-- Like Nozdor (seen in game): the server handles one guild bank move at a time and drops a move that arrives while
+-- the previous one is still being handled (the items just stay where they are).
+local plainApply = serverApply
+local lastGuildDue, guildSwaps, guildDropped = 0, 0, 0
+local GUILD_THROTTLE = 0.9
+serverApply = function(m)
+    if m.fb > GB or m.b > GB then
+        -- Throttle (third log from the game): a move sent sooner than GUILD_THROTTLE after the last one landed is
+        -- dropped too.
+        if m.due - LATENCY < lastGuildDue + GUILD_THROTTLE then guildDropped = guildDropped + 1 return end
+        lastGuildDue = m.due
+        -- Also seen in game: two occupied guild slots are never swapped (a move into an empty slot or onto a
+        -- partial stack of the same item works).
+        local from, item = at(m.fb, m.fs), at(m.b, m.s)
+        if from and item and not (item.id == from.id and item.count < DB[item.id][6]) then
+            guildSwaps = guildSwaps + 1
+            return
+        end
+    end
+    if m.fb > GB and m.b <= GB and guildRemaining >= 0 then
+        if guildRemaining == 0 then return end
+        guildRemaining = guildRemaining - 1
+    end
+    plainApply(m)
+end
+local function guildTotals()
+    local t = {}
+    for slot = 1, 98 do
+        local item = world[GB + 1].slots[slot]
+        if item then t[item.id] = (t[item.id] or 0) + item.count end
+    end
+    return t
+end
+
+-- Planner, noSwap (guild tab): random tabs end sorted, every move goes into an empty slot or onto a partial stack.
+do
+    local swaps, unsorted, lost = 0, 0, 0
+    for case = 1, 60 do
+        local S = newState({ { family = 0, size = 98, group = 3 } })
+        local fill = case % 3 == 0 and 0.97 or math.random() * 0.9
+        for i = 1, 98 do
+            if math.random() < fill then
+                local id = ALL[math.random(#ALL)]
+                put(S, i, id, math.random(DB[id][6]))
+            end
+        end
+        local before = totals(S, 3)
+        local Q = P.NewQueue()
+        for _ = 1, 6 do
+            P.ResetQueue(Q)
+            P.StackMoves(S, 3, info, Q)
+            if Q.n == 0 then P.SortMoves(S, 3, info, { noSwap = true }, Q) end
+            if Q.n == 0 then break end
+            for k = 1, Q.n do
+                local d = Q.dst[k]
+                if Q.did[k] and not (Q.did[k] == Q.sid[k] and Q.dcount[k] < DB[Q.sid[k]][6]) then swaps = swaps + 1 end
+                apply(S, Q, k)
+            end
+        end
+        P.ResetQueue(Q)
+        P.StackMoves(S, 3, info, Q)
+        if Q.n == 0 then P.SortMoves(S, 3, info, { noSwap = true }, Q) end
+        if Q.n > 0 then unsorted = unsorted + 1 end
+        if not same(before, totals(S, 3)) then lost = lost + 1 end
+    end
+    check(swaps == 0, "noSwap: no swap of two occupied slots (" .. swaps .. ")")
+    check(unsorted == 0, "noSwap: every tab ends sorted (" .. unsorted .. " not)")
+    check(lost == 0, "noSwap: nothing lost (" .. lost .. ")")
+end
+
+-- Planner: deposit and withdraw take the bank group, withdraw stops at the limit.
+do
+    local S = newState({ { family = 0, size = 4, group = 1 }, { family = 0, size = 4, group = 3 } })
+    put(S, 1, 10, 5) put(S, 2, 20, 3) put(S, 5, 10, 18) put(S, 6, 20, 2) put(S, 7, 20, 2)
+    local Q = P.NewQueue()
+    P.DepositMoves(S, info, Q, 3)
+    local intoTab = Q.n == 3
+    for k = 1, Q.n do intoTab = intoTab and S.group[Q.dst[k]] == 3 and S.group[Q.src[k]] == 1 end
+    check(intoTab, "guild plan: deposit into group 3 (" .. Q.n .. ")")
+    P.ResetQueue(Q)
+    P.WithdrawMoves(S, info, Q, 3)
+    local unlimited = Q.n
+    P.ResetQueue(Q)
+    P.WithdrawMoves(S, info, Q, 3, 1)
+    check(unlimited >= 2 and Q.n == 1 and S.group[Q.src[1]] == 3, "guild plan: withdraw limit (" .. unlimited .. "/" .. Q.n .. ")")
+end
+
+container(0, 16)
+container(GB + 1, 98)
+math.randomseed(4242)
+for slot = 1, 98 do
+    if math.random() < 0.5 then
+        local id = ALL[math.random(#ALL)]
+        place(GB + 1, slot, id, math.random(DB[id][6]))
+    end
+end
+local guildBefore = guildTotals()
+check(not B.Start("guild"), "guild: refused while the guild bank is closed")
+eventFrame.scripts.OnEvent(eventFrame, "GUILDBANKFRAME_OPENED")
+check(B.GuildOpen(), "guild: open after GUILDBANKFRAME_OPENED")
+used.PickupGuildBankItem = nil
+check(B.Start("guild") and runUntilIdle(6000), "guild: tab sort finished")
+check(used.PickupGuildBankItem, "guild: moves go through PickupGuildBankItem")
+check(guildDropped > 0, "guild: the throttle was hit and retried (" .. guildDropped .. ")")
+check(same(guildBefore, guildTotals()), "guild: nothing lost on the tab")
+check(worldSorted(3), "guild: tab ends sorted and stacked")
+check((prints[#prints] or ""):find("Вкладка банка гильдии отсортирована", 1, true) ~= nil
+    and not (prints[#prints] or ""):find("не принял", 1, true),
+    "guild: done message without refusals, got " .. tostring(prints[#prints]))
+check(cursor == nil, "guild: cursor empty")
+
+-- Deposit: herbs from the bags go onto the tab's herb stack.
+for k in pairs(world[GB + 1].slots) do world[GB + 1].slots[k] = nil end
+for k in pairs(world[0].slots) do world[0].slots[k] = nil end
+place(GB + 1, 1, 10, 5) place(0, 3, 10, 18) place(0, 4, 10, 4) place(0, 5, 80, 2)
+guildCanDeposit = false
+check(not B.Start("guilddeposit"), "guild: deposit refused without the right to deposit")
+guildCanDeposit = true
+check(B.Start("guilddeposit") and runUntilIdle(), "guild: deposit finished")
+local inBags = 0
+for slot = 1, 16 do local item = world[0].slots[slot] if item and item.id == 10 then inBags = inBags + item.count end end
+check(inBags == 0 and guildTotals()[10] == 27 and guildTotals()[80] == nil, "guild: herbs deposited, potion kept")
+
+-- Withdraw with one withdrawal left: one move, then the limit is reported.
+for k in pairs(world[0].slots) do world[0].slots[k] = nil end
+place(0, 1, 20, 3)
+place(GB + 1, 2, 20, 2) place(GB + 1, 3, 20, 2) place(GB + 1, 4, 20, 2)
+guildRemaining = 1
+check(B.Start("guildwithdraw") and runUntilIdle(), "guild: withdraw finished")
+check(world[0].slots[1].count == 5, "guild: one stack withdrawn (" .. world[0].slots[1].count .. ")")
+check((prints[#prints] or ""):find("лимит", 1, true) ~= nil, "guild: limit reported, got " .. tostring(prints[#prints]))
+check(not B.Start("guildwithdraw"), "guild: withdraw refused with no withdrawals left")
+guildRemaining = -1
+
+-- Switching the tab or closing the guild bank stops the run.
+place(GB + 1, 90, 1, 1) place(GB + 1, 50, 2, 1)
+check(B.Start("guild"), "guild: started again")
+tick(1)
+guildTabNow = 2
+tick(2)
+check(not B.Busy() and (prints[#prints] or ""):find("другая вкладка", 1, true) ~= nil, "guild: tab switch stops the run")
+guildTabNow = 1
+check(B.Start("guild"), "guild: started once more")
+eventFrame.scripts.OnEvent(eventFrame, "GUILDBANKFRAME_CLOSED")
+check(not B.Busy() and (prints[#prints] or ""):find("Банк гильдии закрыт", 1, true) ~= nil, "guild: closing stops the run")
 fresh()
 
 -- Forbidden APIs.

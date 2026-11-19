@@ -258,7 +258,9 @@ end
 -- its slot, so the buttons follow; the summon button stays left of the first slot, the recall button is put
 -- after the last active slot by the client.
 local barSpecs = {
-    MainMenuBar = { prefix = "ActionButton", rows = 1 },
+    -- `mirror`: the bonus bar (shadowform, stances, forms) shows its buttons in place of the main ones; they
+    -- take the same grid.
+    MainMenuBar = { prefix = "ActionButton", rows = 1, mirror = "BonusActionButton" },
     MultiBarBottomLeft = { prefix = "MultiBarBottomLeftButton", rows = 1 },
     MultiBarBottomRight = { prefix = "MultiBarBottomRightButton", rows = 1 },
     MultiBarLeft = { prefix = "MultiBarLeftButton", rows = 12, vertical = true },
@@ -288,20 +290,29 @@ local function applyBar(entry)
     local custom = config.count ~= nil or config.rows ~= nil
     local signature = custom and (barCount(entry) .. ":" .. barRows(entry)) or "stock"
     if entry.barSignature == signature or (signature == "stock" and not entry.barStock) then return end
+    local prefixes = { spec.prefix }
+    if spec.mirror and _G[spec.mirror .. "1"] then prefixes[2] = spec.mirror end
     if not entry.barStock then
         entry.barStock = {}
-        for index = 1, barMax(entry) do
-            local button = _G[spec.prefix .. index]
-            if button then entry.barStock[index] = points(button) end
+        for _, prefix in ipairs(prefixes) do
+            local saved = {}
+            for index = 1, barMax(entry) do
+                local button = _G[prefix .. index]
+                if button then saved[index] = points(button) end
+            end
+            entry.barStock[prefix] = saved
         end
     end
     entry.barSignature = signature
     local function restore(button, saved)
+        if not button or not saved then return end
         button:ClearAllPoints()
         for _, point in ipairs(saved) do button:SetPoint(unpack(point, 1, 5)) end
     end
     if not custom then
-        for index, saved in pairs(entry.barStock) do restore(_G[spec.prefix .. index], saved) end
+        for prefix, stock in pairs(entry.barStock) do
+            for index, saved in pairs(stock) do restore(_G[prefix .. index], saved) end
+        end
         entry.bounds, entry.boundsOnly = nil, nil
         if ui.ApplyGryphons and entry.frame == MainMenuBar then ui.ApplyGryphons() end
         return
@@ -310,20 +321,24 @@ local function applyBar(entry)
         first:GetWidth() + (spec.gap or 6))
     local corner = spec.vertical and (spec.leftward and "TOPRIGHT" or "TOPLEFT") or "BOTTOMLEFT"
     local bounds = {}
-    for index = 1, barMax(entry) do
-        local button = _G[spec.prefix .. index]
-        if button then
-            if index == 1 then
-                restore(button, entry.barStock[1])
-            elseif offsets[index] then
-                button:ClearAllPoints()
-                button:SetPoint(corner, first, corner, offsets[index].x, offsets[index].y)
-            else
-                -- Parked off screen: a hidden protected button cannot be kept hidden by addon code.
-                button:ClearAllPoints()
-                button:SetPoint("RIGHT", UIParent, "LEFT", -500, 0)
+    for _, prefix in ipairs(prefixes) do
+        local stock, head = entry.barStock[prefix] or {}, _G[prefix .. "1"]
+        for index = 1, barMax(entry) do
+            local button = _G[prefix .. index]
+            if button then
+                if index == 1 then
+                    restore(button, stock[1])
+                elseif offsets[index] then
+                    button:ClearAllPoints()
+                    button:SetPoint(corner, head, corner, offsets[index].x, offsets[index].y)
+                else
+                    -- Parked off screen: a hidden protected button cannot be kept hidden by addon code.
+                    button:ClearAllPoints()
+                    button:SetPoint("RIGHT", UIParent, "LEFT", -500, 0)
+                end
+                -- Only the main bar's own buttons make its outline.
+                if prefix == spec.prefix and index <= count then bounds[#bounds + 1] = button:GetName() end
             end
-            if index <= count then bounds[#bounds + 1] = button:GetName() end
         end
     end
     -- Buttons that stay chained to the grid (totem summon and recall) belong to the bar's outline too.
@@ -1317,6 +1332,14 @@ ui.EditMode = {
     end,
     LoadLayout = loadLayout,
     Reapply = reapplyAll,
+    -- Back to the frame's stock spot (the saved position is dropped), as "Reset position" in the editor does.
+    Reset = function(name)
+        local entry = byName[name]
+        if not entry or not entry.config or not settings then return false end
+        resetPosition(entry)
+        schedule()
+        return true
+    end,
     Place = place,
     Size = function(name)
         local entry = byName[name]

@@ -111,6 +111,18 @@ for i = 1, 12 do
     new("MultiBarBottomLeftButton" .. i .. "Icon", m, "Texture")
 end
 MultiBarBottomLeftButton1.parent = new("MultiBarBottomLeft", UIParent)
+-- Bonus bar (shadowform, stances): its own strip and buttons over the main ones.
+BonusActionBarFrame = new("BonusActionBarFrame", MainMenuBar)
+for i = 0, 1 do
+    local t = BonusActionBarFrame:CreateTexture("BonusActionBarTexture" .. i, "BACKGROUND", nil, 0)
+    t.texture = DWARF
+    t:SetTexCoord(0, 1, stockTops[i], stockTops[i] + 43 / 256)
+end
+for i = 1, 12 do
+    local b = new("BonusActionButton" .. i, BonusActionBarFrame, "CheckButton")
+    b.rect = { 8 + (i - 1) * 42, 44 + (i - 1) * 42, -30, 6 } -- still sliding in
+    new("BonusActionButton" .. i .. "Icon", b, "Texture")
+end
 
 assert(loadfile("StockPanels.lua"))("ForeverUI", ui)
 local AB = ui.ActionBars
@@ -149,12 +161,21 @@ assert(MainMenuXPBarTexture1.color[2] < 1, "XP textures keep the bar tint")
 settings.barStockTint, settings.barArtColor = true, { 0.5, 0.6, 0.7 }
 login()
 assert(MainMenuBarTexture2.color[1] == 0.5 and MainMenuBarTexture2.color[3] == 0.7, "opt-in tint")
+-- The bonus bar's strip takes the same tint, keeps its own texture.
+for i = 0, 1 do
+    local t = _G["BonusActionBarTexture" .. i]
+    assert(t.color[1] == 0.5 and t.color[2] == 0.6 and t.color[3] == 0.7, "bonus strip tinted " .. i)
+    assert(t.texture == DWARF and t.alpha == 1, "bonus strip shown, client texture " .. i)
+end
 settings.barStockTint = nil
+login()
+assert(BonusActionBarTexture0.color[1] == 1 and BonusActionBarTexture0.color[3] == 1, "bonus strip white")
 
 -- Retail always hides the strip, whatever an old saved switch says.
 settings.barLayout, settings.barStockArt = "retail", true
 login()
 assert(MainMenuBarTexture0.alpha == 0, "Retail without the stock background")
+assert(BonusActionBarTexture0.alpha == 0 and BonusActionBarTexture1.alpha == 0, "Retail without the bonus strip")
 settings.barLayout = "classic"
 
 -- Winged backdrops: one per ActionButton, on the bar art frame, BACKGROUND above the strip.
@@ -185,6 +206,15 @@ MainMenuExpBar.shown = false
 AB.LayoutWings()
 b1, x1, y1 = offsets(AB.wings[1])
 assert(y1 == 2, "full outset without the XP bar")
+-- Bonus backdrops: on the bonus frame above its strip, measured on the main button (not the sliding one).
+for i = 1, 12 do
+    local w = AB.bonusWings[i]
+    assert(w and w.parent == BonusActionBarFrame and w.layer == "BACKGROUND" and w.sublevel == 1, "bonus backdrop " .. i)
+    assert(w.texture:find("ActionBar%-SlotWing") and w.shown, "bonus winged cell " .. i)
+    assert(BonusActionBarTexture0.color[1] == 1 and w.color[1] == 1, "backdrop not tinted as strip " .. i)
+end
+local bb1, bx1, by1, _, bx2, by2 = offsets(AB.bonusWings[1])
+assert(bb1 == BonusActionButton1 and bx1 == -2 and by1 == 2 and bx2 == 2 and by2 == -2, "bonus outsets like the main")
 -- Bar edges: a button 1 px from the bar bottom gets 1 px below.
 ActionButton3.rect = { 92, 128, 1, 37 }
 AB.LayoutWings()
@@ -196,6 +226,7 @@ MainMenuExpBar.shown = true
 settings.editLayout = { MainMenuBar = { count = 6, rows = 2 } }
 ui.ApplyGryphons()
 for i = 1, 12 do assert(AB.wings[i].shown == (i <= 6), "count " .. i) end
+for i = 1, 12 do assert(AB.bonusWings[i].shown == (i <= 6), "bonus count " .. i) end
 -- A second row above the bar is outside MainMenuBar: the bar clamp does not apply, the XP fence does not
 -- overlap it vertically either, so it gets the full outset.
 ActionButton4.rect = { 8, 44, 46, 82 }

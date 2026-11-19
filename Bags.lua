@@ -239,6 +239,174 @@ local function toolbarButton(window, name, relative, label, texture, onClick)
     return button
 end
 
+-- Currency spoiler: a small arrow at the left of the backpack footer opens a list of every currency the character
+-- has (the Currency tab of the character window), without gold, silver and copper.
+local CURRENCY_ROW, CURRENCY_MAX_ROWS = 16, 20
+
+local function currencyIcon(icon, extraType)
+    if extraType == 1 then return "Interface\\PVPFrame\\PVP-ArenaPoints-Icon" end
+    if extraType == 2 then
+        return "Interface\\PVPFrame\\PVP-Currency-" .. (UnitFactionGroup("player") or "Alliance")
+    end
+    return icon
+end
+
+-- Reads the whole list. Collapsed headers are opened for the read and closed again afterwards (back to front, so
+-- the indices stay valid), so the client's Currency tab keeps its look.
+local function readCurrencies()
+    local list = {}
+    if not (GetCurrencyListSize and GetCurrencyListInfo) then return list end
+    local coins = { [GOLD or "Gold"] = true, [SILVER or "Silver"] = true, [COPPER or "Copper"] = true }
+    local opened = {}
+    local index = 1
+    while index <= GetCurrencyListSize() do
+        local _, isHeader, isExpanded = GetCurrencyListInfo(index)
+        if isHeader and not isExpanded and ExpandCurrencyList then
+            ExpandCurrencyList(index, 1)
+            opened[#opened + 1] = index
+        end
+        index = index + 1
+    end
+    for i = 1, GetCurrencyListSize() do
+        local name, isHeader, _, _, _, count, extraType, icon = GetCurrencyListInfo(i)
+        if name and name ~= "" and not coins[name] then
+            if isHeader then
+                list[#list + 1] = { name = name, header = true }
+            else
+                list[#list + 1] = { name = name, count = count or 0, icon = currencyIcon(icon, extraType) }
+            end
+        end
+    end
+    for i = #opened, 1, -1 do ExpandCurrencyList(opened[i], 0) end
+    -- Drop headers left without currencies (only coins under them).
+    local result = {}
+    for i, entry in ipairs(list) do
+        if not entry.header or (list[i + 1] and not list[i + 1].header) then result[#result + 1] = entry end
+    end
+    return result
+end
+
+local function createCurrencies(window, footer, name)
+    local ru = ui.russian
+    local button = CreateFrame("Button", name .. "CurrencyToggle", footer)
+    -- 20 px on an 18 px footer: the button is centred on the row and overhangs it by 1 px, the row keeps its size.
+    button:SetSize(20, 20)
+    button:SetPoint("LEFT", footer, "LEFT", 2, 0)
+    local arrow = button:CreateTexture(nil, "ARTWORK")
+    arrow:SetAllPoints(button)
+    button:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+
+    local panel = CreateFrame("Frame", name .. "Currencies", window)
+    panel:SetBackdrop(backpackInset)
+    panel:SetBackdropColor(0.07, 0.068, 0.066, 0.98)
+    panel:SetBackdropBorderColor(0.55, 0.39, 0.21)
+    panel:SetPoint("BOTTOMLEFT", footer, "TOPLEFT", 0, 2)
+    panel:SetPoint("BOTTOMRIGHT", footer, "TOPRIGHT", 0, 2)
+    panel:SetFrameLevel(window:GetFrameLevel() + 60)
+    panel:EnableMouse(true)
+    panel:EnableMouseWheel(true)
+    panel:Hide()
+
+    local rows, entries, offset = {}, {}, 0
+    local empty = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    empty:SetPoint("CENTER", panel, "CENTER")
+    empty:SetText(ru and "Нет валют" or "No currencies")
+
+    local function row(i)
+        if rows[i] then return rows[i] end
+        local r = CreateFrame("Frame", nil, panel)
+        r:SetHeight(CURRENCY_ROW)
+        r:SetPoint("TOPLEFT", panel, "TOPLEFT", 6, -4 - (i - 1) * CURRENCY_ROW)
+        r:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -6, -4 - (i - 1) * CURRENCY_ROW)
+        r.icon = r:CreateTexture(nil, "ARTWORK")
+        r.icon:SetSize(14, 14)
+        r.icon:SetPoint("RIGHT", r, "RIGHT", 0, 0)
+        r.count = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.count:SetPoint("RIGHT", r.icon, "LEFT", -4, 0)
+        r.label = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.label:SetPoint("LEFT", r, "LEFT", 2, 0)
+        r.label:SetPoint("RIGHT", r.count, "LEFT", -6, 0)
+        r.label:SetJustifyH("LEFT")
+        r.label:SetWordWrap(false)
+        r.line = r:CreateTexture(nil, "BACKGROUND")
+        r.line:SetTexture(white)
+        r.line:SetVertexColor(0.55, 0.39, 0.21, 0.35)
+        r.line:SetAllPoints(r)
+        rows[i] = r
+        return r
+    end
+
+    local function draw()
+        local visible = math.min(#entries, CURRENCY_MAX_ROWS)
+        offset = math.max(0, math.min(offset, #entries - visible))
+        panel:SetHeight(math.max(1, visible) * CURRENCY_ROW + 8)
+        if #entries == 0 then empty:Show() else empty:Hide() end
+        for i = 1, math.max(visible, #rows) do
+            local entry = i <= visible and entries[i + offset]
+            if entry then
+                local r = row(i)
+                r.label:SetText(entry.name)
+                if entry.header then
+                    r.label:SetTextColor(1, 0.82, 0)
+                    r.count:SetText("")
+                    r.icon:Hide()
+                    r.line:Show()
+                else
+                    r.label:SetTextColor(1, 1, 1)
+                    r.count:SetText(entry.count)
+                    r.icon:SetTexture(entry.icon)
+                    if entry.icon then r.icon:Show() else r.icon:Hide() end
+                    r.line:Hide()
+                end
+                r:Show()
+            elseif rows[i] then
+                rows[i]:Hide()
+            end
+        end
+    end
+
+    local function update()
+        entries = readCurrencies()
+        draw()
+    end
+
+    local function setArrow()
+        local file = panel:IsShown() and "Down" or "Up"
+        arrow:SetTexture("Interface\\ChatFrame\\UI-ChatIcon-Scroll" .. file .. "-Up")
+        button:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIcon-Scroll" .. file .. "-Down")
+    end
+
+    panel:SetScript("OnMouseWheel", function(_, delta)
+        offset = offset - delta * 3
+        draw()
+    end)
+    panel:SetScript("OnShow", function(self)
+        offset = 0
+        self:RegisterEvent("CURRENCY_DISPLAY_UPDATE")
+        self:RegisterEvent("HONOR_CURRENCY_UPDATE")
+        update()
+        setArrow()
+    end)
+    panel:SetScript("OnHide", function(self)
+        self:UnregisterAllEvents()
+        setArrow()
+    end)
+    panel:SetScript("OnEvent", update)
+    window:HookScript("OnHide", function() panel:Hide() end)
+
+    button:SetScript("OnClick", function()
+        if panel:IsShown() then panel:Hide() else panel:Show() end
+    end)
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(CURRENCY or (ru and "Валюта" or "Currency"))
+        GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", GameTooltip_Hide)
+    setArrow()
+    return button, panel
+end
+
 local function createInventory(panel, isBank)
     local window, content, money, searchBox, bagTray, buySlot, footer
     local bags, query = {}, ""
@@ -246,8 +414,11 @@ local function createInventory(panel, isBank)
     local traySlots = isBank and slotCount or slotCount + 1
     local keyring = not isBank and KEYRING_CONTAINER
     local showKeys
-    local groupGap = 12
-    local toolbarTop, footerHeight = 34 + headerExtra, 34
+    -- groupGap: space between bag groups; the separator line sits groupLine px below the upper group, the extra
+    -- 4 px (16 instead of 12) widen only the space between the line and the cells under it.
+    local groupGap, groupLine = 16, 4
+    -- footerHeight: 41 = the original 34 + 3 px lower bottom frame edge + 4 px gap between the grid and the footer.
+    local toolbarTop, footerHeight = 34 + headerExtra, 41
     local name = isBank and "ForeverStockBank" or "ForeverStockInventory"
     local titleText = ui.russian and "Объединённый рюкзак" or "Combined backpack"
     if isBank then
@@ -329,7 +500,7 @@ local function createInventory(panel, isBank)
             local newGroup = grouped and bag.size > 0 and y > 0
             if bag.separator then
                 if newGroup then
-                    local lineY = -(y + groupGap / 2 - 2)
+                    local lineY = -(y + groupLine)
                     bag.separator:SetPoint("TOPLEFT", content, "TOPLEFT", 0, lineY)
                     bag.separator:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, lineY)
                     bag.separator:Show()
@@ -632,11 +803,13 @@ local function createInventory(panel, isBank)
         footer:SetBackdrop(backpackInset)
         footer:SetBackdropColor(0.09, 0.087, 0.086, 0.98)
         footer:SetHeight(18)
-        local footerLift = newBagSkin and 2 or 0
+        -- +3: the footer stays where it was when the bottom frame edge was moved 3 px lower (footerHeight 37).
+        local footerLift = (newBagSkin and 2 or 0) + 3
         footer:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", footerInset, footerInset + footerLift)
         footer:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -footerInset, footerInset + footerLift)
         money = footer:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         money:SetPoint("RIGHT", footer, "RIGHT", -9, 0)
+        if not isBank then createCurrencies(window, footer, name) end
         if isBank then
             buySlot = CreateFrame("Button", name .. "BuySlot", footer, "UIPanelButtonTemplate")
             buySlot:SetSize(132, 18)
@@ -707,7 +880,7 @@ local function createInventory(panel, isBank)
 
     createWindow(panel)
     return { window = window, layout = layout, refresh = refresh, open = open, toggle = toggle, toggleKeys = toggleKeys,
-        bags = bags, bagIDs = bagIDs, footer = footer }
+        bags = bags, bagIDs = bagIDs, footer = footer, close = _G[name .. "CloseButton"] }
 end
 
 local function connectBank(panel)
@@ -837,6 +1010,11 @@ ui.Bags = {
     -- The combined backpack window and its footer (nil while the module is off or Bagnon is loaded).
     Window = function() return inventory and inventory.window end,
     Footer = function() return inventory and inventory.footer end,
+    -- The close cross in the header (the disenchant button sits left of it).
+    CloseButton = function() return inventory and inventory.close end,
+    -- The toolbar button factory: fn(window, name, relative, label, texture, onClick); BagSort.lua uses it for the
+    -- guild bank buttons, so they look like the ones in the combined bank.
+    ToolbarButton = toolbarButton,
     -- fn(button, bagID, slot) for every laid-out backpack slot (bags 0..NUM_BAG_SLOTS, no keyring, no bank).
     EachItem = function(fn)
         if not inventory then return end
