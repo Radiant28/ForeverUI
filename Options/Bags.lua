@@ -1,7 +1,12 @@
 local _, ui = ...
 local L = ui.L
-local function relayout() if ui.Bags then ui.Bags.Relayout() end end
+local function applyAero() if ui.BagAero then ui.BagAero.Apply() end end
+local function relayout()
+    if ui.Bags then ui.Bags.Relayout() end
+    applyAero()
+end
 local function refresh() if ui.Bags then ui.Bags.Refresh() end end
+local function isAero(get) return get("bagsTheme") == "aero" end
 
 ui.RegisterOptions("bags", {
     title = L("Единая сумка", "Combined bags"),
@@ -20,6 +25,27 @@ ui.RegisterOptions("bags", {
                 reload = true },
             { "button", L("Подписи уровня и прочности…", "Item level and durability labels…"),
                 func = function() ui.OpenOptions("labels") end },
+        } },
+        { title = L("Оформление", "Appearance"), apply = applyAero, options = {
+            { "select", "bagsTheme", L("Стиль окна сумки", "Bag window style"), default = "forever",
+                values = {
+                    { "forever", "WoW: Forever" },
+                    { "aero", "Frutiger Aero" },
+                },
+                tooltip = L("Внешний вид окна единой сумки и банка: бронзовая рамка WoW: Forever или глянцевое стекло Frutiger Aero.",
+                    "Look of the combined backpack and bank windows: WoW: Forever bronze frame or Frutiger Aero glossy glass.") },
+            { "select", "bagsAeroPreset", L("Палитра Frutiger Aero", "Frutiger Aero palette"), default = "aqua",
+                depends = isAero,
+                values = {
+                    { "aqua", L("Аква (Aqua)", "Aqua") },
+                    { "emerald", L("Изумруд (Emerald)", "Emerald") },
+                    { "frost", L("Иней (Frost)", "Frost") },
+                    { "midnight", L("Полночь (Midnight)", "Midnight") },
+                } },
+            { "toggle", "bagsAeroBubbles", L("Пузырьки на фоне", "Background bubbles"), default = true,
+                depends = isAero },
+            { "range", "bagsAeroAlpha", L("Прозрачность стекла", "Glass opacity"), min = 50, max = 100, step = 1,
+                default = 88, suffix = "%", depends = isAero },
         } },
         { title = L("Сетка", "Grid"), apply = relayout, options = {
             { "range", "bagsCellSize", L("Размер ячейки", "Slot size"), min = 26, max = 48, step = 1, default = 36, suffix = " px" },

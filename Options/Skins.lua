@@ -1,6 +1,9 @@
 local _, ui = ...
 local L = ui.L
-local function applyWindows() if ui.WindowSkin then ui.WindowSkin.Apply() end end
+local function applyWindows()
+    if ui.WindowSkin then ui.WindowSkin.Apply() end
+    if ui.BagAero then ui.BagAero.Apply() end
+end
 
 -- The Skins page holds only checkboxes, one per window or element, like ElvUI's list of Blizzard skins.
 -- Windows come from WindowSkin.lua (RECIPES with a key and a label): a window added there gets its checkbox here
