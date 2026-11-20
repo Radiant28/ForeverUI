@@ -1383,15 +1383,15 @@ driver:SetScript("OnEvent", function(self, event)
             if type(layout[entry.name]) ~= "table" then layout[entry.name] = {} end
             entry.config = layout[entry.name]
         end
-        ui.Checkbox(editor, "editGrid", ru and "Показывать сетку" or "Show grid", -34, false, redrawGrid)
+        ui.Checkbox(editor, "editGrid", ru and "Показывать сетку" or "Show grid", -34, false, redrawGrid, nil, 166)
         local snapControl = ui.Checkbox(editor, "editSnap", ru and "Прилипание к сетке" or "Snap to grid",
-            -34, false, function() end)
+            -34, false, function() end, nil, 196)
         snapControl:ClearAllPoints()
-        snapControl:SetPoint("TOPLEFT", 184, -34)
+        snapControl:SetPoint("TOPLEFT", 196, -38)
         ui.Slider(editor, "editGridSpacing", ru and "Шаг сетки" or "Grid spacing", -81,
             { 8, 64, 4, 24 }, redrawGrid)
         ui.Checkbox(editor, "showGryphons", ru and "Показывать грифонов" or "Show gryphons", -105,
-            true, ui.ApplyGryphons)
+            true, ui.ApplyGryphons, nil, 188)
         -- Gryphon look: each click moves to the next style (by faction, gryphon, wyvern, the earlier lions).
         local styleNames = {
             faction = ru and "по фракции" or "by faction", gryphon = ru and "грифон" or "gryphon",

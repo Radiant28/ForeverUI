@@ -82,6 +82,10 @@ function methods:GetAlpha() return self.alpha end
 function methods:GetVerticalScroll() return rawget(self, "vscroll") or 0 end
 function methods:SetVerticalScroll(v) self.vscroll = v end
 function methods:SetVertexColor(...) self.color = { ... } end
+function methods:SetTexture(path) self.texture = path end
+function methods:GetTexture() return self.texture end
+function methods:SetTexCoord(...) self.coords = { ... } end
+function methods:GetTexCoord() return unpack(self.coords or { 0, 1, 0, 1 }) end
 function methods:SetTextColor(...) self.textColor = { ... } end
 function methods:SetBackdropColor(...) self.backdropColor = { ... } end
 function methods:SetBackdropBorderColor(...) self.borderColor = { ... } end
@@ -125,6 +129,7 @@ function IsAddOnLoaded() return false end
 function IsShiftKeyDown() return false end
 function PlaySound() end
 function GameTooltip_Hide() end
+function SetPortraitToTexture(tex, path) tex.portraitIcon = path; tex.texture = path end
 function geterrorhandler() return function(err) error(err, 0) end end
 function InterfaceOptions_AddCategory(panel) categories[#categories + 1] = panel end
 function InterfaceOptionsFrame_OpenToCategory(panel) categories.opened = panel end
@@ -307,6 +312,34 @@ for _, module in ipairs(ui.optionOrder) do
 end
 assert(built == #ui.optionOrder and built >= 17)
 
+-- Native WoW Forever styling of the main options window and controls.
+do
+    assert(window.chromeArt and window.chromeArt.ground.texture:find("Window%-InsetGround"), "window has Forever ground")
+    assert(#window.chromeArt.tex >= 8, "window draws bronze metal corners and edges")
+    assert(window.inner and #window.inner.pieces == 15, "window builds 15-slice options_innerframe")
+    assert(window.closeButton and window.closeButton.face.texture:find("Window%-Close"), "window uses red Forever close button")
+    assert(window.search.magnifier and window.search.clearButton, "search input has magnifier and clear button")
+    assert(window.search.borderPieces[1].texture:find("commonsearch"), "search input uses commonsearch art")
+    ui.OpenOptions("unitframes")
+    assert(window.chromeArt.portrait.portraitIcon == ui.GetModule("unitframes").icon, "portrait ring tracks active module")
+    assert(window.footer.reload.slices and window.footer.reload.slices[1].texture:find("Panel%-Button"), "buttons use 3-slice Panel-Button")
+    local toggleRow, rangeRow, selectRow, pageScroll
+    walk(window, function(object)
+        if object.kind == "toggle" and not toggleRow then toggleRow = object end
+        if object.kind == "range" and not rangeRow then rangeRow = object end
+        if object.kind == "select" and not selectRow then selectRow = object end
+        if object.ForeverScroll and object.bar and object.bar.upArrow then pageScroll = object end
+    end)
+    assert(toggleRow and toggleRow.checkBox.texture:find("minimalcheckboxc60") and toggleRow.checkMark.texture:find("minimalcheckbox%-hd"),
+        "toggles use Forever minimalcheckbox art")
+    assert(rangeRow and rangeRow.slider.thumb.texture:find("minimalsliderbarc60%-hd"), "sliders use Forever minimalsliderbar art")
+    assert(selectRow and selectRow.box.art.left.texture:find("commondropdownc60"), "dropdown button uses commondropdownc60")
+    assert(ForeverUIDropdownList and ForeverUIDropdownList.slices and #ForeverUIDropdownList.slices == 9,
+        "dropdown popup uses 9-slice Forever frame")
+    assert(pageScroll and pageScroll.bar.upArrow and pageScroll.bar.thumbTop.texture:find("minimalscrollbarproportionalc60")
+        and pageScroll.bar.thumbMid.texture:find("minimalscrollbarverticalc60"), "scrollbars use Forever MinimalScrollBar")
+end
+
 -- Section tabs above the page and the clickable scrollbar.
 do
     ui.OpenOptions("unitframes")
@@ -364,7 +397,9 @@ local legacy = ui.Slider(panel, "editGridSpacing", "Grid", -80, { 8, 64, 4, 24 }
 legacy:SetValue(40)
 assert(db.editGridSpacing == 40 and hits == 1 and legacy:GetValue() == 40)
 local check = ui.Checkbox(panel, "editSnap", "Snap", -30, false, function() hits = hits + 1 end)
-assert(_G.ForeverStockUI_editSnap == check)
+assert(_G.ForeverStockUI_editSnap == check and check:GetWidth() == 280)
+local narrow = ui.Checkbox(panel, "editGrid", "Grid", -30, false, function() end, nil, 166)
+assert(narrow:GetWidth() == 166)
 ui.SetOption("editmode", "editSnap", true)
 assert(check:GetChecked() == true)
 

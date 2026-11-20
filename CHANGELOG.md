@@ -3,6 +3,19 @@
 Каждая версия перечисляет то, что изменилось по сравнению с предыдущей. Номер версии совпадает с `## Version` в `ForeverUI.toc`.
 Новые изменения записываются в верхнюю версию; при выпуске она получает дату, а `## Version` в `.toc` поднимается.
 
+## 1.4.2 — 2026-11-20
+
+### Главное окно настроек в стиле WoW Forever (`Core/Widgets.lua`, `Core/OptionsFrame.lua`, `Options/SuiteWidgets.lua`)
+- Главное окно настроек `ForeverUIOptions` переведено с плоской тёмной темы на нативный стиль окон WoW Forever (Camelot): бронзовая металлическая оправа (`Window-Metal`, `Window-MetalH`, `Window-MetalV`) с портретом выбранного модуля в левом верхнем кольце, каменный фон (`Window-InsetGround`), красная металлическая кнопка закрытия (`Window-Close`) и внутренняя панель `options_innerframe` (5×3 куска из `optionsc60.blp`), подстраивающаяся под изменение размера окна.
+- Заголовки разделов и сайдбар используют тёплую бронзово-золотую палитру, разделители `options_horizontaldivider`, подсветку выбора и наведения `options_list_active`/`options_list_hover`, рамки иконок `Slot-Frame` и бронзовую строку поиска (`commonsearch.blp`) с лупой и кнопкой очистки.
+- Контролы в `Core/Widgets.lua` и `Options/SuiteWidgets.lua` оформлены текстурами WoW Forever: трёхчастные красные кнопки `Panel-Button`, флажки `minimalcheckbox*`, ползунки `minimalsliderbarc60-hd`, выпадающие списки и вкладки подразделов `commondropdownc60`, поля ввода `commonsearch`, палитра с оправой `Slot-Frame` и полоса прокрутки `MinimalScrollBar` со стрелками (`minimalscrollbar*`). Тест: `tests/Options.lua`.
+
+### Режим редактирования (`Core/Compat.lua`, `EditMode.lua`)
+- В `ui.Checkbox` добавлен необязательный параметр ширины; флажки сетки (`editGrid`, `editSnap`) и грифонов (`showGryphons`) сужены под свои колонки и выровнены по одной строке (`y = -38`), чтобы кнопки сброса оставались внутри панели и не наезжали на соседние элементы.
+
+### Скин окна талантов (`WindowSkin.lua`)
+- Исправлено исчезновение портрета в верхнем левом кольце `PlayerTalentFrame` при переключении вкладок («Таланты», «Символы», «Руны», «Рунические таланты»). Для `PlayerTalentFrame` явно задан портрет игрока (`unit = "player"`) и ленивые хуки на `PlayerTalentFrame_Refresh` / `GlyphFrame` (`Blizzard_TalentUI`, `Blizzard_GlyphUI` грузятся по требованию); `findPortrait` больше не строит разреженный список кандидатов и не выбирает `specRingIcon`, перехват `keepHidden` удерживает скрытые клиентские портреты и иконки кольца, а сторож `needsRepair` восстанавливает пустое кольцо при скрытии портрета клиента. Тест: `tests/WindowSkin.lua`.
+
 ## 1.4.1 — 2026-11-19
 
 ### Сумки: кнопка просеивания (`Enchanting.lua`, `Options/Enchanting.lua`)

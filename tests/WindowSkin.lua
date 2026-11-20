@@ -705,6 +705,108 @@ ss.portrait.w = 50
 WS.Apply()
 assert(shopCoin.points[1][1] == "CENTER" and near(shopCoin.w, 75), "shop coin enlarged 1.5 times in the ring")
 
+-- Talents on Nozdor: switching between Talents, Glyphs and Runes re-shows client portrait textures and resizes
+-- the window; the player's portrait stays in the ring and the client's portraits stay hidden.
+do
+    talents.w, talents.h, talents.level = 791, 585, 20
+    local mb = CreateFrame("Frame", nil, talents)
+    talents.MetalBorder = mb
+    mb.CornerTopLeft = region("Texture", mb)
+    mb.TitleText = region("FontString", mb)
+    local specRingIcon = region("Texture", mb)
+    specRingIcon.texture = "Interface\\FrameGeneral\\TalentPortrait\\portrait_priest"
+    mb.specRingIcon, talents.specRingIcon = specRingIcon, specRingIcon
+    local talentPortrait = region("Texture", talents)
+    talentPortrait.shown, talentPortrait.alpha = false, 0
+    _G.PlayerTalentFramePortrait = talentPortrait
+    CreateFrame("Button", "PlayerTalentFrameTab1", talents)
+    CreateFrame("Button", "PlayerTalentFrameTab4", talents)
+    local tab5 = CreateFrame("Button", "PlayerTalentFrameTab5", talents)
+    CreateFrame("Button", "PlayerTalentFrameTab6", talents)
+    PlayerTalentFrame_Refresh = function() end
+    talents.shown = true
+    fire("ADDON_LOADED", "Blizzard_TalentUI")
+    talents:Show()
+    local ts = WS.skins[talents]
+    assert(ts and ts.active and ts.ring, "talent frame skinned with portrait ring")
+    assert(ts.portrait.shown and ts.portrait.portraitUnit == "player", "talent frame shows player portrait")
+    assert(not specRingIcon.shown, "specRingIcon hidden")
+
+    -- Switch to Glyphs tab: GlyphFrame loads later; client shows specRingIcon (Portrait2) and client portrait.
+    local glyph = CreateFrame("Frame", "GlyphFrame", talents)
+    fire("ADDON_LOADED", "Blizzard_GlyphUI")
+    specRingIcon.texture = "Portrait2"
+    specRingIcon:Show()
+    talentPortrait.texture = "Interface\\Spellbook\\UI-Glyph-Rune-1"
+    talentPortrait:Show()
+    MetalFrame2X_Decorate(talents)
+    PlayerTalentFrame_Refresh()
+    glyph:Show()
+    assert(ts.portrait.shown and ts.portrait.portraitUnit == "player", "glyphs tab: player portrait stays visible")
+    assert(not specRingIcon.shown, "glyphs tab: specRingIcon kept hidden")
+    assert(not talentPortrait.shown, "glyphs tab: client portrait kept hidden")
+
+    -- Switch to Runes tab: window resizes to 512x424 and selected tab rises; watchdog keeps chrome and portrait.
+    talents.w, talents.h = 512, 424
+    tab5.level = ts.chrome.level + 3
+    PlayerTalentFrame_Refresh()
+    assert(ts.portrait.shown and ts.portrait.portraitUnit == "player", "runes tab: player portrait stays after resize")
+    assert(tab5.level < ts.chrome.level, "runes tab: selected tab behind chrome")
+    assert(ts.lastSize[1] == 512, "runes tab: resized chrome tracked")
+
+    -- Return to Talents tab: window restores 791x585 and tries to show specRingIcon again.
+    talents.w, talents.h = 791, 585
+    specRingIcon:Show()
+    PlayerTalentFrame_Refresh()
+    assert(ts.portrait.shown and ts.portrait.portraitUnit == "player", "talents tab: player portrait stays on return")
+    assert(not specRingIcon.shown, "talents tab: specRingIcon still hidden")
+
+    -- Turning talent window skin off restores specRingIcon cleanly.
+    db.skinPlayerTalentFrame = false
+    WS.Apply()
+    assert(not ts.active and specRingIcon.shown, "talent skin off: specRingIcon restored")
+    db.skinPlayerTalentFrame = nil
+    WS.Apply()
+end
+
+-- Generic metal window: specRingIcon set to Portrait2 is ignored by findPortrait (never chosen only to hide itself).
+do
+    local tsf = CreateFrame("Frame", "TradeSkillFrame", UIParent)
+    tsf.w, tsf.h, tsf.level = 600, 500, 10
+    local tsfMb = CreateFrame("Frame", nil, tsf)
+    tsf.MetalBorder = tsfMb
+    tsfMb.CornerTopLeft = region("Texture", tsfMb)
+    local tsfSpec = region("Texture", tsfMb); tsfSpec.texture = "Portrait2"
+    tsfMb.specRingIcon = tsfSpec
+    local tsfPortrait = region("Texture", tsf); tsfPortrait.shown = false
+    _G.TradeSkillFramePortrait = tsfPortrait
+    tsf.shown = true
+    fire("ADDON_LOADED", "Blizzard_Anything")
+    local tss = WS.skins[tsf]
+    assert(tss and tss.ring and tss.portrait.shown and tss.portrait.portraitUnit == "player",
+        "generic metal window: ignores self-hidden specRingIcon and falls back to player portrait")
+    assert(not tsfSpec.shown, "generic metal window: specRingIcon kept hidden")
+end
+
+-- Generic metal window: when a visible ringPortrait is hidden later, watchdog recovers with the player portrait.
+do
+    local inspect = CreateFrame("Frame", "InspectFrame", UIParent)
+    inspect.w, inspect.h, inspect.level = 384, 424, 10
+    inspect.MetalBorder = CreateFrame("Frame", nil, inspect)
+    inspect.MetalBorder.CornerTopLeft = region("Texture", inspect.MetalBorder)
+    inspect.ringPortrait = region("Texture", inspect)
+    inspect.ringPortrait.texture = "Portrait1"
+    inspect.shown = true
+    fire("ADDON_LOADED", "Blizzard_Anything")
+    local is = WS.skins[inspect]
+    assert(is and is.clientPortrait == inspect.ringPortrait and not is.portrait.shown,
+        "inspect initially uses client ringPortrait")
+    inspect.ringPortrait:Hide()
+    WS.Repair()
+    assert(not is.clientPortrait and is.portrait.shown and is.portrait.portraitUnit == "player",
+        "hidden client portrait recovered with player portrait")
+end
+
 
 -- SkinExtras.lua: stock panel buttons get the WoW Forever button; other buttons are left alone.
 assert(loadfile("SkinExtras.lua"))("ForeverUI", ui)

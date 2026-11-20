@@ -192,7 +192,10 @@ local ORDER = { "CharacterFrame" }
 local WINDOWS = {
     -- Nozdor metal windows
     { "SpellBookFrame", "Книга заклинаний", "Spellbook" },
-    { "PlayerTalentFrame", "Таланты", "Talents" },
+    { "PlayerTalentFrame", "Таланты", "Talents", unit = "player",
+        portraits = { "PlayerTalentFramePortrait" },
+        refresh = { "PlayerTalentFrame_Refresh" },
+        refreshFrames = { "GlyphFrame" } },
     { "TradeSkillFrame", "Профессии", "Professions" },
     { "TradeSkillCompactFrame", "Профессии (компактное окно)", "Professions (compact)" },
     { "LFDParentFrame", "Поиск подземелий", "Dungeon Finder", portrait = "HK_LFDPortraitFrame", portraitWhole = true,
@@ -276,6 +279,7 @@ for _, w in ipairs(WINDOWS) do
     local name = w[1]
     local recipe = { key = "skin" .. name, label = { w[2], w[3] }, generic = true, rect = w.rect, above = w.above,
         headerButtons = w.headerButtons, headerShare = w.headerShare, headerArt = w.headerArt, ground = w.ground,
+        unit = w.unit, portraits = w.portraits, refresh = w.refresh, refreshFrames = w.refreshFrames,
         portrait = w.portrait, portraitScale = w.portraitScale, portraitWhole = w.portraitWhole, tabs = w.tabs,
         icons = w.icons, tabsOver = w.tabsOver, tabOverlap = w.tabOverlap,
         icon = w.icon, hide = w.hide }
@@ -317,8 +321,26 @@ local function hide(st, region)
     region:Hide()
 end
 
+-- Client portraits/spec rings re-shown on tab switches stay hidden while our ring portrait is on.
+local hiddenHooked = {}
+local function keepHidden(st, region)
+    if not region or not region.Hide then return end
+    hide(st, region)
+    st.keepHidden = st.keepHidden or {}
+    st.keepHidden[region] = true
+    if hiddenHooked[region] or not hooksecurefunc or not region.Show then return end
+    hiddenHooked[region] = st
+    hooksecurefunc(region, "Show", function(self)
+        local owner = hiddenHooked[self]
+        if owner and owner.active and owner.ring and owner.keepHidden and owner.keepHidden[self] then
+            self:Hide()
+        end
+    end)
+end
+
 local function restore(st)
-    st.active = false                        -- first, so the model's OnShow hook lets it show again
+    st.active = false                        -- first, so the model's and portrait's Show hooks let them show again
+    st.keepHidden = {}
     if st.ownClose then st.ownClose:Hide() end  -- a close button of our own goes with the chrome
     for region, alpha in pairs(st.alpha) do region:SetAlpha(alpha) end
     for region, wasShown in pairs(st.shown) do
@@ -1024,20 +1046,31 @@ end
 -- portrait, <Name>Portrait, <Name>PortraitFrame, the holder's own portrait texture). Second value: whether the
 -- window has a portrait slot at all (then an empty one gets the player's portrait).
 local function findPortrait(window, name, border, own)
-    local candidates = { own and _G[own], window.ringPortrait, window.portrait, name and _G[name .. "Portrait"],
-        name and _G[name .. "PortraitFrame"], window.PortraitFrame }
-    if border then
-        for _, region in ipairs({ border:GetRegions() }) do
-            if isTexture(region) and texPath(region):find("^portrait%d") then candidates[#candidates + 1] = region end
+    local candidates, count = {}, 0
+    local function add(p)
+        if p then
+            count = count + 1
+            candidates[count] = p
         end
     end
-    local any = false
-    for i = 1, #candidates + 5 do
-        local p = candidates[i]
-        if p then
-            any = true
-            if showsPicture(p) then return p, true end
+    add(own and _G[own])
+    add(window.ringPortrait)
+    add(window.portrait)
+    add(name and _G[name .. "Portrait"])
+    add(name and _G[name .. "PortraitFrame"])
+    add(window.PortraitFrame)
+    if border then
+        for _, region in ipairs({ border:GetRegions() }) do
+            if isTexture(region) and region ~= window.specRingIcon and region ~= border.specRingIcon
+                and texPath(region):find("^portrait%d") then
+                add(region)
+            end
         end
+    end
+    local any = count > 0
+    for i = 1, count do
+        local p = candidates[i]
+        if showsPicture(p) then return p, true end
     end
     return nil, any
 end
@@ -1124,7 +1157,7 @@ local function place(st)
         portrait:SetPoint("TOPLEFT", chrome, "TOPLEFT", p.x, -p.y)
         portrait:SetWidth(p.w)
         portrait:SetHeight(p.h)
-        portrait:Show()
+        if st.clientPortrait then portrait:Hide() else portrait:Show() end
     else
         portrait:Hide()
     end
@@ -1182,6 +1215,20 @@ local function create(window, recipe)
         window:HookScript("OnShow", function() if st.active then updatePortrait(st) end end)
     end
     return st
+end
+
+local function hidePortraits(st)
+    if not st.ring then return end
+    local window, border, recipe = st.window, st.border, st.recipe
+    if window.specRingIcon and window.specRingIcon ~= st.clientPortrait then keepHidden(st, window.specRingIcon) end
+    if border and border.specRingIcon and border.specRingIcon ~= st.clientPortrait then
+        keepHidden(st, border.specRingIcon)
+    end
+    if recipe.unit then
+        keepHidden(st, window.ringPortrait)
+        for _, n in ipairs(recipe.portraits or {}) do keepHidden(st, _G[n]) end
+        for _, n in ipairs(recipe.models or {}) do hide(st, _G[n]) end
+    end
 end
 
 local function applyWindow(window, recipe)
@@ -1298,16 +1345,14 @@ local function applyWindow(window, recipe)
         else
             top = topLevel(window, skip, 0, windowLevel, 1) + 1
         end
-        -- The tabs hang behind the bottom edge (checked in game on the merchant): the chrome goes above them.
-        -- A window with tabsOver keeps its tabs over the edge instead (lifted below).
-        if name and not recipe.tabsOver then
-            for _, tab in ipairs(windowTabs(name, recipe)) do
-                if tab.GetFrameLevel then top = math.max(top, tab:GetFrameLevel() + 1) end
-            end
-        end
         st.chromeOffset = math.max(top - windowLevel, 1)
     end
+    -- The tabs hang behind the bottom edge (checked in game on the merchant): a selected tab the client
+    -- raises stays behind it on re-layout as well as in relevel().
     st.tabs = (name and not recipe.topLevel and not recipe.tabsOver) and windowTabs(name, recipe) or {}
+    for _, tab in ipairs(st.tabs) do
+        if tab.GetFrameLevel then st.chromeOffset = math.max(st.chromeOffset, tab:GetFrameLevel() + 1 - windowLevel) end
+    end
     local level = windowLevel + st.chromeOffset
     chrome:SetFrameLevel(level)
     -- Frames that stay above the chrome, with their place relative to it (relevel() puts them back there).
@@ -1390,15 +1435,7 @@ local function applyWindow(window, recipe)
     end
 
     for _, n in ipairs(recipe.hide or {}) do hide(st, _G[n]) end
-    if st.ring then
-        hide(st, window.specRingIcon)
-        if border then hide(st, border.specRingIcon) end
-        if recipe.unit then
-            hide(st, window.ringPortrait)
-            for _, n in ipairs(recipe.portraits or {}) do hide(st, _G[n]) end
-            for _, n in ipairs(recipe.models or {}) do hide(st, _G[n]) end
-        end
-    end
+    hidePortraits(st)
     if option("foreverWindowGround", true) ~= false then
         for _, n in ipairs(recipe.ground or {}) do fade(st, _G[n]) end
         if metal and name then
@@ -1557,6 +1594,9 @@ local function needsRepair(st)
     if size and (math.abs((window:GetWidth() or 0) - size[1]) > 0.5 or math.abs((window:GetHeight() or 0) - size[2]) > 0.5) then
         return "move"
     end
+    -- A client portrait hidden, faded or blanked on a tab switch, or our own ring portrait hidden: lay again.
+    if st.clientPortrait and not showsPicture(st.clientPortrait) then return "move" end
+    if st.ring and not st.clientPortrait and not st.portrait:IsShown() then return "move" end
     local close = st.closeButton
     if close then
         local _, rel = close:GetPoint(1)
@@ -1790,9 +1830,34 @@ end
 
 -- Windows are hooked as soon as they exist: at login for the stock ones, on ADDON_LOADED for load-on-demand UIs
 -- (talents, inspect, macros, auction house, guild bank, trainer, socketing, calendar).
-local hookedWindows = {}
+local hookedWindows, hookedRefresh, hookedRefreshFrames, refreshHandlers = {}, {}, {}, {}
+local function refreshHandler(name)
+    local fn = refreshHandlers[name]
+    if not fn then
+        fn = function()
+            local win = _G[name]
+            local st = win and skins[win]
+            if not (st and st.active) then return end
+            skinStats(st)
+            hidePortraits(st)
+            if win:IsShown() then
+                local need = needsRepair(st)
+                if need == "move" then
+                    applyWindow(win, st.recipe)
+                else
+                    if need == "level" then relevel(st) end
+                    updatePortrait(st)
+                end
+            end
+        end
+        refreshHandlers[name] = fn
+    end
+    return fn
+end
+
 local function hookWindows()
     for _, name in ipairs(ORDER) do
+        local recipe = RECIPES[name]
         local window = _G[name]
         if window and window.HookScript and not hookedWindows[window] then
             hookedWindows[window] = true
@@ -1801,6 +1866,22 @@ local function hookWindows()
             if window:IsShown() then
                 onShow(window)
                 treeOnShow(window)
+            end
+        end
+        if recipe.refresh or recipe.refreshFrames then
+            for _, fn in ipairs(recipe.refresh or {}) do
+                local key = name .. ":" .. fn
+                if not hookedRefresh[key] and type(_G[fn]) == "function" and hooksecurefunc then
+                    hookedRefresh[key] = true
+                    hooksecurefunc(fn, refreshHandler(name))
+                end
+            end
+            for _, frameName in ipairs(recipe.refreshFrames or {}) do
+                local frame = _G[frameName]
+                if frame and frame.HookScript and not hookedRefreshFrames[frame] then
+                    hookedRefreshFrames[frame] = true
+                    frame:HookScript("OnShow", refreshHandler(name))
+                end
             end
         end
     end
@@ -1866,21 +1947,6 @@ events:SetScript("OnEvent", function(self, event, unit)
         end
         for _, fn in ipairs({ "MetalFrame2X_Decorate", "MetalFrame2X_Rebuild" }) do
             if type(_G[fn]) == "function" then hooksecurefunc(fn, onRebuild) end
-        end
-        -- Inner panels the client re-dresses (stats relayout, tab switch) are skinned again right after.
-        for _, name in ipairs(ORDER) do
-            local recipe = RECIPES[name]
-            local function again()
-                local st = skins[_G[name]]
-                if st and st.active then skinStats(st) end
-            end
-            for _, fn in ipairs(recipe.refresh or {}) do
-                if type(_G[fn]) == "function" then hooksecurefunc(fn, again) end
-            end
-            for _, frameName in ipairs(recipe.refreshFrames or {}) do
-                local frame = _G[frameName]
-                if frame and frame.HookScript then frame:HookScript("OnShow", again) end
-            end
         end
         -- The client re-dresses close buttons (new red textures): the Forever button is put back over them.
         if type(_G.CloseButton2X_Apply) == "function" then
