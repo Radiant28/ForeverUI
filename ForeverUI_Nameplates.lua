@@ -44,7 +44,7 @@ local defaults = {
     targetScale = 1.15, nonTargetScale = 0.80, targetAlpha = 1,
     nonTargetAlpha = 0.65, outOfCombatAlpha = 0.5, fadeDistance = true,
     nearDepth = 20, farDepth = 75,
-    headlineOutOfCombat = false, hideFullHealthOutOfCombat = false, combatOnlyEngaged = true, combatKeepFriends = false,
+    headlineOutOfCombat = false, hideFullHealthOutOfCombat = false, combatOnlyEngaged = true, combatNearDepth = 40,
     crowdSaver = true, crowdThreshold = 15,
     hideFriendlyInDungeons = true, hideTotems = false, hideMinions = true,
     stacking = true, stackForever = true, stackNearestFirst = true, stackBehindAlpha = 0.7, verticalSpacing = 0.90, maxDistance = 41,
@@ -104,6 +104,9 @@ local function LoadConfig()
     cfg.nearDepth = Clamp(cfg.nearDepth, 0, 500, defaults.nearDepth)
     cfg.farDepth = Clamp(cfg.farDepth, cfg.nearDepth + 1, 501, max(defaults.farDepth, cfg.nearDepth + 1))
     cfg.verticalSpacing = Clamp(cfg.verticalSpacing, 0.5, 2, defaults.verticalSpacing)
+    cfg.combatNearDepth = Clamp(cfg.combatNearDepth, 5, 200, defaults.combatNearDepth)
+    -- Players now always stay in combat and friendly NPCs follow the distance rule.
+    cfg.combatKeepFriends = nil
     if type(cfg.classCache) ~= "table" then cfg.classCache = {} end
     if type(cfg.npcTitleCache) ~= "table" then cfg.npcTitleCache = {} end
     if type(cfg.guildCache) ~= "table" then cfg.guildCache = {} end
@@ -1001,6 +1004,28 @@ local function Engaged(view, unit, threat, value, high)
     return view.identityName ~= nil and engagedName[view.identityName] and value < high or false
 end
 
+-- Whether a native bar colour is a class colour (hostile players with ShowClassColorInNameplate).
+local function ClassBar(r, g, b)
+    for _, color in pairs(RAID_CLASS_COLORS) do
+        if abs(color.r - r) < 0.02 and abs(color.g - g) < 0.02 and abs(color.b - b) < 0.02 then return true end
+    end
+    return false
+end
+
+-- In combat a mob nobody of us fights stays near me and fades out further away. The plate depth is the
+-- distance from the camera (3.3.5 plates have no unit token to measure from the player); a plate without
+-- depth counts as near. Returns the opacity factor: 1 near, 0 beyond the fade band.
+local COMBAT_FADE_BAND = 8
+local function CombatFade(view)
+    local depth = view.GetEffectiveDepth and view:GetEffectiveDepth()
+    if not depth or depth <= 0 then return 1 end
+    local near = cfg.combatNearDepth
+    if depth <= near then return 1 end
+    if depth >= near + COMBAT_FADE_BAND then return 0 end
+    local t = (depth - near) / COMBAT_FADE_BAND
+    return 1 - t * t * (3 - 2 * t)
+end
+
 local function LearnFromEvent(event, ...)
     if event == "COMBAT_LOG_EVENT_UNFILTERED" then
         local _, subevent, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags, spellId, spellName = ...
@@ -1243,13 +1268,14 @@ local function EdgeFade(view)
     return 1 - t * t * (3 - 2 * t)
 end
 
-local function UpdatePerspective(view, plate, target, engaged, blend)
+local function UpdatePerspective(view, plate, target, engaged, blend, combatFade)
     local depth = view:GetEffectiveDepth()
     local t = depth and depth > 0 and min(1, max(0, (depth - cfg.nearDepth) / (cfg.farDepth - cfg.nearDepth))) or 0
     t = t * t * (3 - 2 * t)
     local scale = target and cfg.targetScale or 1 + (cfg.nonTargetScale - 1) * t
     local alpha = target and cfg.targetAlpha or (cfg.fadeDistance and 1 + (cfg.nonTargetAlpha - 1) * t or 1)
     if not target and not engaged then alpha = min(alpha, cfg.outOfCombatAlpha) end
+    if combatFade and not target then alpha = alpha * combatFade end
     if cfg.edgeFade and not target then alpha = alpha * EdgeFade(view) end
     -- Plates lifted over a nearer one in the column (see StackPlates) are drawn fainter.
     if view.stackBehind and not target then alpha = alpha * cfg.stackBehindAlpha end
@@ -1414,19 +1440,25 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
     view.previewing = not not preview
     local team = friendly and (kind == "player" or blue)
     local class = (kind == "player" or team) and PlayerClass(view, unit, plate) or nil
+    -- In combat players always stay, and so do the mobs fighting me or my group; the other mobs stay
+    -- near me and fade out further away (CombatFade).
+    local combatFade
+    if cfg.combatOnlyEngaged and inCombat and not preview and not target then
+        local player = kind == "player" or blue
+            or (kind == "unknown" and (classByName[name] ~= nil or ClassBar(r, g, b)))
+        if not player and not Engaged(view, unit, threat, value, high) then combatFade = CombatFade(view) end
+    end
     if not preview and not target and ((cfg.hideTotems and kind == "totem") or (cfg.hideMinions and kind == "minion")
         or (cfg.hideFriendlyInDungeons and inDungeon and friendlyNPC)
         or (cfg.hideFullHealthOutOfCombat and npc and idle)
-        -- In combat only the units fighting me or my group stay; allies optionally.
-        or (cfg.combatOnlyEngaged and inCombat and not (friendly and cfg.combatKeepFriends)
-            and not Engaged(view, unit, threat, value, high))) then
+        or (combatFade and combatFade <= 0)) then
         MuteNativeDetails(view, true)
         view.infoActive, view.boxAt = nil, nil
         view:Hide()
         return
     end
 
-    UpdatePerspective(view, plate, target, engaged, blend)
+    UpdatePerspective(view, plate, target, engaged, blend, combatFade)
     SnapChrome(view, friendly)
     view.infoActive, view.infoUnit, view.infoFriendly, view.infoTarget = true, unit, friendly, target
     -- Friendly players can show the name alone, coloured by class when class colours are on.
