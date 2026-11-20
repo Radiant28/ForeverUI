@@ -39,11 +39,11 @@ local function access(settings, key, default, apply)
     }
 end
 
-function ui.Checkbox(panel, key, label, y, default, apply, settings)
+function ui.Checkbox(panel, key, label, y, default, apply, settings, width)
     settings = settings or ui.Settings()
     if type(settings[key]) ~= "boolean" then settings[key] = default end
     local opt = { type = "toggle", key = key, label = label }
-    local row = W.Toggle(panel, opt, access(settings, key, default, apply), 280)
+    local row = W.Toggle(panel, opt, access(settings, key, default, apply), width or 280)
     row:SetPoint("TOPLEFT", 16, y - 4)
     register(settings, key, row)
     function row:GetChecked() return settings[key] end

@@ -1,5 +1,5 @@
--- ForeverUI options window: sidebar with module tabs, lazily built pages from the declarative
--- schemas (ui.RegisterOptions), search, live refresh of dependent controls and a reload footer.
+-- ForeverUI options window: WoW Forever bronze chrome, inner panel, sidebar tabs,
+-- lazily built pages from declarative schemas, search, live refresh and reload footer.
 local addonName, ui = ...
 local L, W, S = ui.L, ui.Widgets, ui.Style
 local rgba = W.rgba
@@ -9,11 +9,13 @@ local WIDTH, HEIGHT = 860, 580
 -- Size limits for resizing with the right mouse button. No real minimum: only enough for the sidebar,
 -- the header and the footer so the window never collapses; narrow pages are laid out in what is left.
 local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 340, 1500, 160, 1100
-local SIDEBAR, HEADER, FOOTER = 208, 46, 34
+local SIDEBAR, CHROME_SCALE = 208, 0.5
+local INNER_LEFT, INNER_RIGHT, INNER_TOP, INNER_BOTTOM = 14, 14, 66, 46
+local HEADER_BAR, FOOTER = 34, 34
 local function pageWidth(windowWidth)
-    return max(120, floor((windowWidth or WIDTH) + 0.5) - SIDEBAR - 48 - 8)
+    return max(120, floor((windowWidth or WIDTH) + 0.5) - SIDEBAR - 80)
 end
-local PAGE_HEADER = 64
+local PAGE_HEADER = 60
 
 local window, sidebar, pages, tabs, current, searchText = nil, nil, {}, {}, nil, ""
 
@@ -75,7 +77,6 @@ local function layoutSection(page, child, section, spec, y, width)
                 holder:SetWidth(width)
                 local height = opt.build(holder, width, spec) or 0
                 holder:SetHeight(max(1, height))
-                -- Headers the block marked as tabs (SuiteUI.Anchor): offsets from the top of the scroll child.
                 for _, anchor in ipairs(holder.anchors or {}) do
                     page.customTabs[#page.customTabs + 1] = { title = anchor.title, top = -y + (anchor.top or 0),
                         section = page.layingSection }
@@ -149,12 +150,11 @@ local function confirmReset(spec)
 end
 
 ---------------------------------------------------------------------------------------------------
--- Section tabs: a row of buttons above the page (like the sub-tabs of ElvUI). A click scrolls to the
--- section; the tab of the section in view is highlighted while scrolling. Rows wrap on narrow windows.
+-- Section tabs: bronze beveled sub-tabs above the page. A click scrolls to the section;
+-- the tab of the section in view is highlighted while scrolling. Rows wrap on narrow windows.
 ---------------------------------------------------------------------------------------------------
-local TAB_HEIGHT, TAB_GAP, TAB_MAX = 20, 4, 190
+local TAB_HEIGHT, TAB_GAP, TAB_MAX = 22, 5, 190
 
--- Titles of the page sections that get a tab; an untitled first section is the "General" tab.
 local function sectionTabs(spec)
     local list = {}
     for index, section in ipairs(spec.sections or {}) do
@@ -165,21 +165,35 @@ local function sectionTabs(spec)
     return list
 end
 
-local function paintSectionTab(tab, active)
-    tab:SetBackdropColor(rgba(active and S.surfaceActive or S.surface))
-    tab:SetBackdropBorderColor(rgba(active and S.accent or S.border, active and 1 or nil))
-    tab.text:SetTextColor(rgba(active and S.accentText or S.text))
+local function paintSectionTab(tab, active, hovered)
+    if active then
+        tab.art:SetUV(W.UV.ddOpen)
+        tab.activeGlow:Show()
+        tab.text:SetTextColor(1, 1, 1)
+    elseif hovered then
+        tab.art:SetUV(W.UV.ddHover)
+        tab.activeGlow:Hide()
+        tab.text:SetTextColor(rgba(S.accentText))
+    else
+        tab.art:SetUV(W.UV.ddNormal)
+        tab.activeGlow:Hide()
+        tab.text:SetTextColor(rgba(S.text))
+    end
 end
 
 local function buildSectionTabs(page, list, width)
     local bar = CreateFrame("Frame", nil, page)
-    bar:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 8)
+    bar:SetPoint("TOPLEFT", 20, -PAGE_HEADER - 8)
     bar:SetWidth(width)
     page.sectionTabs = {}
     local x, y = 0, 0
     for i, entry in ipairs(list) do
         local tab = CreateFrame("Button", nil, bar)
-        W.Skin(tab, S.surface, S.border)
+        tab.art = W.ThreeSlice(tab, W.UV.ddNormal, "BACKGROUND", 2, 2, 5)
+        tab.activeGlow = tab:CreateTexture(nil, "ARTWORK")
+        W.ApplyUV(tab.activeGlow, W.UV.listActive)
+        tab.activeGlow:SetAllPoints(tab)
+        tab.activeGlow:Hide()
         local text = W.Text(tab, W.fonts.small)
         text:SetPoint("LEFT", 8, 0)
         text:SetPoint("RIGHT", -8, 0)
@@ -196,26 +210,28 @@ local function buildSectionTabs(page, list, width)
         tab:SetPoint("TOPLEFT", x, y)
         x = x + tabWidth + TAB_GAP
         tab.entry = entry
-        tab:SetScript("OnClick", function(self)
+        tab:SetScript("OnClick", function()
             PlaySound("igMainMenuOptionCheckBoxOn")
             page:ShowSection(i)
         end)
         tab:SetScript("OnEnter", function(self)
-            if self.index ~= page.activeTab then self:SetBackdropBorderColor(rgba(S.accent, 0.6)) end
+            self.hovered = true
+            paintSectionTab(self, self.index == page.activeTab, true)
             if self.truncated then
                 GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-                GameTooltip:SetText(entry.title, 1, 1, 1)
+                GameTooltip:SetText(entry.title, 1, 0.82, 0)
                 GameTooltip:Show()
             end
             W.Redraw(self)
         end)
         tab:SetScript("OnLeave", function(self)
-            paintSectionTab(self, self.index == page.activeTab)
+            self.hovered = false
+            paintSectionTab(self, self.index == page.activeTab, false)
             GameTooltip:Hide()
             W.Redraw(self)
         end)
         tab.index = i
-        paintSectionTab(tab, i == 1)
+        paintSectionTab(tab, i == 1, false)
         page.sectionTabs[i] = tab
     end
     local height = -y + TAB_HEIGHT
@@ -227,7 +243,9 @@ end
 local function setActiveTab(page, index)
     if page.activeTab == index then return end
     page.activeTab = index
-    for i, tab in ipairs(page.sectionTabs or {}) do paintSectionTab(tab, i == index) end
+    for i, tab in ipairs(page.sectionTabs or {}) do
+        paintSectionTab(tab, i == index, tab.hovered)
+    end
 end
 
 local function buildPage(spec)
@@ -236,33 +254,33 @@ local function buildPage(spec)
     page.spec, page.rows, page.customs = spec, {}, {}
 
     local title = W.Text(page, W.fonts.title)
-    title:SetPoint("TOPLEFT", 24, -18)
+    title:SetPoint("TOPLEFT", 20, -14)
     title:SetText(spec.title or spec.id)
     local description = W.Text(page, W.fonts.small)
     description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
     description:SetPoint("RIGHT", page, "RIGHT", -170, 0)
     description:SetHeight(14)
     description:SetText(spec.description or "")
-    local divider = W.Line(page)
-    divider:SetHeight(1)
-    divider:SetPoint("TOPLEFT", 24, -PAGE_HEADER + 2)
-    divider:SetPoint("TOPRIGHT", -24, -PAGE_HEADER + 2)
+    local divider = W.Divider(page)
+    divider:SetHeight(2)
+    divider:SetPoint("TOPLEFT", 20, -PAGE_HEADER + 4)
+    divider:SetPoint("TOPRIGHT", -20, -PAGE_HEADER + 4)
 
     local hasDefaults = false
     for _, opt in ipairs(spec.options) do
         if opt.key and opt.default ~= nil and not opt.noReset then hasDefaults = true break end
     end
     if hasDefaults then
-        local reset = W.Button(page, L("Сбросить раздел", "Reset section"), 140, function() confirmReset(spec) end)
-        reset:SetPoint("TOPRIGHT", -24, -18)
+        local reset = W.Button(page, L("Сбросить раздел", "Reset section"), 140, function() confirmReset(spec) end, 24)
+        reset:SetPoint("TOPRIGHT", -20, -14)
         page.resetButton = reset
     end
 
     local reason = spec.unavailable and spec.unavailable()
     if reason then
         local notice = W.Text(page, W.fonts.label)
-        notice:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 16)
-        notice:SetPoint("RIGHT", page, "RIGHT", -24, 0)
+        notice:SetPoint("TOPLEFT", 20, -PAGE_HEADER - 14)
+        notice:SetPoint("RIGHT", page, "RIGHT", -20, 0)
         notice:SetTextColor(rgba(S.muted))
         notice:SetText(reason)
         page.Refresh = function() end
@@ -285,8 +303,6 @@ local function buildPage(spec)
     page.layingSection = nil
     scroll:SetContentHeight(-y)
     page.scroll = scroll
-    -- Tabs: titled sections plus the headers custom blocks marked (a section with such headers loses its
-    -- automatic "General" tab), in page order. Built after the layout, so the scroll goes under them.
     local marked = {}
     for _, entry in ipairs(page.customTabs) do marked[entry.section] = true end
     local tabList = {}
@@ -299,12 +315,10 @@ local function buildPage(spec)
     table.sort(tabList, function(a, b) return a.top < b.top end)
     local tabsHeight = 0
     if #tabList >= 2 then tabsHeight = buildSectionTabs(page, tabList, width) + 8 end
-    scroll:SetPoint("TOPLEFT", 24, -PAGE_HEADER - 14 - tabsHeight)
-    scroll:SetPoint("BOTTOMRIGHT", -24, 10)
+    scroll:SetPoint("TOPLEFT", 20, -PAGE_HEADER - 16 - tabsHeight)
+    scroll:SetPoint("BOTTOMRIGHT", -28, 16)
     if page.sectionTabs then
         for _, tab in ipairs(page.sectionTabs) do tab.top = tab.entry.top or 0 end
-        -- A click scrolls the section to the top; short sections at the end cannot reach the top, so the
-        -- clicked tab stays lit until the page is scrolled by other means.
         function page:ShowSection(i)
             local tab = self.sectionTabs[i]
             if not tab then return end
@@ -337,9 +351,8 @@ end
 ---------------------------------------------------------------------------------------------------
 local function paintTab(tab)
     local selected = current == tab.spec.id
-    tab.background:SetVertexColor(rgba(selected and S.accent or S.surface, selected and 0.14 or 0))
-    W.SetVisible(tab.marker, selected)
-    tab.text:SetTextColor(rgba(selected and S.accentText or S.text))
+    W.SetVisible(tab.activeBg, selected)
+    tab.text:SetTextColor(rgba(selected and { 1, 1, 1 } or S.accentText))
     local enabled = ui.IsModuleEnabled(tab.spec.id)
     tab.dot:SetVertexColor(rgba(enabled and S.success or S.muted, enabled and 0.9 or 0.5))
 end
@@ -350,6 +363,9 @@ local function selectModule(id)
     W.CloseList()
     if current and pages[current] then pages[current]:Hide() end
     current = id
+    if window and window.chromeArt then
+        window.chromeArt:SetPortrait(spec.icon or "Interface\\Icons\\INV_Misc_Gear_01")
+    end
     if not pages[id] then pages[id] = buildPage(spec) end
     pages[id]:Show()
     pages[id]:Refresh()
@@ -361,33 +377,34 @@ local function createTab(spec)
     local tab = CreateFrame("Button", nil, sidebar.child)
     tab:SetHeight(26)
     tab.spec = spec
-    tab.background = tab:CreateTexture(nil, "BACKGROUND")
-    tab.background:SetAllPoints(tab)
-    tab.background:SetTexture("Interface\\Buttons\\WHITE8X8")
+    tab.activeBg = tab:CreateTexture(nil, "BACKGROUND")
+    W.ApplyUV(tab.activeBg, W.UV.listActive)
+    tab.activeBg:SetPoint("TOPLEFT", -2, 0)
+    tab.activeBg:SetPoint("BOTTOMRIGHT", 2, 0)
+    tab.activeBg:Hide()
     local hover = tab:CreateTexture(nil, "HIGHLIGHT")
-    hover:SetAllPoints(tab)
-    hover:SetTexture("Interface\\Buttons\\WHITE8X8")
-    hover:SetVertexColor(1, 1, 1, 0.05)
-    tab.marker = tab:CreateTexture(nil, "ARTWORK")
-    tab.marker:SetTexture("Interface\\Buttons\\WHITE8X8")
-    tab.marker:SetVertexColor(rgba(S.accent))
-    tab.marker:SetPoint("TOPLEFT", 0, 0)
-    tab.marker:SetPoint("BOTTOMLEFT", 0, 0)
-    tab.marker:SetWidth(2)
+    W.ApplyUV(hover, W.UV.listHover)
+    hover:SetPoint("TOPLEFT", -2, 0)
+    hover:SetPoint("BOTTOMRIGHT", 2, 0)
     local icon = tab:CreateTexture(nil, "ARTWORK")
     icon:SetSize(16, 16)
-    icon:SetPoint("LEFT", 12, 0)
+    icon:SetPoint("LEFT", 10, 0)
     icon:SetTexture(spec.icon or "Interface\\Icons\\INV_Misc_Gear_01")
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    tab.iconRim = tab:CreateTexture(nil, "OVERLAY")
+    W.ApplyUV(tab.iconRim, W.UV.slotRim)
+    tab.iconRim:SetSize(20, 20)
+    tab.iconRim:SetPoint("CENTER", icon, "CENTER", 0, 0)
+    tab.iconRim:SetVertexColor(0.88, 0.82, 0.72)
     tab.text = W.Text(tab, W.fonts.label)
     tab.text:SetPoint("LEFT", icon, "RIGHT", 8, 0)
-    tab.text:SetPoint("RIGHT", -20, 0)
+    tab.text:SetPoint("RIGHT", -18, 0)
     tab.text:SetHeight(20)
     tab.text:SetText(spec.title or spec.id)
     tab.dot = tab:CreateTexture(nil, "OVERLAY")
     tab.dot:SetTexture("Interface\\Buttons\\WHITE8X8")
     tab.dot:SetSize(5, 5)
-    tab.dot:SetPoint("RIGHT", -10, 0)
+    tab.dot:SetPoint("RIGHT", -8, 0)
     tab:SetScript("OnClick", function()
         PlaySound("igMainMenuOptionCheckBoxOn")
         selectModule(spec.id)
@@ -397,10 +414,12 @@ local function createTab(spec)
 end
 
 local function layoutSidebar()
-    local y = -6
+    local y = -4
     local needle = searchText
     local groupLabels = sidebar.groupLabels
+    local groupLines = sidebar.groupLines
     for _, label in pairs(groupLabels) do label:Hide() end
+    for _, line in pairs(groupLines) do line:Hide() end
     for _, tab in pairs(tabs) do tab:Hide() end
     local known = {}
     for _, group in ipairs(ui.Groups) do known[group.id] = true end
@@ -422,8 +441,17 @@ local function layoutSidebar()
                     end
                     label:SetText((group.title or ""):upper())
                     label:ClearAllPoints()
-                    label:SetPoint("TOPLEFT", 14, y - 10)
+                    label:SetPoint("TOPLEFT", 12, y - 8)
                     label:Show()
+                    local line = groupLines[group.id]
+                    if not line then
+                        line = W.Divider(sidebar.child)
+                        groupLines[group.id] = line
+                    end
+                    line:ClearAllPoints()
+                    line:SetPoint("TOPLEFT", 10, y - 22)
+                    line:SetPoint("RIGHT", sidebar.child, "RIGHT", -6, 0)
+                    line:Show()
                     y = y - 28
                 end
                 local tab = tabs[spec.id] or createTab(spec)
@@ -481,9 +509,7 @@ local function updateFooter()
 end
 
 ---------------------------------------------------------------------------------------------------
--- Resizing with the right mouse button: hold it on the header (or the corner grip) and drag;
--- right makes the window wider, down makes it taller. The top-left corner stays put. On release the
--- size is saved and, when the width changed, the pages are laid out again for the new width.
+-- Resizing with the right mouse button
 ---------------------------------------------------------------------------------------------------
 local sizing
 
@@ -499,6 +525,13 @@ local function limits()
     return MIN_WIDTH, max(MIN_WIDTH, min(MAX_WIDTH, screenW - 20)), MIN_HEIGHT, max(MIN_HEIGHT, min(MAX_HEIGHT, screenH - 20))
 end
 
+local function syncChromeSize(width, height)
+    if window.chromeArt then window.chromeArt:Update(width, height) end
+    if window.inner then
+        window.inner:Layout(width - INNER_LEFT - INNER_RIGHT, height - INNER_TOP - INNER_BOTTOM)
+    end
+end
+
 local function applySavedSize()
     local saved = ui.Settings().optionsSize
     local width, height = WIDTH, HEIGHT
@@ -508,6 +541,7 @@ local function applySavedSize()
     end
     window:SetWidth(width)
     window:SetHeight(height)
+    syncChromeSize(width, height)
 end
 
 local function pinTopLeft(left, top)
@@ -515,7 +549,6 @@ local function pinTopLeft(left, top)
     window:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
 end
 
--- Pages are laid out once for a width: after a width change they are built again.
 local function rebuildPages()
     local width = pageWidth(window:GetWidth())
     local stale = false
@@ -563,6 +596,7 @@ local function startSizing()
         if math.abs(width - window:GetWidth()) > 0.5 or math.abs(height - window:GetHeight()) > 0.5 then
             window:SetWidth(width)
             window:SetHeight(height)
+            syncChromeSize(width, height)
             for _, page in pairs(pages) do
                 if page.scroll and page:IsShown() then page.scroll:Update() end
             end
@@ -580,21 +614,32 @@ end
 local function createWindow()
     window = CreateFrame("Frame", "ForeverUIOptions", UIParent)
     window:SetSize(WIDTH, HEIGHT)
-    applySavedSize()
     window:SetFrameStrata("DIALOG")
     window:SetToplevel(true)
     window:SetClampedToScreen(true)
     window:EnableMouse(true)
     window:SetMovable(true)
-    W.Skin(window, S.window, S.border)
     window:Hide()
     tinsert(UISpecialFrames, window:GetName())
 
-    -- Header
+    local baseLevel = window:GetFrameLevel()
+    window.chromeArt = W.BuildBronzeChrome(window, CHROME_SCALE, true)
+    window.chrome = window.chromeArt.chrome
+    window.chromeArt:SetPortrait("Interface\\Icons\\INV_Misc_Gear_01")
+
+    local inner = W.InnerFrame(window, SIDEBAR)
+    inner:SetPoint("TOPLEFT", window, "TOPLEFT", INNER_LEFT, -INNER_TOP)
+    inner:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -INNER_RIGHT, INNER_BOTTOM)
+    window.inner = inner
+
+    applySavedSize()
+
+    -- Header bar (overlaps top bronze strip for dragging, resizing and title)
     local header = CreateFrame("Frame", nil, window)
-    header:SetPoint("TOPLEFT", 1, -1)
-    header:SetPoint("TOPRIGHT", -1, -1)
-    header:SetHeight(HEADER)
+    header:SetFrameLevel(baseLevel + 8)
+    header:SetPoint("TOPLEFT", 0, 0)
+    header:SetPoint("TOPRIGHT", 0, 0)
+    header:SetHeight(HEADER_BAR)
     header:EnableMouse(true)
     header:RegisterForDrag("LeftButton")
     header:SetScript("OnDragStart", function() window:StartMoving() end)
@@ -602,16 +647,9 @@ local function createWindow()
         window:StopMovingOrSizing()
         savePosition()
     end)
-    local headerLine = W.Line(header)
-    headerLine:SetHeight(1)
-    headerLine:SetPoint("BOTTOMLEFT", 0, 0)
-    headerLine:SetPoint("BOTTOMRIGHT", 0, 0)
     local brand = W.Text(header, W.fonts.title)
-    brand:SetPoint("LEFT", 18, 0)
-    brand:SetText("Forever |cffe8c27aUI|r")
-    local version = W.Text(header, W.fonts.small)
-    version:SetPoint("LEFT", brand, "RIGHT", 10, -1)
-    version:SetText("v" .. (GetAddOnMetadata(addonName, "Version") or "?"))
+    brand:SetPoint("CENTER", header, "TOP", 0, window.chromeArt.headerY)
+    brand:SetText("Forever |cffffd200UI|r")
 
     bindSizing(header)
     header:HookScript("OnEnter", function(self)
@@ -621,30 +659,28 @@ local function createWindow()
     end)
     header:HookScript("OnLeave", GameTooltip_Hide)
     window.sizeLabel = W.Text(header, W.fonts.heading)
-    window.sizeLabel:SetPoint("LEFT", version, "RIGHT", 14, 0)
+    window.sizeLabel:SetPoint("LEFT", brand, "RIGHT", 14, 0)
     window.sizeLabel:Hide()
 
-    local close = W.CloseButton(header, function() window:Hide() end)
-    close:SetPoint("RIGHT", -10, 0)
+    local close = W.CloseButton(window, function() window:Hide() end, 56 * CHROME_SCALE)
+    close:SetFrameLevel(baseLevel + 10)
+    close:SetPoint("TOPRIGHT", window, "TOPRIGHT", -2, 0)
+    window.closeButton = close
+
+    local subtitle = W.Text(header, W.fonts.small)
+    subtitle:SetPoint("TOPLEFT", window, "TOPLEFT", 66, -42)
+    subtitle:SetText("WoW Forever · v" .. (GetAddOnMetadata(addonName, "Version") or "?"))
 
     local search = CreateFrame("EditBox", nil, header)
     search:SetSize(220, 24)
-    search:SetPoint("RIGHT", close, "LEFT", -12, 0)
-    W.Skin(search, { 0, 0, 0, 0.35 }, S.border)
+    search:SetPoint("TOPRIGHT", window, "TOPRIGHT", -16, -37)
     search:SetFontObject(W.fonts.label)
     search:SetAutoFocus(false)
-    search:SetTextInsets(8, 8, 0, 0)
+    search:SetTextInsets(22, 22, 0, 0)
     local hint = W.Text(search, W.fonts.small)
-    hint:SetPoint("LEFT", 9, 0)
+    hint:SetPoint("LEFT", 23, 0)
     hint:SetText(L("Поиск настройки…", "Search settings…"))
-    search:SetScript("OnEscapePressed", function(self)
-        if (self:GetText() or "") ~= "" then self:SetText("") else self:ClearFocus() end
-    end)
-    search:SetScript("OnEnterPressed", search.ClearFocus)
-    search:SetScript("OnEditFocusGained", function(self) self:SetBackdropBorderColor(rgba(S.accent)) end)
-    search:SetScript("OnEditFocusLost", function(self) self:SetBackdropBorderColor(rgba(S.border)) end)
-    search:SetScript("OnTextChanged", function(self)
-        local text = self:GetText() or ""
+    local function applySearch(text)
         W.SetVisible(hint, text == "")
         searchText = W.Fold(text)
         local first = layoutSidebar()
@@ -654,63 +690,60 @@ local function createWindow()
         elseif current and pages[current] then
             pages[current]:Refresh()
         end
+    end
+    search:SetScript("OnEscapePressed", function(self)
+        if (self:GetText() or "") ~= "" then self:SetText("") else self:ClearFocus() end
     end)
+    search:SetScript("OnEnterPressed", search.ClearFocus)
+    search:SetScript("OnTextChanged", function(self) applySearch(self:GetText() or "") end)
+    W.StyleInput(search, true, function() applySearch("") end)
     window.search = search
 
-    -- Sidebar
+    -- Sidebar inside inner frame
     local side = CreateFrame("Frame", nil, window)
-    side:SetPoint("TOPLEFT", 1, -HEADER - 1)
-    side:SetPoint("BOTTOMLEFT", 1, FOOTER + 1)
-    side:SetWidth(SIDEBAR)
-    local sideBackground = side:CreateTexture(nil, "BACKGROUND")
-    sideBackground:SetAllPoints(side)
-    sideBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
-    sideBackground:SetVertexColor(rgba(S.sidebar))
-    local sideLine = W.Line(side)
-    sideLine:SetWidth(1)
-    sideLine:SetPoint("TOPRIGHT", 0, 0)
-    sideLine:SetPoint("BOTTOMRIGHT", 0, 0)
-    sidebar = W.Scroll(side, 6, 1)
-    sidebar:SetPoint("TOPLEFT", 0, -4)
-    sidebar:SetPoint("BOTTOMRIGHT", -8, 4)
-    sidebar.child:SetWidth(SIDEBAR - 8)
-    sidebar.groupLabels = {}
+    side:SetFrameLevel(baseLevel + 2)
+    side:SetPoint("TOPLEFT", inner, "TOPLEFT", 2, -2)
+    side:SetPoint("BOTTOMLEFT", inner, "BOTTOMLEFT", 2, 2)
+    side:SetWidth(SIDEBAR - 2)
+    sidebar = W.Scroll(side, 8, 2)
+    sidebar:SetPoint("TOPLEFT", 2, -14)
+    sidebar:SetPoint("BOTTOMRIGHT", -18, 14)
+    sidebar.child:SetWidth(SIDEBAR - 22)
+    sidebar.groupLabels, sidebar.groupLines = {}, {}
 
-    -- Content
+    -- Content inside inner frame
     local content = CreateFrame("Frame", nil, window)
-    content:SetPoint("TOPLEFT", side, "TOPRIGHT", 0, 0)
-    content:SetPoint("BOTTOMRIGHT", -1, FOOTER + 1)
+    content:SetFrameLevel(baseLevel + 2)
+    content:SetPoint("TOPLEFT", inner, "TOPLEFT", SIDEBAR + 2, -2)
+    content:SetPoint("BOTTOMRIGHT", inner, "BOTTOMRIGHT", -2, 2)
     window.content = content
 
     -- Footer
     local footer = CreateFrame("Frame", nil, window)
-    footer:SetPoint("BOTTOMLEFT", 1, 1)
-    footer:SetPoint("BOTTOMRIGHT", -1, 1)
+    footer:SetFrameLevel(baseLevel + 2)
+    footer:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", INNER_LEFT, 10)
+    footer:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -INNER_RIGHT, 10)
     footer:SetHeight(FOOTER)
-    local footerLine = W.Line(footer)
-    footerLine:SetHeight(1)
-    footerLine:SetPoint("TOPLEFT", 0, 0)
-    footerLine:SetPoint("TOPRIGHT", 0, 0)
     footer.status = W.Text(footer, W.fonts.small)
-    footer.status:SetPoint("LEFT", 16, 0)
-    footer.status:SetPoint("RIGHT", footer, "RIGHT", -330, 0)
+    footer.status:SetPoint("LEFT", 4, 0)
+    footer.status:SetPoint("RIGHT", footer, "RIGHT", -334, 0)
     footer.status:SetHeight(16)
-    footer.reload = W.Button(footer, L("Перезагрузить UI", "Reload UI"), 140, ReloadUI, 22)
-    footer.reload:SetPoint("RIGHT", -12, 0)
-    footer.reload.text:SetTextColor(1, 0.7, 0.45)
+    footer.reload = W.Button(footer, L("Перезагрузить UI", "Reload UI"), 140, ReloadUI, 24)
+    footer.reload:SetPoint("RIGHT", -18, 0)
+    footer.reload.text:SetTextColor(1, 0.75, 0.45)
     footer.edit = W.Button(footer, L("Режим редактирования", "Edit Mode"), 170, function()
         if ui.EditMode and ui.EditMode.Open then
             window:Hide()
             ui.EditMode.Open()
         end
-    end, 22)
+    end, 24)
     footer.edit:SetPoint("RIGHT", footer.reload, "LEFT", -8, 0)
     window.footer = footer
 
     local grip = CreateFrame("Button", nil, window)
     grip:SetSize(14, 14)
-    grip:SetPoint("BOTTOMRIGHT", -2, 2)
-    grip:SetFrameLevel(footer:GetFrameLevel() + 5)
+    grip:SetPoint("BOTTOMRIGHT", -8, 8)
+    grip:SetFrameLevel(baseLevel + 10)
     grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
     grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
     grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
@@ -723,6 +756,7 @@ local function createWindow()
 
     window:SetScript("OnShow", function(self)
         self:SetScale((ui.Settings().optionsScale or 100) / 100)
+        syncChromeSize(self:GetWidth() or WIDTH, self:GetHeight() or HEIGHT)
         updateFooter()
         W.SetVisible(footer.edit, ui.EditMode ~= nil)
         if current and pages[current] then pages[current]:Refresh() end
@@ -775,7 +809,6 @@ ui.RegisterCallback("ModuleReset", function(id)
     if pages[id] and window and window:IsShown() then pages[id]:Refresh() end
     if tabs[id] then paintTab(tabs[id]) end
 end, "OptionsFrameReset")
--- A module switched the table its page reads (e.g. raid frames: another group type): redraw it.
 ui.RegisterCallback("OptionsRefresh", function(id)
     if pages[id] and window and window:IsShown() then pages[id]:Refresh() end
 end, "OptionsFrameRefresh")
@@ -783,7 +816,6 @@ ui.RegisterCallback("ReloadPending", updateFooter, "OptionsFrameReload")
 ui.RegisterCallback("CombatQueued", updateFooter, "OptionsFrameCombat")
 ui.RegisterCallback("CombatQueueFlushed", updateFooter, "OptionsFrameFlush")
 ui.RegisterCallback("ModuleRegistered", function(id)
-    -- A schema registered after the page was built (late addon) replaces the stale page.
     if pages[id] then
         pages[id]:Hide()
         pages[id] = nil
@@ -823,7 +855,6 @@ SlashCmdList.FOREVERUI = function(input)
         StaticPopup_Show("FOREVERUI_RESET_ALL")
         return
     end
-    -- The setup wizard (Setup/Wizard.lua): /fui install, /fui copy.
     if (command == "install" or command == "setup" or command == "copy") and ui.Setup and ui.Setup.Open then
         ui.Setup.Open(command == "copy" and "copy" or "full")
         return
