@@ -170,6 +170,7 @@ ui.UnitFrames = { ApplyHealthColor = recorder("health"), ApplyBarFill = recorder
     ApplyColors = recorder("colors"), ApplyVisibility = recorder("visibility") }
 ui.CastBar = { stock = { width = 195, height = 13, scale = 100 }, Apply = recorder("cast") }
 ui.Bags = { Relayout = recorder("relayout"), Refresh = recorder("refresh") }
+ui.BagAero = { Apply = recorder("bagAero"), Restore = recorder("bagAeroRestore") }
 ui.Minimap = { Layout = recorder("minimap") }
 ui.Performance = { Apply = recorder("perf") }
 ui.Merchant = { Apply = recorder("merchant") }
@@ -254,6 +255,25 @@ local addon = ui.GetModule("addonbar")
 assert(not ui.IsOptionAvailable(addon, addon.byKey.mapButtonsScale), "bar settings need the ring off")
 ui.SetOption("addonbar", "mapButtonsCircle", false)
 assert(ui.IsOptionAvailable(addon, addon.byKey.mapButtonsScale))
+
+local bagsSpec = ui.GetModule("bags")
+assert(db.bagsTheme == "forever" and db.bagsAeroPreset == "aqua" and db.bagsAeroBubbles == true and db.bagsAeroAlpha == 88,
+    "Aero bag defaults are written")
+assert(ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsTheme))
+assert(not ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsAeroPreset), "Aero palette hidden until Aero theme is chosen")
+assert(not ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsAeroBubbles))
+assert(not ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsAeroAlpha))
+local beforeAero = applied.bagAero or 0
+ui.SetOption("bags", "bagsTheme", "aero")
+assert(applied.bagAero == beforeAero + 1 and ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsAeroPreset)
+    and ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsAeroBubbles)
+    and ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsAeroAlpha), "selecting Aero enables Aero sub-options and applies live")
+ui.SetOption("bags", "bagsAeroPreset", "midnight")
+ui.SetOption("bags", "bagsAeroAlpha", 75)
+assert(db.bagsAeroPreset == "midnight" and db.bagsAeroAlpha == 75 and applied.bagAero == beforeAero + 3)
+ui.SetOption("bags", "bagsTheme", "forever")
+assert(applied.bagAero == beforeAero + 4 and not ui.IsOptionAvailable(bagsSpec, bagsSpec.byKey.bagsAeroPreset),
+    "switching back to Forever applies live and disables Aero sub-options")
 
 -- Protected modules queue their apply until combat ends.
 combat = true

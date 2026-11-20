@@ -43,6 +43,7 @@ Merchant.lua
 Enchanting.lua
 SkinExtras.lua
 WindowSkin.lua
+BagAero.lua
 CastBarOptions.lua
 CombatMeterData.lua
 CombatMeter.lua
