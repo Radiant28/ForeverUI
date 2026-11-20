@@ -903,25 +903,68 @@ assert(casterView.cast:IsShown() and casterView.cast.text.text == "Огненн�
 GetSpellInfo = spellInfo
 cfg.cast = castWas
 
--- In combat only the units fighting me or my group stay.
+-- In combat players and the units fighting me or my group stay; other mobs stay near and fade out further away.
+assert(cfg.combatNearDepth == 40 and cfg.combatKeepFriends == nil, "combat radius default, old key dropped")
 cfg.combatOnlyEngaged = true
 inCombat = true
+caster.depth = 20
 tick()
-assert(not casterView:IsShown(), "a unit nobody fights is hidden in combat")
+assert(casterView:IsShown(), "a near mob nobody fights stays in combat")
+local drawn = casterView.drawAlpha
+caster.depth = 44
+for _ = 1, 30 do tick() end
+assert(casterView:IsShown() and casterView.drawAlpha < drawn and casterView.drawAlpha > 0,
+    "a mob in the fade band is fainter: " .. tostring(casterView.drawAlpha))
+caster.depth = 100
+tick()
+assert(not casterView:IsShown(), "a distant mob nobody fights is hidden in combat")
+caster.depth = 0
+tick()
+assert(casterView:IsShown(), "a plate without depth counts as near")
+caster.depth = 100
 driver.scripts.OnEvent(driver, "COMBAT_LOG_EVENT_UNFILTERED", 0, "SWING_DAMAGE", "0x0000000000000001", "Me", 0x511,
     "0xF130000000000123", "Caster", 0xa48)
 tick()
-assert(casterView:IsShown(), "a unit I hit stays")
-cfg.combatKeepFriends = true
+assert(casterView:IsShown(), "a distant unit I hit stays")
 inCombat = false
 driver.scripts.OnEvent(driver, "PLAYER_REGEN_ENABLED")
 inCombat = true
 tick()
 assert(not casterView:IsShown(), "combat memory cleared when combat ends")
+-- A distant mob fighting my group stays.
+driver.scripts.OnEvent(driver, "COMBAT_LOG_EVENT_UNFILTERED", 0, "SWING_DAMAGE", "0xF130000000000123", "Caster", 0xa48,
+    "0x0000000000000002", "Friend", 0x512)
+tick()
+assert(casterView:IsShown(), "a distant mob hitting my party stays")
+inCombat = false
+driver.scripts.OnEvent(driver, "PLAYER_REGEN_ENABLED")
+inCombat = true
+-- Distant players always stay: friendly (blue bar), hostile (class colour), or a known name.
+local health = caster.children[1]
+health:SetStatusBarColor(0, 0, 1)
+tick()
+assert(casterView:IsShown(), "a distant friendly player stays")
+local rival = plate("Соперник")
+rival.children[1]:SetStatusBarColor(0.41, 0.8, 0.94)
+rival.depth = 100
+tick()
+assert(rival.children[3]:IsShown(), "a distant hostile player with a class-coloured bar stays")
+rival:Hide()
+-- A distant friendly NPC follows the distance rule.
+local friendlyNPC = plate("Стражник")
+friendlyNPC.children[1]:SetStatusBarColor(0, 1, 0)
+friendlyNPC.depth = 100
+tick()
+assert(not friendlyNPC.children[3]:IsShown(), "a distant friendly NPC is hidden in combat")
+friendlyNPC.depth = 20
+tick()
+assert(friendlyNPC.children[3]:IsShown(), "a near friendly NPC stays")
+friendlyNPC:Hide()
 inCombat = false
 tick()
 assert(casterView:IsShown())
-cfg.combatOnlyEngaged, cfg.combatKeepFriends = false, false
+cfg.combatOnlyEngaged = false
+caster.depth = 20
 caster:Hide()
 tick()
 

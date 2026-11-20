@@ -305,8 +305,7 @@ local general = {
     {"hideFriendlyInDungeons", "Скрывать дружественных NPC в подземельях и рейдах", "Hide friendly NPCs in dungeons and raids"},
     {"hideFullHealthOutOfCombat", "Скрывать мобов с полным здоровьем вне боя", "Hide full-health mobs out of combat"},
     {"headlineOutOfCombat", "Только имя для обычных мобов вне боя", "Name only for normal mobs out of combat"},
-    {"combatOnlyEngaged", "В бою только противники, с которыми идёт бой", "In combat only the enemies you fight"},
-    {"combatKeepFriends", "В бою оставлять союзников", "Keep allies in combat"},
+    {"combatOnlyEngaged", "В бою скрывать далёких мобов, не участвующих в бою", "In combat hide distant mobs nobody fights"},
     {"crowdSaver", "Экономный режим при скоплении", "Saver mode when crowded"},
     {"fadeDistance", "Затухание по дистанции", "Fade by distance"},
     {"showEliteDragon", "Показывать элитного дракона", "Show elite dragon"},
@@ -330,6 +329,11 @@ local function Build(panel, applyCVars, defaults)
     for _, row in ipairs(general) do
         ui.Checkbox(content, row[1], L(row[2], row[3]), y, defaults[row[1]], wfn.Changed, db)
         y = y - 24
+        if row[1] == "combatOnlyEngaged" then
+            ui.Slider(content, "combatNearDepth", L("Радиус видимости мобов в бою", "Mob radius in combat"), y - 18,
+                {5, 200, 1, defaults.combatNearDepth}, wfn.Changed, nil, db)
+            y = y - 45
+        end
     end
     ui.Checkbox(content, "stacking", L("Нативное размещение в стек", "Native stacking"), y, defaults.stacking, applyCVars, db)
     local unavailable = L(" (недоступно в клиенте)", " (unavailable on this client)")
@@ -510,6 +514,14 @@ local function RegisterSchema(applyCVars, defaults)
     }
     for _, row in ipairs(general) do
         visibility[#visibility + 1] = { "toggle", row[1], L(row[2], row[3]), default = defaults[row[1]] }
+        if row[1] == "combatOnlyEngaged" then
+            visibility[#visibility].tooltip = L("В бою всегда видны цель, игроки и мобы, которые бьются с вами или с группой. Остальные мобы видны рядом и плавно гаснут дальше радиуса.",
+                "In combat the target, players and the mobs fighting you or your group always stay. Other mobs stay near you and fade out beyond the radius.")
+            visibility[#visibility + 1] = { "range", "combatNearDepth", L("Радиус видимости мобов в бою", "Mob radius in combat"),
+                min = 5, max = 200, step = 1, default = defaults.combatNearDepth, depends = "combatOnlyEngaged",
+                tooltip = L("Расстояние от камеры, в пределах которого мобы видны в бою полностью; дальше они гаснут и исчезают. При отдалении камеры радиус в мире уменьшается.",
+                    "Distance from the camera within which mobs stay fully visible in combat; beyond it they fade out. Zooming the camera out shrinks the radius in the world.") }
+        end
     end
     visibility[#visibility + 1] = { "range", "crowdThreshold", L("Скопление: больше плашек, чем", "Crowded above plates"),
         min = 5, max = 60, step = 1, default = defaults.crowdThreshold, depends = "crowdSaver",
