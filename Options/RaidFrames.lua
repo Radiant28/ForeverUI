@@ -377,12 +377,12 @@ local function buildKinds(parent, width)
     refresh = function()
         local view, live = rf.ViewKind(), rf.LiveKind()
         for kind, button in pairs(buttons) do
-            local label = rf.kindLabels[kind] .. (kind == live and " •" or "")
+            local label = rf.kindLabels[kind] .. (kind == live and " *" or "")
             button:SetText(label)
             button.text:SetTextColor(W.rgba(kind == view and S.accentText or S.text))
         end
-        local text = (L("Настраивается: %s. Сейчас действует: %s (• — текущий тип группы).",
-            "Editing: %s. In force now: %s (• marks the current group type)."))
+        local text = (L("Настраивается: %s. Сейчас действует: %s (* — текущий тип группы).",
+            "Editing: %s. In force now: %s (* marks the current group type)."))
             :format(rf.kindLabels[view], rf.kindLabels[live])
         if view ~= live then
             text = text .. " " .. L("Пока открыта эта страница, на месте группы показаны шаблоны этого профиля.",

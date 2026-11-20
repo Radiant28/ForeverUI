@@ -44,9 +44,9 @@ ui.RegisterOptions("labels", {
         { title = L("Окно персонажа", "Character sheet"), options = {
             { "toggle", "equipLabels", L("Подписи на экипировке", "Labels on equipment"), default = true, apply = apply },
         } },
-        labelSection("level", L("Персонаж · уровень предмета", "Character · item level")),
-        labelSection("durability", L("Персонаж · прочность", "Character · durability")),
-        labelSection("bagsLevel", L("Сумки · уровень предмета", "Bags · item level")),
-        labelSection("bagsDurability", L("Сумки · прочность", "Bags · durability")),
+        labelSection("level", L("Персонаж: уровень предмета", "Character: item level")),
+        labelSection("durability", L("Персонаж: прочность", "Character: durability")),
+        labelSection("bagsLevel", L("Сумки: уровень предмета", "Bags: item level")),
+        labelSection("bagsDurability", L("Сумки: прочность", "Bags: durability")),
     },
 })

@@ -1182,7 +1182,7 @@ function wfn.DebugClasses()
             local guid = NativePlateGUID(plate)
             local api = NozdorAction and NozdorAction.GetNameplateClass and select(2, pcall(NozdorAction.GetNameplateClass, plate))
             local native = guid and type(NozdorActionNative) == "function" and select(2, pcall(NozdorActionNative, "unitinfo", guid))
-            wfn.Print(("%s · guid %s · kind %s · NozdorAction %s · unitinfo %s · class %s"):format(view.identityName or "?",
+            wfn.Print(("%s — guid %s, kind %s, NozdorAction %s, unitinfo %s, class %s"):format(view.identityName or "?",
                 tostring(guid), tostring(view.kind), tostring(api), tostring(native), tostring(view.playerClass)))
         end
     end

@@ -426,7 +426,7 @@ local function Build(panel, applyCVars, defaults)
         local spec = selected and wfn.specs[selected]
         boxButton:SetText(spec and spec.label or L("Нет боксов", "No boxes"))
         local x, y = API:BoxOffset(selected)
-        boxLabel:SetText(spec and (spec.owner .. " · " .. spec.side .. " · " .. x .. ", " .. y) or "")
+        boxLabel:SetText(spec and (spec.owner .. " / " .. spec.side .. " — " .. x .. ", " .. y) or "")
         enabledButton:SetText(API:IsBoxEnabled(selected) and L("Включён", "Enabled") or L("Выключен", "Disabled"))
         local _, on = API:BoxPlaces(selected)
         for i, place in ipairs(wfn.places) do
@@ -437,7 +437,7 @@ local function Build(panel, applyCVars, defaults)
         for i, row in ipairs(choices) do
             local value = db[row[1]]
             if ru then for j, option in ipairs(row[4]) do if option == value then value = row[5][j]; break end end end
-            choiceButtons[i]:SetText(L(row[2], row[3]) .. " · " .. value)
+            choiceButtons[i]:SetText(L(row[2], row[3]) .. ": " .. value)
         end
     end
     wfn.refreshOptions()
@@ -475,7 +475,7 @@ local function BuildBoxes(content)
         local spec = selected and wfn.specs[selected]
         boxButton:SetText(spec and spec.label or L("Нет боксов", "No boxes"))
         local x, offsetY = API:BoxOffset(selected)
-        boxLabel:SetText(spec and (spec.owner .. " · " .. spec.side .. " · " .. x .. ", " .. offsetY) or "")
+        boxLabel:SetText(spec and (spec.owner .. " / " .. spec.side .. " — " .. x .. ", " .. offsetY) or "")
         enabledButton:SetText(API:IsBoxEnabled(selected) and L("Включён", "Enabled") or L("Выключен", "Disabled"))
         local _, on = API:BoxPlaces(selected)
         for i, place in ipairs(wfn.places) do
@@ -698,7 +698,7 @@ function wfn.RecordPerf(start, count)
     scans, total, worst, frames = scans + 1, total + cost, math.max(worst, cost), count
     local now = GetTime()
     if now - since < 1 then return end
-    report = (L("Плашки %d · циклы %d · среднее %.3f мс · пик %.3f мс", "Plates %d · scans %d · mean %.3f ms · peak %.3f ms"))
+    report = (L("Плашки %d, циклы %d, среднее %.3f мс, пик %.3f мс", "Plates %d, scans %d, mean %.3f ms, peak %.3f ms"))
         :format(frames, scans, total / scans, worst)
     perf.text:SetText(report)
     scans, total, worst, since = 0, 0, 0, now
@@ -726,20 +726,20 @@ function wfn.RegisterSlash()
         elseif cmd == "boxes" then
             for _, id in ipairs(wfn.order) do
                 local spec = wfn.specs[id]
-                wfn.Print(id .. " · " .. spec.owner .. " · " .. spec.side .. (API:IsBoxEnabled(id) and " [+]" or " [-]"))
+                wfn.Print(id .. " — " .. spec.owner .. " / " .. spec.side .. (API:IsBoxEnabled(id) and " [+]" or " [-]"))
             end
         elseif (cmd == "perf" or cmd == "cost") and arg == "dump" then wfn.Print(report)
         elseif cmd == "perf" or cmd == "cost" then TogglePerf()
         elseif cmd == "class" and wfn.DebugClasses then wfn.DebugClasses()
         elseif cmd == "check" then
             local hostVersion = GetAddOnMetadata and GetAddOnMetadata(addonName, "Version")
-            wfn.Print(L("Сканер WorldFrame активен", "WorldFrame scanner active") .. " · " .. API.Version
-                .. (hostVersion and " · Forever UI " .. hostVersion or ""))
+            wfn.Print(L("Сканер WorldFrame активен", "WorldFrame scanner active") .. " — " .. API.Version
+                .. (hostVersion and " (Forever UI " .. hostVersion .. ")" or ""))
             local unavailable = L("недоступно", "unavailable")
             wfn.Print("nameplateAllowOverlap=" .. (GetCVar("nameplateAllowOverlap") or unavailable)
-                .. " · nameplateOverlapV=" .. (GetCVar("nameplateOverlapV") or unavailable)
-                .. " · nameplateMaxDistance=" .. (GetCVar("nameplateMaxDistance") or GetCVar("nameplateDistance") or unavailable))
+                .. ", nameplateOverlapV=" .. (GetCVar("nameplateOverlapV") or unavailable)
+                .. ", nameplateMaxDistance=" .. (GetCVar("nameplateMaxDistance") or GetCVar("nameplateDistance") or unavailable))
         elseif cmd == "" then wfn.OpenOptions()
-        else wfn.Print("/wfn · preview [friend|enemy] · boxes · check · class · perf [dump]") end
+        else wfn.Print("/wfn: preview [friend|enemy], boxes, check, class, perf [dump]") end
     end
 end

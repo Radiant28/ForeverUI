@@ -157,8 +157,8 @@ local function build(parent, width)
     local hintsGrid = su.Grid(parent, 0, y, width, 2)
     hintsGrid:Header(L("Панель подсказок клавиш", "Key binding hint panel"))
     hintsGrid:Add({ "toggle", L("Подсказки назначения клавиш", "Key binding hints"),
-        tooltip = L("Также: /fuikeys или клавиша в «Назначении клавиш» → Forever UI.",
-            "Also: /fuikeys or a key in Key Bindings → Forever UI.") }, h("enabled", true))
+        tooltip = L("Также: /fuikeys или клавиша в «Назначении клавиш» -> Forever UI.",
+            "Also: /fuikeys or a key in Key Bindings -> Forever UI.") }, h("enabled", true))
     hintsGrid:Add({ "range", L("Прозрачность панели", "Panel opacity"), min = 0.1, max = 1, step = 0.05 }, h("alpha", 1))
     hintsGrid:Add({ "select", L("Когда показывать", "When to show"), values = {
         { "always", L("Всегда", "Always") }, { "group", L("В группе или рейде", "In a party or raid") },

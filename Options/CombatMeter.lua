@@ -53,7 +53,7 @@ ui.RegisterOptions("meter", {
                 { "full", L("Полностью (1234567)", "Full (1234567)") },
                 { "tens", L("Без единиц (1234570)", "No ones (1234570)") },
                 { "hundreds", L("Без десятков (1234600)", "No tens (1234600)") },
-                { "short", L("Сокращённо (1,2м · 4,3к)", "Short (1.2m · 4.3k)") } } },
+                { "short", L("Сокращённо (1,2м / 4,3к)", "Short (1.2m / 4.3k)") } } },
             { "range", "meterDecimals", L("Цифр после запятой", "Decimal places"), min = 0, max = 2, step = 1, default = 1,
                 tooltip = L("Для «в секунду» и сокращённых чисел.", "For per-second and short values.") },
             { "toggle", "meterTrimZeros", L("Убирать нули после запятой", "Drop trailing zeros"), default = true },

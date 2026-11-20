@@ -446,7 +446,7 @@ function CC.RefreshHints()
         hints.title:SetFont(font, size, "OUTLINE")
         hints.title:SetTextColor(keyColor[1], keyColor[2], keyColor[3])
         hints.title:SetText(L("Назначенные клавиши", "Key bindings") .. (data().useCommon and ""
-            or (" · " .. L("таланты ", "spec ") .. Suite.TalentGroup())))
+            or (" — " .. L("таланты ", "spec ") .. Suite.TalentGroup())))
         hints.title:Show()
         top = top + size + 6
     else
