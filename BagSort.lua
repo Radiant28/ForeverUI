@@ -78,6 +78,9 @@ local groupOf = {}
 for group, names in pairs(GROUP_CLASSES) do
     for _, name in ipairs(names) do groupOf[name] = group end
 end
+-- Item level order by group (BagSortPlan `level`): resources by tier inside the block, consumables by tier
+-- inside their subclass; highest item level first, then quality.
+local LEVEL_ORDER = { [2] = 1, [4] = 2 }
 local GEM_CLASS = { Gem = true, ["Самоцветы"] = true, ["Самоцвет"] = true }
 
 -- Resource blocks by trade goods subclass (enUS / ruRU); ore and bars share one subclass, so one block.
@@ -184,6 +187,7 @@ local function itemInfo(id)
         junk = quality == 0,
         group = group,
         block = block,
+        level = LEVEL_ORDER[group],
         classRank = class and classRank[class] or UNKNOWN_CLASS,
         subclass = subclass or "",
         equipRank = equipRank[equipLoc or ""] or 99,
