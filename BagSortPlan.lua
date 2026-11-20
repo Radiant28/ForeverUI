@@ -9,6 +9,8 @@ local _, ui = ...
 -- info(itemID) returns a record: family, maxStack, isBag, pin, group, block, classRank, subclass, equipRank,
 --   quality, ilvl, name (all present; the same table for the same id while cached). group: the order of groups in
 --   a bag; block: a block inside a group (resources). Items lie one after another, free slots at the end.
+--   Optional level: 1 = item level (high first), then quality, right after the block (resources); 2 = the same
+--   after class and subclass (consumables); nil = class, subclass, slot, quality, item level.
 -- Queue Q: Q.n moves; move k = PickupContainerItem(src) then PickupContainerItem(dst), with the expected
 --   contents before the move (sid/scount at src, did/dcount at dst; did == false means empty).
 
@@ -96,8 +98,18 @@ local function itemBefore(a, b)
         if ra.pin ~= rb.pin then return ra.pin < rb.pin end
         if ra.group ~= rb.group then return ra.group < rb.group end
         if ra.block ~= rb.block then return ra.block < rb.block end
+        -- Same group here, so both records carry the same `level` rule.
+        local level = ra.level
+        if level == 1 then -- resources: tiers inside the block, highest item level first
+            if ra.ilvl ~= rb.ilvl then return ra.ilvl > rb.ilvl end
+            if ra.quality ~= rb.quality then return ra.quality > rb.quality end
+        end
         if ra.classRank ~= rb.classRank then return ra.classRank < rb.classRank end
         if ra.subclass ~= rb.subclass then return ra.subclass < rb.subclass end
+        if level == 2 then -- consumables: tiers inside the subclass (potions, food...), highest first
+            if ra.ilvl ~= rb.ilvl then return ra.ilvl > rb.ilvl end
+            if ra.quality ~= rb.quality then return ra.quality > rb.quality end
+        end
         if ra.equipRank ~= rb.equipRank then return ra.equipRank < rb.equipRank end
         if ra.quality ~= rb.quality then return ra.quality > rb.quality end
         if ra.ilvl ~= rb.ilvl then return ra.ilvl > rb.ilvl end

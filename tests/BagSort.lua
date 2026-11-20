@@ -33,20 +33,26 @@ local DB = {
     [3] = { "Сапоги", "Доспехи", "Латы", 3, 200, 1, "INVTYPE_FEET", 0 },
     [10] = { "Золотой клевер", "Хозяйственные товары", "Трава", 1, 75, 20, "", 32 },
     [11] = { "Личиющий цветок", "Хозяйственные товары", "Трава", 1, 75, 20, "", 32 },
+    [12] = { "Ледошип", "Хозяйственные товары", "Трава", 1, 80, 20, "", 32 },
+    [13] = { "Мироцвет", "Хозяйственные товары", "Трава", 1, 60, 20, "", 32 },
     [20] = { "Саронитовая руда", "Хозяйственные товары", "Металл и камень", 1, 77, 20, "", 1024 },
     [30] = { "Хризопраз", "Самоцветы", "Простые", 2, 70, 20, "", 512 },
+    [31] = { "Сапфир", "Самоцветы", "Синие", 3, 80, 20, "", 512 },
+    [32] = { "Рубин", "Самоцветы", "Красные", 2, 80, 20, "", 512 },
     [40] = { "Двойной реагент", "Хозяйственные товары", "Другое", 1, 70, 20, "", 32 + 1024 },
     [50] = { "Стрела", "Боеприпасы", "Стрелы", 1, 80, 200, "INVTYPE_AMMO", 1 },
     [60] = { "Осколок души", "Разное", "Реагент", 1, 1, 1, "", 4 },
     [70] = { "Сломанный клык", "Разное", "Хлам", 0, 1, 10, "", 0 },
     [71] = { "Порванный мех", "Разное", "Хлам", 0, 1, 10, "", 0 },
     [80] = { "Зелье", "Расходуемые", "Зелья", 1, 80, 20, "", 0 },
+    [81] = { "Слабое зелье", "Расходуемые", "Зелья", 1, 70, 20, "", 0 },
+    [82] = { "Хлеб", "Расходуемые", "Еда", 1, 80, 20, "", 0 },
     [90] = { "Сумка травника", "Сумки", "Сумка травника", 2, 70, 1, "INVTYPE_BAG", 32 },
     [4] = { "Ржавый меч", "Оружие", "Мечи", 0, 5, 1, "INVTYPE_WEAPON", 0 },
     [100] = { "Рецепт: зелье", "Рецепты", "Алхимия", 2, 70, 1, "", 0 },
     [110] = { "Письмо", "Задания", "Задания", 1, 1, 1, "", 0 },
 }
-local ALL = { 6948, 1, 2, 3, 4, 10, 11, 20, 30, 40, 50, 60, 70, 71, 80, 90, 100, 110 }
+local ALL = { 6948, 1, 2, 3, 4, 10, 11, 12, 13, 20, 30, 31, 32, 40, 50, 60, 70, 71, 80, 81, 82, 90, 100, 110 }
 
 local classRank = { ["Оружие"] = 1, ["Доспехи"] = 2, ["Сумки"] = 3, ["Расходуемые"] = 4,
     ["Хозяйственные товары"] = 6, ["Боеприпасы"] = 7, ["Самоцветы"] = 10, ["Разное"] = 12 }
@@ -63,6 +69,8 @@ local function groupOf(id)
     if group ~= 2 then return group, 0 end
     return group, d[2] == "Самоцветы" and 7 or blockRank[d[3]] or 10
 end
+-- Item level order: 1 resources (inside the block), 2 consumables (inside the subclass).
+local levelRank = { [2] = 1, [4] = 2 }
 local infoCache = {}
 local function info(id)
     local r = infoCache[id]
@@ -70,7 +78,7 @@ local function info(id)
     local d = DB[id]
     local group, block = groupOf(id)
     r = { family = d[8], maxStack = d[6], isBag = d[7] == "INVTYPE_BAG", pin = id == 6948 and 1 or 999,
-        group = group, block = block, classRank = classRank[d[2]] or 15, subclass = d[3],
+        group = group, block = block, level = levelRank[group], classRank = classRank[d[2]] or 15, subclass = d[3],
         equipRank = equipRank[d[7]] or 99, quality = d[4], ilvl = d[5], name = d[1] }
     infoCache[id] = r
     return r
@@ -366,6 +374,17 @@ do
     runSort(S2, 1, { reverse = true })
     check(idsAt(S2, { [6948] = 8, [1] = 7, [80] = 6 }), "case 9: mirrored from the last slot without gaps")
 end
+-- 9f. Item level: resources by tier inside the block (quality before gem colour), consumables inside the subclass.
+do
+    local S = newState({ { size = 16 } })
+    put(S, 1, 81, 3) put(S, 2, 13, 4) put(S, 3, 30, 2) put(S, 4, 80, 1) put(S, 5, 11, 5) put(S, 6, 32, 1)
+    put(S, 7, 82, 6) put(S, 8, 12, 2) put(S, 9, 31, 1) put(S, 10, 10, 7)
+    local passes, _, fails = runSort(S, 1, {})
+    check(fails == 0 and passes <= 2, "case 9f: sorted")
+    check(idsAt(S, { [12] = 1, [10] = 2, [11] = 3, [13] = 4 }), "case 9f: herbs 80, 75, 75, 60")
+    check(idsAt(S, { [31] = 5, [32] = 6, [30] = 7 }), "case 9f: gems 80 blue quality, 80 green, 70")
+    check(idsAt(S, { [82] = 8, [80] = 9, [81] = 10 }), "case 9f: food, then potions 80, 70")
+end
 -- 9e. Profession bags keep their priority; blocks inside them follow each other too.
 do
     local S = newState({ { size = 4 }, { size = 8, family = 1024 } })
@@ -612,6 +631,7 @@ for _, id in ipairs(ALL) do
     local r, group, block = B.ItemInfo(id), groupOf(id)
     check(r.group == group and r.block == block, ("item groups: %d is %s/%s, want %d/%d"):format(id,
         tostring(r.group), tostring(r.block), group, block))
+    check(r.level == levelRank[group], ("item level order: %d is %s"):format(id, tostring(r.level)))
 end
 local function worldTotals()
     local t = {}
