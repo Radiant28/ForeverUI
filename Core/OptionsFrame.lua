@@ -502,8 +502,8 @@ local function updateFooter()
             "Some changes take effect after a UI reload."))
         footer.status:SetTextColor(1, 0.62, 0.40)
     else
-        footer.status:SetText(L("Изменения применяются сразу · Shift + колесо — точная настройка · ПКМ по заголовку — размер окна",
-            "Changes apply instantly · Shift + wheel fine-tunes · right drag the header to resize"))
+        footer.status:SetText(L("Изменения применяются сразу; Shift + колесо — точная настройка; ПКМ по заголовку — размер окна",
+            "Changes apply instantly; Shift + wheel fine-tunes; right drag the header to resize"))
         footer.status:SetTextColor(rgba(S.muted))
     end
 end
@@ -601,7 +601,7 @@ local function startSizing()
                 if page.scroll and page:IsShown() then page.scroll:Update() end
             end
         end
-        window.sizeLabel:SetText(("%d × %d"):format(floor(width + 0.5), floor(height + 0.5)))
+        window.sizeLabel:SetText(("%d x %d"):format(floor(width + 0.5), floor(height + 0.5)))
     end)
 end
 
@@ -669,7 +669,7 @@ local function createWindow()
 
     local subtitle = W.Text(header, W.fonts.small)
     subtitle:SetPoint("TOPLEFT", window, "TOPLEFT", 66, -42)
-    subtitle:SetText("WoW Forever · v" .. (GetAddOnMetadata(addonName, "Version") or "?"))
+    subtitle:SetText("WoW Forever — v" .. (GetAddOnMetadata(addonName, "Version") or "?"))
 
     local search = CreateFrame("EditBox", nil, header)
     search:SetSize(220, 24)

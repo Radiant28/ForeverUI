@@ -593,7 +593,7 @@ local function updateRepeat()
         end
         reButton:Enable()
     else
-        reButton:SetText((L("Повторить ×%d", "Repeat ×%d")):format(repeatCount()))
+        reButton:SetText((L("Повторить x%d", "Repeat x%d")):format(repeatCount()))
         if index and verb then reButton:Enable() else reButton:Disable() end
     end
 end

@@ -75,8 +75,8 @@ panel.text = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 panel.text:SetPoint("TOP", panel.title, "BOTTOM", 0, -6)
 panel.text:SetWidth(440)
 panel.text:SetText(L("Наведите курсор на ячейку и нажмите клавишу, кнопку мыши или колесо (можно с Shift/Ctrl/Alt).\n"
-    .. "Backspace или Delete — снять назначение · Esc — выход", "Hover a slot and press a key, a mouse button or the "
-    .. "wheel (Shift/Ctrl/Alt allowed).\nBackspace or Delete clears the slot · Esc leaves"))
+    .. "Backspace или Delete — снять назначение, Esc — выход", "Hover a slot and press a key, a mouse button or the "
+    .. "wheel (Shift/Ctrl/Alt allowed).\nBackspace or Delete clears the slot, Esc leaves"))
 panel.character = CreateFrame("CheckButton", "ForeverStockUIKeyBinderCharacter", panel, "UICheckButtonTemplate")
 panel.character:SetWidth(22)
 panel.character:SetHeight(22)
@@ -123,7 +123,7 @@ function KB.Bind(button, key)
         -- The key leaves whatever it did before.
         SetBinding(full)
         SetBinding(full, command)
-        ui.Print((L("%s → %s", "%s → %s")):format(GetBindingText and GetBindingText(full, "KEY_") or full,
+        ui.Print((L("%s -> %s", "%s -> %s")):format(GetBindingText and GetBindingText(full, "KEY_") or full,
             _G["BINDING_NAME_" .. command] or command))
     end
     changed = true

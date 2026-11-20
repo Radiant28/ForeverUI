@@ -603,7 +603,7 @@ local function buildManager(parent, width)
                 local category = cdm.CategoryOf({ spell = first })
                 note = category and cdm.categoryNames[category] or nil
                 if state.add.kind == "cooldown" and not ui.Suite.IsKnown(first) then
-                    note = (note and note .. " · " or "") .. L("не изучено — будет скрыто", "not learned — will hide")
+                    note = (note and note .. ", " or "") .. L("не изучено — будет скрыто", "not learned — will hide")
                 end
             end
         end
@@ -743,7 +743,7 @@ local function buildManager(parent, width)
         row.icon:SetTexture(group.kind == "bars" and "Interface\\Icons\\INV_Misc_PocketWatch_01"
             or "Interface\\Icons\\Spell_Nature_TimeStop")
         local count = #(group.items or {})
-        row.sub:SetText((group.enabled and "" or L("выкл · ", "off · ")) .. count)
+        row.sub:SetText((group.enabled and "" or L("выкл, ", "off, ")) .. count)
     end
     local function renderItem(row, entry)
         local name, icon = ui.Suite.SpellInfo(ui.Suite.ParseSpellList(entry.spell)[1])
@@ -792,7 +792,7 @@ local function buildManager(parent, width)
             local mode = cdm.ActiveMode()
             local modeText = cdm.modeNames[mode] or mode
             if db().mode == "auto" then modeText = cdm.modeNames.auto .. " > " .. modeText end
-            local text = (L("Сейчас: %s · %s · роль: %s · режим: %s", "Now: %s · %s · role: %s · mode: %s")):format(
+            local text = (L("Сейчас: %s (%s), роль: %s, режим: %s", "Now: %s (%s), role: %s, mode: %s")):format(
                 className(class or ""), treeName, cdm.roleNames[cdm.Role() or ""] or "?", modeText)
             if resetNote then text = text .. "  |cffd9b873" .. resetNote .. "|r" end
             status.label:SetText("|cffd9b873" .. text .. "|r")

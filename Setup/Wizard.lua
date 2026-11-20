@@ -536,8 +536,8 @@ function builders.copy(page)
             local info = Layouts.roleInfo[state.role or ""]
             row.title:SetText(key)
             row.icon:SetTexture(info and info.icon or ICONS.copy)
-            row.line:SetText((info and info.label or "?") .. " · " .. (state.style == "retail" and "Retail" or "Classic")
-                .. ((rec.specs[1] and rec.specs[2]) and L(" · два набора", " · two sets") or ""))
+            row.line:SetText((info and info.label or "?") .. ", " .. (state.style == "retail" and "Retail" or "Classic")
+                .. ((rec.specs[1] and rec.specs[2]) and L(", два набора", ", two sets") or ""))
             row:Show()
         end
         for i = #list + 1, #rows do rows[i]:Hide() end
@@ -945,7 +945,7 @@ showStep = function()
     if SetPortraitToTexture then SetPortraitToTexture(frame.portrait, icon) else frame.portrait:SetTexture(icon) end
     frame.title:SetText(session.mode == "spec" and L("Новый набор талантов", "New talent set")
         or L("Установка ForeverUI", "ForeverUI setup"))
-    frame.subtitle:SetText((L("Шаг %d из %d · %s", "Step %d of %d · %s")):format(session.index, #list, TITLES[id] or ""))
+    frame.subtitle:SetText((L("Шаг %d из %d — %s", "Step %d of %d — %s")):format(session.index, #list, TITLES[id] or ""))
 
     -- Footer: the first page offers Skip instead of Back; pages made of cards move on by themselves.
     local first = session.index == 1

@@ -74,8 +74,8 @@ end)
 
 local instructions = editor:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 instructions:SetPoint("TOP", 0, -13)
-instructions:SetText(ru and "ЛКМ — перетащить · ПКМ — настройки элемента"
-    or "Left drag to move · Right click for settings")
+instructions:SetText(ru and "ЛКМ — перетащить, ПКМ — настройки элемента"
+    or "Left drag to move, Right click for settings")
 
 local function button(parent, width, text, action)
     if ui.Widgets then return ui.Widgets.Button(parent, text, width, action, 24) end

@@ -27,7 +27,7 @@ local function sellJunk()
                     local stackPrice = price * count
                     stacks, items, total = stacks + 1, items + count, total + stackPrice
                     if settings.junkVerbose then
-                        local label = ru and "На продажу: %s ×%d за %s" or "Selling %s ×%d for %s"
+                        local label = ru and "На продажу: %s x%d за %s" or "Selling %s x%d for %s"
                         DEFAULT_CHAT_FRAME:AddMessage(label:format(link, count, GetCoinTextureString(stackPrice)))
                     end
                     if stacks >= limit then break end

@@ -4,8 +4,8 @@ local function apply() if ui.EditMode then ui.EditMode.Apply() end end
 
 ui.RegisterOptions("editmode", {
     title = L("Режим редактирования", "Edit Mode"),
-    description = L("Перемещение и масштаб элементов интерфейса. Меню игры → «Редактирование».",
-        "Move and scale interface elements. Game menu → Edit Mode."),
+    description = L("Перемещение и масштаб элементов интерфейса. Меню игры -> «Редактирование».",
+        "Move and scale interface elements. Game menu -> Edit Mode."),
     icon = "Interface\\Icons\\INV_Misc_Wrench_01",
     group = "general", order = 20,
     apply = apply,

@@ -386,14 +386,14 @@ local re = E.reenchant
 ui.settings.enchantRepeatCount = 3
 fire("TRADE_SKILL_SHOW")
 -- The count follows what the reagents allow (5 here)...
-assert(_G.ForeverStockUIReenchant.shown and reButton.text == "Repeat ×5", reButton.text)
+assert(_G.ForeverStockUIReenchant.shown and reButton.text == "Repeat x5", reButton.text)
 assert(ui.settings.enchantRepeatCount == 5 and _G.ForeverStockUIReenchantCount.text == 5, "max available filled in")
 -- ...until it is set by hand for the recipe: then updates keep the player's number.
 local minus = _G.ForeverStockUIReenchantMinus
 minus.scripts.OnClick(minus)
 minus.scripts.OnClick(minus)
 fire("TRADE_SKILL_UPDATE")
-assert(reButton.text == "Repeat ×3" and ui.settings.enchantRepeatCount == 3, "manual count kept")
+assert(reButton.text == "Repeat x3" and ui.settings.enchantRepeatCount == 3, "manual count kept")
 -- Outside a session the replace popup is left alone and the key is not bound.
 StaticPopup_Show("REPLACE_ENCHANT")
 tick(0.05)
