@@ -38,10 +38,10 @@ local DEFAULTS = {
     rfShield = true, rfShieldTexture = "WoW Forever Raid", rfShieldColor = { 0.85, 0.95, 1, 1 }, rfShieldAlpha = 0.7,
     rfShieldHeight = 0, rfShieldMode = "attached", rfShieldAlign = "BOTTOM", rfHideAbsorbGlow = true,
     rfIndicators = true, rfIndicatorTimer = true,
-    rfMoveContainer = true, rfHandle = true, rfPetMode = "block", rfPetAuras = false, rfRoleFadeGuess = false, rfGrowth = "center", rfTemplateSize = 0,
+    rfMoveContainer = true, rfHandle = true, rfPetMode = "block", rfPetAuras = false, rfGrowth = "center", rfTemplateSize = 0,
     rfPartyShow = "client", rfRaidShow = "client",
-    rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
-    rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
+    -- Role icons are the client's own (roleIcon of its frames); we only sort by the client's roles.
+    rfRoleSort = false, rfRoleOrder = "THD",
     -- Highlight of the button under the cursor and of the player's target
     rfHover = true, rfHoverStyle = "both", rfHoverColor = { 1, 1, 1, 0.85 },
     rfTarget = true, rfTargetClass = false, rfTargetColor = { 1, 0.82, 0.3, 1 }, rfTargetSize = 2,
@@ -503,9 +503,6 @@ local function createDeco(frame)
     deco.border:EnableMouse(false)
     deco.border:Hide()
 
-    deco.role = layer:CreateTexture(nil, "OVERLAY")
-    deco.role:Hide()
-
     deco.text = layer:CreateFontString(nil, "OVERLAY")
     deco.text:SetPoint("BOTTOM", deco.health, "BOTTOM", 0, 2)
     deco.text:Hide()
@@ -809,11 +806,9 @@ applyStyle = function(deco)
     deco.shield:SetVertexColor(sc[1], sc[2], sc[3], (sc[4] or 1) * settings.rfShieldAlpha)
     hideClientAuras(deco, enabled and settings.rfHideClientAuras)
     hideGlows(deco)
+    -- The role icon is the client's own: older versions faded it to draw theirs, bring it back.
     local clientRole = deco.frame.roleIcon
-    if clientRole and clientRole.SetAlpha then
-        clientRole:SetAlpha(enabled and settings.rfRoleIcon and settings.rfRoleHideClient and 0 or 1)
-    end
-    deco.roleKey = nil
+    if clientRole and clientRole.SetAlpha then clientRole:SetAlpha(1) end
     RF.StyleDrink(deco, settings)
     -- Our shield replaces the client's one (no glow): keep theirs updating but invisible.
     local ownShield = enabled and settings.rfShield
@@ -1323,8 +1318,6 @@ local function updateAuras(deco)
     local unit = deco.unit
     local now = GetTime()
     local settings = cfg()
-    -- A stance or form (bear, Righteous Fury, Tree of Life) is an aura: the role icon follows it.
-    if unit and UnitExists(unit) then RF.UpdateRole(deco) end
     -- The client may create more aura icons later (more max buffs): keep them hidden too.
     if settings.rfEnabled and settings.rfHideClientAuras then hideClientAuras(deco, true) end
     if not unit or not UnitExists(unit) or not settings.rfEnabled then
@@ -1425,7 +1418,6 @@ local function refreshUnit(deco)
     end
     deco.auraDirty, deco.healthDirty, deco.threatDirty = true, true, true
     deco.nameDirty, deco.targetDirty, deco.drinkDirty = true, true, true
-    RF.UpdateRole(deco)
     updateRange(deco)
 end
 
@@ -2144,8 +2136,8 @@ if ForeverStockUIEditMode then
 end
 
 ---------------------------------------------------------------------------------------------------
--- Role icons: several sets (Art/Roles, copied from Cell's third-party sets and MidUI), size, anchor,
--- offsets, hide damage dealers, hide the client's own role icon.
+-- Role icon sets (Art/Roles, copied from Cell's third-party sets and MidUI). The raid frames show the
+-- client's own role icon; RF.SetRoleTexture stays for other modules (the healer mana banner).
 ---------------------------------------------------------------------------------------------------
 local ROLE_PATH = "Interface\\AddOns\\ForeverUI\\Art\\Roles\\"
 -- Sheet layouts: the 256 px Blizzard 2 sheet and the 64 px small-circle sheet (Blizzard, MattUI, MidUI).
@@ -2179,33 +2171,6 @@ function RF.SetRoleTexture(texture, role, setId)
         texture:SetTexCoord(c[1], c[2], c[3], c[4])
     end
     return true
-end
-
--- The role comes from Suite.GroupRole (Roles.lua); a preview passes its own.
-function RF.UpdateRole(deco, forcedRole)
-    local settings = cfg()
-    local role, source = forcedRole, nil
-    if not role and Suite.GroupRole then role, source = Suite.GroupRole(deco.unit) end
-    if not (settings.rfEnabled and settings.rfRoleIcon) or not role
-        or (role == "DAMAGER" and settings.rfRoleHideDamager) then
-        deco.role:Hide()
-        deco.roleKey = nil
-        return
-    end
-    -- A tank known only by the stance may be drawn faded.
-    deco.role:SetAlpha((settings.rfRoleFadeGuess and Suite.Roles and Suite.Roles.guessed[source or ""]) and 0.55 or 1)
-    deco.roleSource = source
-    local key = role .. settings.rfRoleSet .. settings.rfRoleSize .. settings.rfRoleAnchor .. settings.rfRoleX .. settings.rfRoleY
-    if deco.roleKey ~= key then
-        deco.roleKey = key
-        RF.SetRoleTexture(deco.role, role, settings.rfRoleSet)
-        deco.role:SetWidth(settings.rfRoleSize)
-        deco.role:SetHeight(settings.rfRoleSize)
-        deco.role:ClearAllPoints()
-        local point = settings.rfRoleAnchor
-        deco.role:SetPoint(point, deco.health or deco.frame, point, settings.rfRoleX, settings.rfRoleY)
-    end
-    deco.role:Show()
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -2276,8 +2241,8 @@ end
 ---------------------------------------------------------------------------------------------------
 -- Sorting by role: the client's flow container sorts its unit tokens with container.flowSortFunc
 -- (Blizzard CompactRaidFrameContainer). Our function puts tanks, healers and damage dealers in the
--- chosen order (unknown roles last) and keeps the client's own order inside each role. Protected
--- layout: out of combat.
+-- chosen order (unknown roles last) and keeps the client's own order inside each role. The role is the
+-- client's (Suite.UnitRole: dungeon finder, main tank); nothing is guessed. Protected layout: out of combat.
 ---------------------------------------------------------------------------------------------------
 local orders = { THD = { TANK = 1, HEALER = 2, DAMAGER = 3 }, HTD = { HEALER = 1, TANK = 2, DAMAGER = 3 },
     TDH = { TANK = 1, DAMAGER = 2, HEALER = 3 } }
@@ -2291,7 +2256,7 @@ end
 local function makeRoleSort(original)
     return function(a, b)
         local rank = orders[cfg().rfRoleOrder] or orders.THD
-        local ra, rb = rank[Suite.GroupRole(a) or ""] or 4, rank[Suite.GroupRole(b) or ""] or 4
+        local ra, rb = rank[Suite.UnitRole(a) or ""] or 4, rank[Suite.UnitRole(b) or ""] or 4
         if ra ~= rb then return ra < rb end
         if original then return original(a, b) end
         local ia, ib = unitIndex(a), unitIndex(b)
@@ -2534,6 +2499,9 @@ end
 RF.styleVersion = 0
 function RF.Apply()
     RF.styleVersion = RF.styleVersion + 1
+    -- Data of the removed role recognition (2026-11-22): manual marks and the inspection cache.
+    local db = ui.Settings and ui.Settings()
+    if db then db.roleMarks, db.roleCache = nil, nil end
     rebuildIndicatorLookup()
     RF.ApplySort()
     RF.LayoutPets()
@@ -2772,34 +2740,22 @@ ui.RegisterCallback("SuiteSpellsChanged", function()
     for _, deco in ipairs(ordered) do deco.auraDirty = true end
     anyDirty = true
 end, "RaidFramesSpells")
--- Roles learned (roster, assigned roles, another ForeverUI, a mark, a stance or its hold running out):
--- icons, and the sort order
--- when a role really changed.
-ui.RegisterCallback("SuiteRolesChanged", function()
-    local changed = false
-    for _, deco in ipairs(ordered) do
-        local before = deco.roleKey
-        RF.UpdateRole(deco)
-        if deco.roleKey ~= before then changed = true end
-    end
-    if changed then RF.ApplySort(true) end
-end, "RaidFramesRoles")
 
 ---------------------------------------------------------------------------------------------------
 -- Live preview for the options page: a mock unit button decorated by the same code
 ---------------------------------------------------------------------------------------------------
 -- Each variant shows one state clearly instead of everything on one frame.
--- The three preview frames differ only in their bars (health, shield, incoming heals, threat, role);
+-- The three preview frames differ only in their bars (health, shield, incoming heals, threat);
 -- indicators, buffs and debuffs are the same set on all three, built from the current settings
 -- (previewAuras), so every change shows the same way on each frame.
 local previewVariants = {
-    tank = { name = L("Танк", "Tank"), class = "WARRIOR", health = 0.92, heal = 0, absorb = 0.3, role = "TANK",
+    tank = { name = L("Танк", "Tank"), class = "WARRIOR", health = 0.92, heal = 0, absorb = 0.3,
         threat = 3, deficit = "-1.2k" },
-    healer = { name = L("Лекарь", "Healer"), class = "PRIEST", health = 0.62, heal = 0.15, absorb = 0, role = "HEALER",
+    healer = { name = L("Лекарь", "Healer"), class = "PRIEST", health = 0.62, heal = 0.15, absorb = 0,
         deficit = "-9.5k", target = true, drink = true },
-    dps = { name = L("Боец", "Damage"), class = "MAGE", health = 0.34, heal = 0.1, absorb = 0.08, role = "DAMAGER",
+    dps = { name = L("Боец", "Damage"), class = "MAGE", health = 0.34, heal = 0.1, absorb = 0.08,
         deficit = "-16.8k", hover = true },
-    pet = { name = L("Питомец", "Pet"), class = "HUNTER", health = 0.8, heal = 0, absorb = 0, deficit = "", noRole = true },
+    pet = { name = L("Питомец", "Pet"), class = "HUNTER", health = 0.8, heal = 0, absorb = 0, deficit = "" },
 }
 RF.previewOrder = { "tank", "healer", "dps" }
 RF.previews = {}
@@ -2884,11 +2840,11 @@ local function mergeData(variant, override)
 end
 
 -- Live preview for the options page: a mock unit button decorated by the same code.
--- `override` (optional) replaces fields of the variant for this cell: name, class, role, health, heal,
+-- `override` (optional) replaces fields of the variant for this cell: name, class, health, heal,
 -- absorb, threat, target, hover, drink, deficit, dispelType (one debuff of that type, dispelled by "you"),
 -- others (auras cast by somebody else).
 -- frame:SetData(variant, override) changes the member later, frame:SetMask({ part = true }) draws only
--- those parts (nil = everything; parts: name, text, role, heal, shield, threat, drink, target, hover,
+-- those parts (nil = everything; parts: name, text, heal, shield, threat, drink, target, hover,
 -- buffs, debuffs, dispel, indicators), frame:SetState("range" | "dead" | "combat" | nil) shows a unit state.
 function RF.BuildPreview(parent, width, height, variant, override)
     width, height = width or 120, height or 48
@@ -2971,7 +2927,6 @@ function RF.BuildPreview(parent, width, height, variant, override)
         else
             deco.border:Hide()
         end
-        if data.noRole or not on("role") then deco.role:Hide() else RF.UpdateRole(deco, data.role) end
         -- The healer drinks in the preview (the style decides the text, 42% mana in the "mana" style);
         -- in combat or dead nobody drinks.
         local drinkText
@@ -3920,11 +3875,8 @@ SlashCmdList.FOREVERUIRAID = function(input)
         return
     end
     if (input or ""):lower():match("role") then
-        -- Every group member: class, role and where it came from. ASCII only (no names).
-        local R = Suite.Roles
-        local holds = 0
-        for _ in pairs(R and R.seen or {}) do holds = holds + 1 end
-        ui.Print(("Roles: no guessing, stance holds=%d (%ds)"):format(holds, R and R.HOLD or 0))
+        -- Every group member: class and the client's role (the one its frames and our sort use). ASCII only.
+        ui.Print("Roles: the client's own (UnitGroupRolesAssigned, main tank)")
         local units = { "player" }
         local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
         if raid > 0 then
@@ -3935,9 +3887,8 @@ SlashCmdList.FOREVERUIRAID = function(input)
         end
         for _, unit in ipairs(units) do
             if UnitExists(unit) then
-                local role, source = Suite.GroupRole(unit)
                 local _, class = UnitClass(unit)
-                ui.Print(("%s %s: %s (%s)"):format(unit, tostring(class), tostring(role or "-"), tostring(source or "-")))
+                ui.Print(("%s %s: %s"):format(unit, tostring(class), tostring(Suite.UnitRole(unit) or "-")))
             end
         end
         return

@@ -230,7 +230,7 @@ local function load(path)
 end
 for _, path in ipairs({ "Core/Config.lua", "Core/Widgets.lua", "Core/OptionsFrame.lua", "Core/Compat.lua" }) do load(path) end
 ui.bundledMedia = { font = {}, statusbar = {}, background = {}, border = {} }
-for _, path in ipairs({ "Media.lua", "Suite.lua", "Roles.lua", "RaidFrames.lua", "ClickCast.lua", "CooldownManager.lua",
+for _, path in ipairs({ "Media.lua", "Suite.lua", "RaidFrames.lua", "ClickCast.lua", "CooldownManager.lua",
     "Options/SuiteWidgets.lua", "Options/CooldownManager.lua", "Options/RaidFrames.lua", "Options/ClickCast.lua",
     "Options/Profiles.lua" }) do
     load(path)
@@ -710,7 +710,7 @@ fire("UNIT_AURA", "raid2")
 tick(0.6)
 tick(0.05)
 
--- Role icons and sorting by role
+-- Role icons are the client's; sorting by the client's roles
 local roles = { raid1 = "TANK", raid2 = "HEALER", raid3 = "DAMAGER" }
 function UnitGroupRolesAssigned(unit)
     local role = roles[unit]
@@ -727,26 +727,20 @@ local function decoOf(frame)
     RF.EachFrame(function(f, d) if f == frame then found = d end end)
     return found
 end
-local tankRole = decoOf(button).role
-assert(tankRole.shown and tankRole.texture:find("Roles\\Blizzard2_ROLES", 1, true) and tankRole.width == 12, "tank icon")
-assert(button.roleIcon.alpha == 0, "the client's role icon is hidden")
-assert(decoOf(others[2]).role.shown and decoOf(others[3]).role.shown, "assigned healers and damage dealers have icons")
-settings.rfRoleHideDamager = true
+assert(decoOf(button).role == nil, "no role icon of our own")
+button.roleIcon.alpha = 0
 RF.Apply()
 tick(0.05)
-assert(not decoOf(others[3]).role.shown and decoOf(others[2]).role.shown, "the damage dealer icon can be hidden")
-settings.rfRoleSet, settings.rfRoleSize, settings.rfRoleAnchor, settings.rfRoleX = "ffxiv", 20, "CENTER", 5
+assert(button.roleIcon.alpha == 1, "the client's role icon is shown (an old fade is undone)")
+local db = ui.Settings()
+db.roleMarks, db.roleCache = { Nraid1 = "TANK" }, { old = { role = "HEALER" } }
 RF.Apply()
-tick(0.05)
-local healerRole = decoOf(others[2]).role
-assert(healerRole.texture:find("FFXIV_HEALER", 1, true) and healerRole.width == 20 and healerRole.points[1][1] == "CENTER"
-    and healerRole.points[1][4] == 5, "set, size and position")
-settings.rfRoleHideDamager = false
+assert(db.roleMarks == nil and db.roleCache == nil, "the data of the old role recognition is dropped")
 -- pets: the role API is never asked about a pet token
 local askedPet = false
 local assigned = UnitGroupRolesAssigned
 UnitGroupRolesAssigned = function(unit) if tostring(unit):find("pet") then askedPet = true end return assigned(unit) end
-assert(Suite.GroupRole("raidpet1") == nil and Suite.UnitRole("raidpet1") == nil and not askedPet, "pets have no role")
+assert(Suite.UnitRole("raidpet1") == nil and not askedPet, "pets have no role")
 UnitGroupRolesAssigned = assigned
 -- sorting: the client's flow container gets a role-aware sort function
 local originalSort = function(a, b) return a > b end
@@ -1244,7 +1238,7 @@ do
     assert(#frames == 3 and frames[1].mask.name, "the name item has its own samples")
     for _, frame in ipairs(frames) do
         assert(signature(frame) == "", "no auras on the name samples")
-        assert(frame.deco.name.shown and not frame.deco.role.shown and not frame.deco.drink.shown, "only the name is drawn")
+        assert(frame.deco.name.shown and not frame.deco.drink.shown, "only the name is drawn")
     end
     assert(frames[2].deco.previewName ~= frames[1].deco.previewName, "a long and a short name")
 end
@@ -2230,109 +2224,26 @@ do
 end
 
 ---------------------------------------------------------------------------------------------------
--- Roles without guessing: mark, assigned, own talents, addon, tank stance with a hold
+-- Roles: nothing is worked out by the addon; /fuiraid roles prints the client's roles in ASCII
 ---------------------------------------------------------------------------------------------------
 do
-    local R = Suite.Roles
-    local realAssigned, realClass, realRaid, realName = UnitGroupRolesAssigned, UnitClass, GetNumRaidMembers, UnitName
-    UnitGroupRolesAssigned = function() return false, false, false end
-    local classes = { player = "PRIEST", raid1 = "WARRIOR", raid2 = "PRIEST", raid3 = "MAGE" }
+    assert(Suite.GroupRole == nil and Suite.Roles == nil, "no role recognition")
+    local realAssigned, realClass, realRaid = UnitGroupRolesAssigned, UnitClass, GetNumRaidMembers
+    local classes = { raid1 = "WARRIOR", raid2 = "PRIEST", raid3 = "MAGE" }
     UnitClass = function(unit) return classes[unit] or "PRIEST", classes[unit] or "PRIEST" end
-    UnitName = function(unit) return unit == "player" and "Tester" or ("N" .. tostring(unit)) end
-    GetNumRaidMembers = function() return 3 end
-    local saved = { auras.raid1.HELPFUL, auras.raid2.HELPFUL, auras.raid3.HELPFUL }
-    auras.raid1.HELPFUL, auras.raid2.HELPFUL, auras.raid3.HELPFUL = {}, {}, {}
-    ui.Settings().roleMarks = nil
-    ui.Settings().roleCache = { old = { role = "HEALER", time = 0 } }
-    R.Reset()
-
-    local role, source = Suite.GroupRole("player")
-    assert(role == "HEALER" and source == "talents", "my role from my talents (Holy)")
-    assert(ui.Settings().roleCache == nil, "the old inspection cache is dropped")
-    assert(Suite.GroupRole("raid3") == nil, "a mage gets no role from the class")
-    assert(Suite.GroupRole("raid2") == nil, "a priest gets no healer role from the class")
-    -- the role another ForeverUI announced
-    ui.HealerMana = { peers = { Nraid2 = { role = "HEALER" } } }
-    role, source = Suite.GroupRole("raid2")
-    assert(role == "HEALER" and source == "addon", "the role another ForeverUI announced")
-    ui.HealerMana = nil
-    -- stance: Defensive Stance tanks, and the role holds R.HOLD seconds after it drops
-    spells[71] = { "Defensive Stance", "Interface\\Icons\\Ability_Warrior_DefensiveStance" }
-    R.ResetNames()
-    auras.raid1.HELPFUL = { { name = "Defensive Stance" } }
-    role, source = Suite.GroupRole("raid1")
-    assert(role == "TANK" and source == "stance", "a tank stance tells the tank")
-    auras.raid1.HELPFUL = {}
-    assert(Suite.GroupRole("raid1") == "TANK", "held right after the stance drops")
-    assert(not R.ExpireHolds(GetTime() + R.HOLD - 1), "still held")
-    assert(R.ExpireHolds(GetTime() + R.HOLD + 1), "the hold runs out")
-    assert(Suite.GroupRole("raid1") == nil, "no tank after the hold")
-    -- a tank that stays in the stance keeps its hold without an aura event
-    auras.raid1.HELPFUL = { { name = "Defensive Stance" } }
-    Suite.GroupRole("raid1")
-    assert(not R.ExpireHolds(GetTime() + R.HOLD + 1) and Suite.GroupRole("raid1") == "TANK", "a standing tank stays")
-    -- marks: "No role" beats the stance, a role mark beats everything
-    R.SetMark("Nraid1", "NONE")
-    assert(Suite.GroupRole("raid1") == nil, "no role by mark")
-    R.SetMark("Nraid1", "HEALER")
-    role, source = Suite.GroupRole("raid1")
-    assert(role == "HEALER" and source == "mark", "a mark wins over the stance")
     UnitGroupRolesAssigned = function(unit) return unit == "raid1", false, false end
-    assert(Suite.GroupRole("raid1") == "HEALER", "the mark wins over the assigned role too")
-    R.SetMark("Nraid1", nil)
-    role, source = Suite.GroupRole("raid1")
-    assert(role == "TANK" and source == "assigned", "the assigned role")
-    -- an assigned healer
-    UnitGroupRolesAssigned = function(unit) return false, unit == "raid2", false end
-    role, source = Suite.GroupRole("raid2")
-    assert(role == "HEALER" and source == "assigned", "the assigned healer")
-    UnitGroupRolesAssigned = function() return false, false, false end
-    -- own talents: Protection tanks, another tree is that tree's role even in the stance
-    classes.player = "WARRIOR"
-    local realTabs = GetTalentTabInfo
-    GetTalentTabInfo = function(i) return "Tree" .. i, "", i == 3 and 51 or 10 end
-    role, source = Suite.GroupRole("player")
-    assert(role == "TANK" and source == "talents", "my Protection talents")
-    GetTalentTabInfo = function(i) return "Tree" .. i, "", i == 1 and 51 or 10 end
-    auras.player = auras.player or { HELPFUL = {}, HARMFUL = {} }
-    local savedPlayer = auras.player.HELPFUL
-    auras.player.HELPFUL = { { name = "Defensive Stance" } }
-    assert(Suite.GroupRole("player") == "DAMAGER", "an Arms warrior in Defensive Stance deals damage")
-    auras.player.HELPFUL = savedPlayer
-    GetTalentTabInfo = realTabs
-    classes.player = "PRIEST"
-
-    -- the frames draw a stance tank fainter when asked
-    R.Reset()
-    RF.Settings().rfRoleFadeGuess = true
-    RF.Apply()
-    tick(0.05)
-    ui.Fire("SuiteRolesChanged")
-    local deco1
-    RF.EachFrame(function(f, d) if d.unit == "raid1" then deco1 = d end end)
-    assert(deco1 and deco1.role.shown and deco1.roleSource == "stance" and deco1.role.alpha == 0.55,
-        "a stance tank gets a faint icon")
-    RF.Settings().rfRoleFadeGuess = false
-    ui.Fire("SuiteRolesChanged")
-    assert(deco1.role.alpha == 1, "bright again")
-    -- /fuiraid roles prints every member in ASCII
+    GetNumRaidMembers = function() return 3 end
     local printed = {}
     local realPrint = ui.Print
     ui.Print = function(text) printed[#printed + 1] = text end
     SlashCmdList.FOREVERUIRAID("roles")
     ui.Print = realPrint
     local joined = table.concat(printed, " | ")
-    assert(joined:find("raid1 WARRIOR: TANK %(stance%)") and joined:find("raid2 PRIEST: %- %(%-%)")
-        and joined:find("raid3 MAGE: %- %(%-%)")
+    assert(joined:find("raid1 WARRIOR: TANK") and joined:find("raid2 PRIEST: %-") and joined:find("raid3 MAGE: %-")
         and not joined:find("[\128-\255]"), "roles diagnostics")
-
-    ui.Settings().roleMarks = nil
-    R.Reset()
-    auras.raid1.HELPFUL, auras.raid2.HELPFUL, auras.raid3.HELPFUL = saved[1], saved[2], saved[3]
-    UnitGroupRolesAssigned, UnitClass, GetNumRaidMembers, UnitName = realAssigned, realClass, realRaid, realName
-    ui.Fire("SuiteRolesChanged")
+    UnitGroupRolesAssigned, UnitClass, GetNumRaidMembers = realAssigned, realClass, realRaid
 end
 
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
     .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators, visibility, exclusions), "
-    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets block, sample frames, roles without guessing (mark, assigned, talents, addon, tank stance hold, pets), group type profiles, frame settings per group type and copy; %d frames"):format(#objects))
+    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets block, sample frames, client role icons and sort by client roles (pets never asked), group type profiles, frame settings per group type and copy; %d frames"):format(#objects))

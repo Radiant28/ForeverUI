@@ -38,7 +38,7 @@ local everything = {
 }
 
 local focus = {
-    roles = { mask = { role = true, name = true }, frames = { { "tank", nil, L("Танк", "Tank") },
+    roles = { mask = { name = true }, frames = { { "tank", nil, L("Танк", "Tank") },
         { "healer", nil, L("Лекарь", "Healer") }, { "dps", nil, L("Боец", "Damage dealer") } } },
     bars = { mask = { name = true, text = true }, frames = {
         { "tank", { health = 0.92, deficit = "-1.2k" }, L("Почти полное здоровье", "Nearly full health") },
@@ -91,7 +91,7 @@ local keyParts = {
     { "rfHealth", "health" }, { "rfPower", "health" }, { "rfBackground", "frame" }, { "rfDeficitText", "text" },
     { "rfTextSize", "text" }, { "rfHeal", "heal" }, { "rfShield", "shield" }, { "rfHideAbsorbGlow", "shield" },
     { "rfThreat", "threat" }, { "rfBorderSize", "threat" }, { "rfRange", "frame" }, { "rfName", "name" },
-    { "rfHover", "hover" }, { "rfTarget", "target" }, { "rfDrink", "drink" }, { "rfRole", "role" },
+    { "rfHover", "hover" }, { "rfTarget", "target" }, { "rfDrink", "drink" },
     { "rfBuff", "buffs" }, { "rfAuraTimer", "buffs" }, { "rfDispelScale", "debuffs" }, { "rfDebuff", "debuffs" },
     { "rfDispel", "dispel" }, { "rfIndicator", "indicators" },
 }
@@ -741,99 +741,6 @@ local function buildKinds(parent, width, _, page)
     return -top + 44
 end
 
--- Roles of the group: everyone in the party or raid with the role the frames use and where it came
--- from. A mark set by hand wins over everything; "No role" removes a role the stance misreads.
-local function buildRoleMarks(parent, width)
-    local su, R = ui.SuiteUI, ui.Suite and ui.Suite.Roles
-    if not su or not R or not ui.Suite.GroupRole then return su and su.Unavailable(parent, width) or 20 end
-    local state = { index = nil, members = {} }
-    local refresh
-    local title = W.Text(parent, W.fonts.label)
-    title:SetPoint("TOPLEFT", 0, 0)
-    title:SetText(L("Роли игроков группы", "Roles in the group"))
-    local listWidth = math.min(width, 420)
-    local list = su.List(parent, listWidth, 8, 22, function(index)
-        state.index = index
-        refresh()
-    end)
-    list:SetPoint("TOPLEFT", 0, -20)
-    local y = -20 - (8 * 22 + 4) - 8
-    local values = { { "auto", L("Авто", "Auto") }, { "TANK", R.labels.TANK }, { "HEALER", R.labels.HEALER },
-        { "DAMAGER", R.labels.DAMAGER }, { "NONE", R.labels.NONE } }
-    local markRow = W.Select(parent, { type = "select", label = L("Роль выбранного игрока", "Role of the chosen player"),
-        values = values }, {
-        get = function()
-            local member = state.members[state.index]
-            return member and R.Mark(member.name) or "auto"
-        end,
-        set = function(value)
-            local member = state.members[state.index]
-            if member then R.SetMark(member.name, value ~= "auto" and value or nil) end
-        end,
-    }, math.min(width, 260))
-    markRow:SetPoint("TOPLEFT", 0, y)
-    y = y - 54
-    local hint = W.Description(parent, L("Откуда роль: метка (выбрана здесь), назначена (клиент: поиск группы, главный "
-        .. "танк), таланты (ваши), аддон (у игрока тоже ForeverUI, роль по его талантам), стойка (только танк: Защитная "
-        .. "стойка, Праведное неистовство, облик медведя, власть льда; держится ещё 10 с после выхода). Роли не угадываются "
-        .. "ни по классу, ни по мане, ни осмотром. «—» — роль неизвестна. «Без роли» убирает ошибочную роль от стойки.",
-        "Where a role comes from: mark (chosen here), assigned (the client: dungeon finder, main tank), talents (yours), "
-        .. "addon (the player runs ForeverUI too, the role from their talents), stance (tanks only: Defensive Stance, "
-        .. "Righteous Fury, Bear Form, Frost Presence; kept 10 s after leaving). Roles are never guessed from the class, "
-        .. "the mana or by inspecting. “—”: not known. “No role” removes a wrong role from a stance."), width)
-    hint:SetPoint("TOPLEFT", 0, y)
-    y = y - math.ceil(hint:GetHeight() or 0) - 4
-
-    local function collect()
-        local members, units = {}, { "player" }
-        local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
-        if raid > 0 then
-            units = {}
-            for i = 1, raid do units[#units + 1] = "raid" .. i end
-        else
-            for i = 1, (GetNumPartyMembers and GetNumPartyMembers() or 0) do units[#units + 1] = "party" .. i end
-        end
-        for _, unit in ipairs(units) do
-            local name = R.NameOf(unit)
-            if name and UnitExists(unit) then
-                local role, source = ui.Suite.GroupRole(unit)
-                local _, class = UnitClass(unit)
-                members[#members + 1] = { name = name, unit = unit, role = role, source = source, class = class }
-            end
-        end
-        return members
-    end
-    local function render(row, member)
-        local rf = RF()
-        if not (member.role and rf and rf.SetRoleTexture(row.icon, member.role, rf.Settings().rfRoleSet)) then
-            row.icon:SetTexture(nil)
-        end
-        local color = member.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.class]
-        row.text:SetText(color and ("|cff%02x%02x%02x%s|r"):format(math.floor(color.r * 255), math.floor(color.g * 255), math.floor(color.b * 255), member.name)
-            or member.name)
-        local mark = R.Mark(member.name)
-        row.sub:SetText(member.role and ((R.labels[member.role] or member.role) .. ", " .. (R.sourceLabels[member.source] or "?"))
-            or (mark == "NONE" and (R.labels.NONE .. ", " .. R.sourceLabels.mark)) or "—")
-    end
-    refresh = function()
-        local chosen = state.members[state.index]
-        state.members = collect()
-        state.index = nil
-        for i, member in ipairs(state.members) do
-            if chosen and member.name == chosen.name then state.index = i end
-        end
-        list:SetItems(state.members, render)
-        list:Select(state.index)
-        markRow:SetEnabled(state.index ~= nil)
-        markRow:Refresh()
-    end
-    parent.refreshRoles = refresh
-    parent:SetScript("OnShow", function() refresh() end)
-    ui.RegisterCallback("SuiteRolesChanged", function() refresh() end, "RaidRoleMarks")
-    refresh()
-    return -y
-end
-
 local function buildOverviewNote(parent, width)
     local note = W.Description(parent, L("Слева — части фрейма. Выберите часть, и предпросмотр справа от окна "
         .. "покажет только то, что она меняет; здесь, на «Общем виде», он показывает всё сразу. Точка у пункта — "
@@ -946,27 +853,11 @@ ui.RegisterOptions("raidframes", {
                 tooltip = L("Метка «Группа» появляется при наведении на фреймы; перетащите её, чтобы сдвинуть группу без Edit Mode. В бою отключено.",
                     "The \"Group\" label appears when you hover the frames; drag it to move the group without Edit Mode. Disabled in combat.") },
         } },
-        { id = "roles", title = L("Роли и сортировка", "Roles and sorting"), group = G_MAIN, options = {
-            { "toggle", "rfRoleIcon", L("Показывать иконку роли", "Show the role icon"),
-                tooltip = L("Роль берётся только из надёжных источников: метка, роль от клиента (поиск группы, "
-                    .. "главный танк), ваши таланты, ForeverUI игрока. Танк ещё узнаётся по стойке. Остальные — без значка.",
-                    "The role comes only from reliable sources: a mark, the client's role (dungeon finder, main tank), "
-                    .. "your talents, the player's ForeverUI. A tank is also known by the stance. Everyone else gets no icon."), default = true },
-            { "select", "rfRoleSet", L("Набор иконок", "Icon set"), default = "blizzard2", depends = "rfRoleIcon",
-                values = function()
-                    local values = {}
-                    for _, set in ipairs(RF() and RF().roleSets or {}) do values[#values + 1] = { set[1], set[2] } end
-                    if #values == 0 then values[1] = { "blizzard2", "Blizzard" } end
-                    return values
-                end },
-            { "range", "rfRoleSize", L("Размер", "Size"), min = 6, max = 32, step = 1, default = 12, depends = "rfRoleIcon" },
-            { "select", "rfRoleAnchor", L("Позиция", "Position"), values = anchors, default = "TOPLEFT", depends = "rfRoleIcon" },
-            { "range", "rfRoleX", L("Смещение X", "Offset X"), min = -40, max = 40, step = 1, default = 2, depends = "rfRoleIcon" },
-            { "range", "rfRoleY", L("Смещение Y", "Offset Y"), min = -40, max = 40, step = 1, default = -2, depends = "rfRoleIcon" },
-            { "toggle", "rfRoleHideDamager", L("Не показывать иконку ДД", "Hide the damage dealer icon"), default = false,
-                depends = "rfRoleIcon" },
-            { "toggle", "rfRoleHideClient", L("Скрыть иконку роли клиента", "Hide the client's role icon"), default = true,
-                depends = "rfRoleIcon" },
+        { id = "roles", title = L("Сортировка по ролям", "Sorting by role"), group = G_MAIN,
+            description = L("Значки ролей рисуют сами фреймы клиента, аддон роли не определяет. Сортировка берёт "
+                .. "те же роли клиента (поиск группы, главный танк); игроки без роли идут последними.",
+                "Role icons are drawn by the client's own frames; the addon does not work out roles. The sort uses "
+                .. "the same client roles (dungeon finder, main tank); players without a role go last."), options = {
             { "toggle", "rfRoleSort", L("Сортировать ряд по ролям", "Sort the row by role"), default = false, protected = true,
                 tooltip = L("Работает, когда фреймы идут одним списком (без «держать группы вместе»). Применяется вне боя.",
                     "Works when the frames form one list (not “keep groups together”). Applies out of combat.") },
@@ -974,14 +865,6 @@ ui.RegisterOptions("raidframes", {
                 values = { { "THD", L("Танки, хилы, ДД", "Tanks, healers, damage") },
                     { "HTD", L("Хилы, танки, ДД", "Healers, tanks, damage") },
                     { "TDH", L("Танки, ДД, хилы", "Tanks, damage, healers") } } },
-            { "toggle", "rfRoleFadeGuess", L("Танка по стойке рисовать бледнее", "Draw a tank known by the stance fainter"),
-                default = false, width = "full", depends = "rfRoleIcon", tooltip = L("Танк, узнанный только по стойке, "
-                    .. "облику или власти, — полупрозрачной иконкой; остальные роли — яркой.",
-                    "A tank known only by the stance, form or presence gets a half transparent icon; every other role "
-                    .. "stays bright.") },
-            { "custom", build = buildRoleMarks, refresh = function(holder)
-                if holder.refreshRoles then holder.refreshRoles() end
-            end },
         } },
         { id = "bars", title = L("Здоровье и ресурс", "Health and power"), group = G_BAR, options = {
             { "media", "rfHealthTexture", L("Текстура здоровья", "Health texture"), kind = "statusbar", ignoreGlobal = true,

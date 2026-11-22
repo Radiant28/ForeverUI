@@ -18,7 +18,6 @@ Core\Compat.lua
 BundledMedia.lua
 Media.lua
 Suite.lua
-Roles.lua
 
 # Modules
 ForeverUI.lua
