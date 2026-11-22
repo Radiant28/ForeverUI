@@ -1,14 +1,14 @@
 -- ForeverUI low healer mana alert. A healer with ForeverUI tells the group when its mana drops below
--- the threshold (addon message "FUI_MANA"); everyone else shows a banner. The local watch (HM.CheckUnit,
--- UnitMana of the own subgroup) needs a known healer that sends no messages, so with roles never guessed
--- it stays silent: healers without ForeverUI are not watched. The healer never sees its own alert.
+-- the threshold (addon message "FUI_MANA"); everyone else shows a banner. Healers without ForeverUI
+-- whose role the client assigned (dungeon finder) are watched locally (UnitMana of the own subgroup).
+-- The healer itself never sees its own alert.
 -- WotLK 3.3.5a: SendAddonMessage takes prefix, text, channel (prefixes need no registration), the
 -- roster events are PARTY_MEMBERS_CHANGED / RAID_ROSTER_UPDATE, timers run on OnUpdate.
 --
 -- Healer role, no guessing (2026-11-22: mana, class and buffs made damage hybrids "healers"): the
--- player by the talent tree with the most points (Holy paladin, Restoration druid and shaman,
--- Discipline / Holy priest); everybody else only by the role their own ForeverUI announced. Healers
--- without ForeverUI are not known and not watched.
+-- client's assigned role (Suite.UnitRole: dungeon finder) -> the player by the talent tree with the most
+-- points (Holy paladin, Restoration druid and shaman, Discipline / Holy priest) -> everybody else by the
+-- role their own ForeverUI announced. Healers known by none of these are not watched.
 --
 -- Packet: "<version>:<type>:<mana %>:<role>", e.g. "1:L:18:H". Types: L = low mana, R = role
 -- announcement (sent after roster and talent changes, at most once per 10 s). Roles: H, T, D, N.
@@ -135,9 +135,11 @@ end
 
 HM.healerClasses = { PRIEST = true, DRUID = true, SHAMAN = true, PALADIN = true }
 
--- Role of a unit and where it came from: "talents" (the player), "sync" (announced) or nil.
+-- Role of a unit and where it came from: "assigned", "talents" (the player), "sync" (announced) or nil.
 function HM.Role(unit)
     if not unit or not UnitExists(unit) then return nil end
+    local assigned = Suite and Suite.UnitRole and Suite.UnitRole(unit)
+    if assigned then return assigned, "assigned" end
     if UnitIsUnit(unit, "player") then
         local role = HM.TalentRole()
         if role then return role, "talents" end

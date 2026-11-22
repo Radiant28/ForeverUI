@@ -181,9 +181,9 @@ assert(HM.COOLDOWN >= 15 and HM.COOLDOWN <= 20)
 ---------------------------------------------------------------------------------------------------
 -- Healer role chain
 ---------------------------------------------------------------------------------------------------
--- 1. no assigned roles, no guessing: a dungeon finder role, class, mana and buffs tell nothing
+-- 1. the assigned role wins; class, mana and buffs tell nothing
 setUnit("party1", { name = "Tank", class = "PALADIN", assigned = "TANK" })
-assert(HM.Role("party1") == nil, "the assigned role is not used")
+assert(HM.Role("party1") == "TANK" and select(2, HM.Role("party1")) == "assigned")
 setUnit("party3", { name = "Resto", class = "SHAMAN", buffs = { { name = "Водный щит" } } })
 assert(HM.Role("party3") == nil, "no healer guessed from Water Shield")
 setUnit("party3", { name = "Holy", class = "PRIEST" })
@@ -274,11 +274,20 @@ assert(HM.peers.Druid, "the sender is known to run ForeverUI")
 units.raid4.mana = 20
 assert(not HM.CheckUnit("raid4"), "so the local watch leaves it alone")
 units.raid4.mana = 100
--- Druid without the addon: its role is not guessed, so it is not watched
+-- Druid without the addon: its role is not guessed, so it is not watched...
 HM.peers.Druid = nil
 now = now + 100
 units.raid4.mana = 20
-assert(not HM.CheckUnit("raid4"), "healers without ForeverUI are not watched")
+assert(not HM.CheckUnit("raid4"), "an unknown druid is not watched")
+-- ...unless the client assigned it the healer role: then the local watch alerts, no duplicate later
+units.raid4.mana = 100
+units.raid4.assigned = "HEALER"
+now = now + 100
+assert(not HM.CheckUnit("raid4"), "high mana")
+units.raid4.mana = 20
+assert(HM.CheckUnit("raid4") and HM.last.name == "Druid" and HM.last.source == "local", "local watch alert")
+assert(not HM.OnMessage("FUI_MANA", "1:L:19:H", "RAID", "Druid"), "the message after the local alert is a duplicate")
+units.raid4.assigned = nil
 -- the local watch never alerts about the player
 units.raid1.mana, units.player.mana = 1, 1
 assert(not HM.CheckUnit("raid1") and not HM.CheckUnit("player"), "never about oneself")

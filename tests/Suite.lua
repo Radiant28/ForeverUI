@@ -730,19 +730,18 @@ end
 local tankRole = decoOf(button).role
 assert(tankRole.shown and tankRole.texture:find("Roles\\Blizzard2_ROLES", 1, true) and tankRole.width == 12, "tank icon")
 assert(button.roleIcon.alpha == 0, "the client's role icon is hidden")
-assert(not decoOf(others[2]).role.shown and not decoOf(others[3]).role.shown, "only tanks get an icon")
+assert(decoOf(others[2]).role.shown and decoOf(others[3]).role.shown, "assigned healers and damage dealers have icons")
+settings.rfRoleHideDamager = true
+RF.Apply()
+tick(0.05)
+assert(not decoOf(others[3]).role.shown and decoOf(others[2]).role.shown, "the damage dealer icon can be hidden")
 settings.rfRoleSet, settings.rfRoleSize, settings.rfRoleAnchor, settings.rfRoleX = "ffxiv", 20, "CENTER", 5
 RF.Apply()
 tick(0.05)
-tankRole = decoOf(button).role
-assert(tankRole.texture:find("FFXIV_TANK", 1, true) and tankRole.width == 20 and tankRole.points[1][1] == "CENTER"
-    and tankRole.points[1][4] == 5, "set, size and position")
--- a preview may ask for any role: only the tank is drawn
-RF.UpdateRole(decoOf(others[2]), "HEALER")
-assert(not decoOf(others[2]).role.shown, "a healer preview gets no icon")
-RF.UpdateRole(decoOf(others[2]), "TANK")
-assert(decoOf(others[2]).role.shown, "a tank preview does")
-RF.UpdateRole(decoOf(others[2]))
+local healerRole = decoOf(others[2]).role
+assert(healerRole.texture:find("FFXIV_HEALER", 1, true) and healerRole.width == 20 and healerRole.points[1][1] == "CENTER"
+    and healerRole.points[1][4] == 5, "set, size and position")
+settings.rfRoleHideDamager = false
 -- pets: the role API is never asked about a pet token
 local askedPet = false
 local assigned = UnitGroupRolesAssigned
@@ -765,12 +764,14 @@ RF.ApplySort()
 assert(CompactRaidFrameContainer.flowSortFunc == originalSort, "nothing changes in combat")
 combat = false
 fire("PLAYER_REGEN_ENABLED")
-assert(sorted({ "raid3", "raid2", "raid1" }) == "raid1,raid3,raid2" and relaid >= 1, "the tank first, then the client's order")
-roles.raid4, roles.raid5 = "DAMAGER", "HEALER"
+assert(sorted({ "raid3", "raid2", "raid1" }) == "raid1,raid2,raid3" and relaid >= 1, "tanks, healers, damage")
+settings.rfRoleOrder = "HTD"
+assert(sorted({ "raid3", "raid1", "raid2" }) == "raid2,raid1,raid3", "healers first")
+roles.raid4, roles.raid5 = "DAMAGER", "DAMAGER"
 local unitExists = UnitExists
 function UnitExists(unit) return unit == "raid4" or unit == "raid5" or unitExists(unit) end
-assert(sorted({ "raid4", "raid5", "raid2" }) == "raid5,raid4,raid2", "healers and damage keep the client's order")
-settings.rfRoleSort = false
+assert(sorted({ "raid4", "raid5", "raid3" }) == "raid5,raid4,raid3", "the client's order inside a role")
+settings.rfRoleSort, settings.rfRoleOrder = false, "THD"
 RF.ApplySort()
 assert(CompactRaidFrameContainer.flowSortFunc == originalSort, "turning it off restores the client's sort")
 
@@ -2229,7 +2230,7 @@ do
 end
 
 ---------------------------------------------------------------------------------------------------
--- Tanks only: mark, assigned (main tank, dungeon finder), own talents, stance with a hold
+-- Roles without guessing: mark, assigned, own talents, addon, tank stance with a hold
 ---------------------------------------------------------------------------------------------------
 do
     local R = Suite.Roles
@@ -2245,18 +2246,21 @@ do
     ui.Settings().roleCache = { old = { role = "HEALER", time = 0 } }
     R.Reset()
 
-    assert(Suite.GroupRole("player") == nil, "a Holy priest is no tank")
+    local role, source = Suite.GroupRole("player")
+    assert(role == "HEALER" and source == "talents", "my role from my talents (Holy)")
     assert(ui.Settings().roleCache == nil, "the old inspection cache is dropped")
-    assert(Suite.GroupRole("raid3") == nil and Suite.GroupRole("raid2") == nil, "no healer or damage roles at all")
-    -- a healer announced by another ForeverUI is still no tank
+    assert(Suite.GroupRole("raid3") == nil, "a mage gets no role from the class")
+    assert(Suite.GroupRole("raid2") == nil, "a priest gets no healer role from the class")
+    -- the role another ForeverUI announced
     ui.HealerMana = { peers = { Nraid2 = { role = "HEALER" } } }
-    assert(Suite.GroupRole("raid2") == nil, "announced healers get no role")
+    role, source = Suite.GroupRole("raid2")
+    assert(role == "HEALER" and source == "addon", "the role another ForeverUI announced")
     ui.HealerMana = nil
     -- stance: Defensive Stance tanks, and the role holds R.HOLD seconds after it drops
     spells[71] = { "Defensive Stance", "Interface\\Icons\\Ability_Warrior_DefensiveStance" }
     R.ResetNames()
     auras.raid1.HELPFUL = { { name = "Defensive Stance" } }
-    local role, source = Suite.GroupRole("raid1")
+    role, source = Suite.GroupRole("raid1")
     assert(role == "TANK" and source == "stance", "a tank stance tells the tank")
     auras.raid1.HELPFUL = {}
     assert(Suite.GroupRole("raid1") == "TANK", "held right after the stance drops")
@@ -2267,24 +2271,23 @@ do
     auras.raid1.HELPFUL = { { name = "Defensive Stance" } }
     Suite.GroupRole("raid1")
     assert(not R.ExpireHolds(GetTime() + R.HOLD + 1) and Suite.GroupRole("raid1") == "TANK", "a standing tank stays")
-    -- marks: "Not a tank" beats the stance, "Tank" beats everything
+    -- marks: "No role" beats the stance, a role mark beats everything
     R.SetMark("Nraid1", "NONE")
-    assert(Suite.GroupRole("raid1") == nil, "not a tank by mark")
-    R.SetMark("Nraid3", "TANK")
-    role, source = Suite.GroupRole("raid3")
-    assert(role == "TANK" and source == "mark", "a tank by mark")
-    R.SetMark("Nraid2", "HEALER")
-    assert(R.Mark("Nraid2") == nil, "no healer marks")
+    assert(Suite.GroupRole("raid1") == nil, "no role by mark")
+    R.SetMark("Nraid1", "HEALER")
+    role, source = Suite.GroupRole("raid1")
+    assert(role == "HEALER" and source == "mark", "a mark wins over the stance")
+    UnitGroupRolesAssigned = function(unit) return unit == "raid1", false, false end
+    assert(Suite.GroupRole("raid1") == "HEALER", "the mark wins over the assigned role too")
     R.SetMark("Nraid1", nil)
-    R.SetMark("Nraid3", nil)
-    -- assigned: only the tank answer counts
+    role, source = Suite.GroupRole("raid1")
+    assert(role == "TANK" and source == "assigned", "the assigned role")
+    -- an assigned healer
     UnitGroupRolesAssigned = function(unit) return false, unit == "raid2", false end
-    assert(Suite.GroupRole("raid2") == nil, "an assigned healer is ignored")
-    UnitGroupRolesAssigned = function(unit) return unit == "raid2", false, false end
     role, source = Suite.GroupRole("raid2")
-    assert(role == "TANK" and source == "assigned", "the assigned tank")
+    assert(role == "HEALER" and source == "assigned", "the assigned healer")
     UnitGroupRolesAssigned = function() return false, false, false end
-    -- own talents: Protection tanks, another tree means no tank even in the stance
+    -- own talents: Protection tanks, another tree is that tree's role even in the stance
     classes.player = "WARRIOR"
     local realTabs = GetTalentTabInfo
     GetTalentTabInfo = function(i) return "Tree" .. i, "", i == 3 and 51 or 10 end
@@ -2294,7 +2297,7 @@ do
     auras.player = auras.player or { HELPFUL = {}, HARMFUL = {} }
     local savedPlayer = auras.player.HELPFUL
     auras.player.HELPFUL = { { name = "Defensive Stance" } }
-    assert(Suite.GroupRole("player") == nil, "an Arms warrior in Defensive Stance is no tank")
+    assert(Suite.GroupRole("player") == "DAMAGER", "an Arms warrior in Defensive Stance deals damage")
     auras.player.HELPFUL = savedPlayer
     GetTalentTabInfo = realTabs
     classes.player = "PRIEST"
@@ -2320,6 +2323,7 @@ do
     ui.Print = realPrint
     local joined = table.concat(printed, " | ")
     assert(joined:find("raid1 WARRIOR: TANK %(stance%)") and joined:find("raid2 PRIEST: %- %(%-%)")
+        and joined:find("raid3 MAGE: %- %(%-%)")
         and not joined:find("[\128-\255]"), "roles diagnostics")
 
     ui.Settings().roleMarks = nil
@@ -2331,4 +2335,4 @@ end
 
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
     .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators, visibility, exclusions), "
-    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets block, sample frames, tanks only (mark, assigned, talents, stance hold, pets), group type profiles, frame settings per group type and copy; %d frames"):format(#objects))
+    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets block, sample frames, roles without guessing (mark, assigned, talents, addon, tank stance hold, pets), group type profiles, frame settings per group type and copy; %d frames"):format(#objects))
