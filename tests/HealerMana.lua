@@ -181,38 +181,25 @@ assert(HM.COOLDOWN >= 15 and HM.COOLDOWN <= 20)
 ---------------------------------------------------------------------------------------------------
 -- Healer role chain
 ---------------------------------------------------------------------------------------------------
--- 1. assigned role wins
+-- 1. no assigned roles, no guessing: a dungeon finder role, class, mana and buffs tell nothing
 setUnit("party1", { name = "Tank", class = "PALADIN", assigned = "TANK" })
-assert(HM.Role("party1") == "TANK" and select(2, HM.Role("party1")) == "assigned")
+assert(HM.Role("party1") == nil, "the assigned role is not used")
+setUnit("party3", { name = "Resto", class = "SHAMAN", buffs = { { name = "Водный щит" } } })
+assert(HM.Role("party3") == nil, "no healer guessed from Water Shield")
+setUnit("party3", { name = "Holy", class = "PRIEST" })
+assert(HM.Role("party3") == nil, "no healer guessed from a mana class")
 -- 2. own talents: Discipline / Holy priest heals, Shadow does not
 talentPoints = { 0, 51, 20 }
 assert(HM.Role("player") == "HEALER" and select(2, HM.Role("player")) == "talents")
 talentPoints = { 10, 5, 56 }
 assert(HM.Role("player") == "DAMAGER")
 talentPoints = { 0, 0, 0 }
-assert(select(2, HM.Role("player")) == "guess", "no talents: guess")
--- 3. synced role for others
+assert(HM.Role("player") == nil, "no talents: unknown")
+-- 3. the role another ForeverUI announced
 setUnit("party2", { name = "Synced", class = "SHAMAN" })
-HM.peers.Synced = { role = "DAMAGER", time = now }
-assert(HM.Role("party2") == "DAMAGER" and select(2, HM.Role("party2")) == "sync")
+HM.peers.Synced = { role = "HEALER", time = now }
+assert(HM.Role("party2") == "HEALER" and select(2, HM.Role("party2")) == "sync")
 HM.peers.Synced = nil
--- 4. class and buffs
-setUnit("party3", { name = "Tree", class = "DRUID", buffs = { { name = "Древо Жизни" } } })
-assert(HM.Role("party3") == "HEALER")
-setUnit("party3", { name = "Owl", class = "DRUID", buffs = { { name = "Облик лунного совуха" } } })
-assert(HM.Role("party3") == "DAMAGER")
-setUnit("party3", { name = "Cat", class = "DRUID", power = 3 })
-assert(HM.Role("party3") ~= "HEALER", "druid in cat form")
-setUnit("party3", { name = "Shadow", class = "PRIEST", buffs = { { name = "Облик Тьмы" } } })
-assert(HM.Role("party3") == "DAMAGER", "Shadowform excludes")
-setUnit("party3", { name = "Prot", class = "PALADIN", buffs = { { name = "Праведное неистовство" } } })
-assert(HM.Role("party3") == "TANK", "Righteous Fury excludes")
-setUnit("party3", { name = "Ele", class = "SHAMAN", buffs = { { name = "Щит молний" } } })
-assert(HM.Role("party3") == "DAMAGER")
-setUnit("party3", { name = "Resto", class = "SHAMAN", buffs = { { name = "Водный щит" } } })
-assert(HM.Role("party3") == "HEALER")
-setUnit("party3", { name = "Mage", class = "MAGE" })
-assert(HM.Role("party3") == "DAMAGER")
 
 ---------------------------------------------------------------------------------------------------
 -- Sender: the player as a healer in a party
@@ -287,24 +274,19 @@ assert(HM.peers.Druid, "the sender is known to run ForeverUI")
 units.raid4.mana = 20
 assert(not HM.CheckUnit("raid4"), "so the local watch leaves it alone")
 units.raid4.mana = 100
--- Druid without the addon: watched locally, no duplicate after its own message later
+-- Druid without the addon: its role is not guessed, so it is not watched
 HM.peers.Druid = nil
 now = now + 100
-assert(not HM.CheckUnit("raid4"), "high mana")
 units.raid4.mana = 20
-assert(HM.CheckUnit("raid4") and HM.last.name == "Druid" and HM.last.source == "local", "local watch alert")
-assert(not HM.OnMessage("FUI_MANA", "1:L:19:H", "RAID", "Druid"), "the message after the local alert is a duplicate")
+assert(not HM.CheckUnit("raid4"), "healers without ForeverUI are not watched")
 -- the local watch never alerts about the player
 units.raid1.mana, units.player.mana = 1, 1
 assert(not HM.CheckUnit("raid1") and not HM.CheckUnit("player"), "never about oneself")
--- a shadow priest in the subgroup is no healer
+-- a priest in the subgroup without ForeverUI is not taken for a healer either
 HM.peers.Heal = nil
-units.raid2.buffs = { { name = "Облик Тьмы" } }
 now = now + 100
 units.raid2.mana = 3
-assert(not HM.CheckUnit("raid2"), "Shadowform: not a healer")
-units.raid2.buffs = nil
-assert(HM.CheckUnit("raid2"), "a priest without Shadowform is")
+assert(not HM.CheckUnit("raid2"), "a priest without the addon is not watched")
 -- disabled module: nothing
 settings.hmEnabled = false
 now = now + 100

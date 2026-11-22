@@ -38,10 +38,10 @@ local DEFAULTS = {
     rfShield = true, rfShieldTexture = "WoW Forever Raid", rfShieldColor = { 0.85, 0.95, 1, 1 }, rfShieldAlpha = 0.7,
     rfShieldHeight = 0, rfShieldMode = "attached", rfShieldAlign = "BOTTOM", rfHideAbsorbGlow = true,
     rfIndicators = true, rfIndicatorTimer = true,
-    rfMoveContainer = true, rfHandle = true, rfPetMode = "block", rfPetAuras = false, rfRoleInspect = true, rfRoleFadeGuess = false, rfGrowth = "center", rfTemplateSize = 0,
+    rfMoveContainer = true, rfHandle = true, rfPetMode = "block", rfPetAuras = false, rfRoleFadeGuess = false, rfGrowth = "center", rfTemplateSize = 0,
     rfPartyShow = "client", rfRaidShow = "client",
     rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
-    rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
+    rfRoleHideClient = true, rfRoleSort = false,
     -- Highlight of the button under the cursor and of the player's target
     rfHover = true, rfHoverStyle = "both", rfHoverColor = { 1, 1, 1, 0.85 },
     rfTarget = true, rfTargetClass = false, rfTargetColor = { 1, 0.82, 0.3, 1 }, rfTargetSize = 2,
@@ -2181,18 +2181,22 @@ function RF.SetRoleTexture(texture, role, setId)
     return true
 end
 
+-- Only tanks get an icon (Roles.lua): a preview may pass any role, only "TANK" is drawn.
 function RF.UpdateRole(deco, forcedRole)
     local settings = cfg()
-    local role, source = forcedRole, nil
-    if not role and Suite.GroupRole then role, source = Suite.GroupRole(deco.unit) end
-    if not role and not forcedRole then role = Suite.UnitRole(deco.unit) end
-    if not (settings.rfEnabled and settings.rfRoleIcon) or not role
-        or (role == "DAMAGER" and settings.rfRoleHideDamager) then
+    local role, source
+    if forcedRole then
+        role = forcedRole == "TANK" and "TANK" or nil
+    elseif Suite.GroupRole then
+        role, source = Suite.GroupRole(deco.unit)
+    end
+    if role ~= "TANK" then role = nil end
+    if not (settings.rfEnabled and settings.rfRoleIcon) or not role then
         deco.role:Hide()
         deco.roleKey = nil
         return
     end
-    -- A worked-out role (stance, inspection, class) may be drawn faded.
+    -- A tank known only by the stance may be drawn faded.
     deco.role:SetAlpha((settings.rfRoleFadeGuess and Suite.Roles and Suite.Roles.guessed[source or ""]) and 0.55 or 1)
     deco.roleSource = source
     local key = role .. settings.rfRoleSet .. settings.rfRoleSize .. settings.rfRoleAnchor .. settings.rfRoleX .. settings.rfRoleY
@@ -2275,11 +2279,9 @@ end
 
 ---------------------------------------------------------------------------------------------------
 -- Sorting by role: the client's flow container sorts its unit tokens with container.flowSortFunc
--- (Blizzard CompactRaidFrameContainer). Our function puts tanks, healers and damage dealers in the
--- chosen order and keeps the client's own order inside each role. Protected layout: out of combat.
+-- (Blizzard CompactRaidFrameContainer). Only tanks are recognised (Roles.lua): our function puts the
+-- tanks first and keeps the client's own order for everybody else. Protected layout: out of combat.
 ---------------------------------------------------------------------------------------------------
-local orders = { THD = { TANK = 1, HEALER = 2, DAMAGER = 3 }, HTD = { HEALER = 1, TANK = 2, DAMAGER = 3 },
-    TDH = { TANK = 1, DAMAGER = 2, HEALER = 3 } }
 local sortOwners = {}   -- container -> its original flowSortFunc (false when it had none)
 
 local function unitIndex(unit)
@@ -2289,10 +2291,8 @@ end
 
 local function makeRoleSort(original)
     return function(a, b)
-        local rank = orders[cfg().rfRoleOrder] or orders.THD
-        local role = Suite.GroupRole or Suite.UnitRole
-        local ra, rb = rank[role(a) or ""] or 4, rank[role(b) or ""] or 4
-        if ra ~= rb then return ra < rb end
+        local ta, tb = Suite.GroupRole(a) == "TANK", Suite.GroupRole(b) == "TANK"
+        if ta ~= tb then return ta end
         if original then return original(a, b) end
         local ia, ib = unitIndex(a), unitIndex(b)
         if ia ~= ib then return ia < ib end
@@ -2772,7 +2772,7 @@ ui.RegisterCallback("SuiteSpellsChanged", function()
     for _, deco in ipairs(ordered) do deco.auraDirty = true end
     anyDirty = true
 end, "RaidFramesSpells")
--- Roles learned (roster, main tank, inspection, another ForeverUI, a mark): icons, and the sort order
+-- Tanks learned (roster, main tank, stance, a mark, a stance hold running out): icons, and the sort order
 -- when a role really changed.
 ui.RegisterCallback("SuiteRolesChanged", function()
     local changed = false
@@ -3919,11 +3919,11 @@ SlashCmdList.FOREVERUIRAID = function(input)
         return
     end
     if (input or ""):lower():match("role") then
-        -- Every group member: class, role and where the role came from. ASCII only (no names).
+        -- Every group member: class, tank or not and where it came from. ASCII only (no names).
         local R = Suite.Roles
-        local pending = R and R.Pending()
-        ui.Print(("Roles: inspect=%s pending=%s"):format(tostring(cfg().rfRoleInspect ~= false),
-            tostring(pending and pending.unit or "-")))
+        local holds = 0
+        for _ in pairs(R and R.seen or {}) do holds = holds + 1 end
+        ui.Print(("Roles: tanks only, stance holds=%d (%ds)"):format(holds, R and R.HOLD or 0))
         local units = { "player" }
         local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
         if raid > 0 then
@@ -3934,9 +3934,9 @@ SlashCmdList.FOREVERUIRAID = function(input)
         end
         for _, unit in ipairs(units) do
             if UnitExists(unit) then
-                local role, source = (Suite.GroupRole or Suite.UnitRole)(unit)
+                local role, source = Suite.GroupRole(unit)
                 local _, class = UnitClass(unit)
-                ui.Print(("%s %s: %s (%s)"):format(unit, tostring(class), tostring(role or "?"), tostring(source or "-")))
+                ui.Print(("%s %s: %s (%s)"):format(unit, tostring(class), tostring(role or "-"), tostring(source or "-")))
             end
         end
         return

@@ -12,10 +12,12 @@ end
 
 ui.RegisterOptions("healermana", {
     title = L("Мана хила", "Healer mana"),
-    description = L("Баннер, когда у хила группы мало маны. Хил с ForeverUI сообщает о себе сам (сообщение аддона), "
-        .. "хилы без аддона проверяются по мане вашей подгруппы. Самому хилу оповещение не показывается.",
-        "A banner when a healer of the group runs low on mana. A healer with ForeverUI reports itself (addon "
-        .. "message), healers without it are checked by the mana of your subgroup. The healer never sees its own alert."),
+    description = L("Баннер, когда у хила группы мало маны. Работает только с хилами, у которых тоже стоит ForeverUI: "
+        .. "аддон хила по его талантам знает, что он хил, и сам сообщает о мане. Хилов без аддона модуль не угадывает. "
+        .. "Самому хилу оповещение не показывается.",
+        "A banner when a healer of the group runs low on mana. Works only with healers who run ForeverUI too: "
+        .. "their addon knows from their talents that they heal and reports the mana itself. Healers without the "
+        .. "addon are not guessed. The healer never sees its own alert."),
     icon = "Interface\\Icons\\INV_Drink_18",
     group = "combat", order = 25,
     enable = "hmEnabled",
@@ -32,8 +34,8 @@ ui.RegisterOptions("healermana", {
                     .. "below yours too. It repeats only after the mana climbs above 40%, at most once per 18 s.") },
             { "select", "hmScope", L("Область в рейде", "Raid area"), default = "group", values = {
                 { "group", L("Только моя группа", "My group only") }, { "raid", L("Весь рейд", "Whole raid") } },
-                tooltip = L("Хилы без ForeverUI всегда проверяются только в вашей подгруппе.",
-                    "Healers without ForeverUI are always checked in your subgroup only.") },
+                tooltip = L("Чьи сообщения о мане показывать: хилов вашей подгруппы или всего рейда.",
+                    "Whose mana reports to show: the healers of your subgroup or of the whole raid.") },
             { "select", "hmSound", L("Звук", "Sound"), default = "RaidWarning", values = sounds },
             { "range", "hmFontSize", L("Размер шрифта", "Font size"), min = 10, max = 28, step = 1, default = 15 },
             { "range", "hmDuration", L("Длительность показа", "Display time"), min = 1, max = 10, step = 0.5, default = 4,

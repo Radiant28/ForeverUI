@@ -1,14 +1,14 @@
 -- ForeverUI low healer mana alert. A healer with ForeverUI tells the group when its mana drops below
--- the threshold (addon message "FUI_MANA"); everyone else shows a banner. Healers without ForeverUI
--- are watched locally (UnitMana of the own subgroup). The healer itself never sees its own alert.
+-- the threshold (addon message "FUI_MANA"); everyone else shows a banner. The local watch (HM.CheckUnit,
+-- UnitMana of the own subgroup) needs a known healer that sends no messages, so with roles never guessed
+-- it stays silent: healers without ForeverUI are not watched. The healer never sees its own alert.
 -- WotLK 3.3.5a: SendAddonMessage takes prefix, text, channel (prefixes need no registration), the
--- roster events are PARTY_MEMBERS_CHANGED / RAID_ROSTER_UPDATE, UnitGroupRolesAssigned returns three
--- booleans (Suite.UnitRole), timers run on OnUpdate.
+-- roster events are PARTY_MEMBERS_CHANGED / RAID_ROSTER_UPDATE, timers run on OnUpdate.
 --
--- Healer role, first answer wins: assigned group role (Suite.UnitRole) -> for the player the talent
--- tree with the most points (Holy paladin, Restoration druid and shaman, Discipline / Holy priest) ->
--- for others the role their ForeverUI announced -> class and buffs (Tree of Life = healer; Shadowform,
--- Moonkin Form, Righteous Fury and Lightning Shield exclude).
+-- Healer role, no guessing (2026-11-22: mana, class and buffs made damage hybrids "healers"): the
+-- player by the talent tree with the most points (Holy paladin, Restoration druid and shaman,
+-- Discipline / Holy priest); everybody else only by the role their own ForeverUI announced. Healers
+-- without ForeverUI are not known and not watched.
 --
 -- Packet: "<version>:<type>:<mana %>:<role>", e.g. "1:L:18:H". Types: L = low mana, R = role
 -- announcement (sent after roster and talent changes, at most once per 10 s). Roles: H, T, D, N.
@@ -133,58 +133,19 @@ function HM.TalentRole()
     return "DAMAGER"
 end
 
--- Buffs that decide a hybrid's role: names resolved through GetSpellInfo (English as a fallback).
-local roleBuffs = {
-    treeOfLife = { 33891, "Tree of Life" }, shadowform = { 15473, "Shadowform" }, moonkin = { 24858, "Moonkin Form" },
-    righteousFury = { 25780, "Righteous Fury" }, lightningShield = { 324, "Lightning Shield" },
-    waterShield = { 52127, "Water Shield" },
-}
-local function buffName(key)
-    local entry = roleBuffs[key]
-    return (GetSpellInfo and GetSpellInfo(entry[1])) or entry[2]
-end
-local function hasBuff(unit, key)
-    local wanted = buffName(key)
-    for index = 1, 40 do
-        local name = UnitBuff(unit, index)
-        if not name then return false end
-        if name == wanted then return true end
-    end
-    return false
-end
-
 HM.healerClasses = { PRIEST = true, DRUID = true, SHAMAN = true, PALADIN = true }
-function HM.GuessRole(unit)
-    local _, class = UnitClass(unit)
-    if not HM.healerClasses[class] then return "DAMAGER" end
-    if UnitPowerType and UnitPowerType(unit) ~= 0 then return class == "DRUID" and "DAMAGER" or nil end
-    if class == "DRUID" then
-        if hasBuff(unit, "treeOfLife") then return "HEALER" end
-        if hasBuff(unit, "moonkin") then return "DAMAGER" end
-    elseif class == "PRIEST" then
-        if hasBuff(unit, "shadowform") then return "DAMAGER" end
-    elseif class == "PALADIN" then
-        if hasBuff(unit, "righteousFury") then return "TANK" end
-    elseif class == "SHAMAN" then
-        if hasBuff(unit, "waterShield") then return "HEALER" end
-        if hasBuff(unit, "lightningShield") then return "DAMAGER" end
-    end
-    return "HEALER"
-end
 
--- Role of a unit and where it came from: "assigned", "talents", "sync" or "guess".
+-- Role of a unit and where it came from: "talents" (the player), "sync" (announced) or nil.
 function HM.Role(unit)
     if not unit or not UnitExists(unit) then return nil end
-    local role = Suite and Suite.UnitRole and Suite.UnitRole(unit)
-    if role then return role, "assigned" end
     if UnitIsUnit(unit, "player") then
-        role = HM.TalentRole()
+        local role = HM.TalentRole()
         if role then return role, "talents" end
-    else
-        local peer = peers[plainName(UnitName(unit))]
-        if peer and peer.role then return peer.role, "sync" end
+        return nil
     end
-    return HM.GuessRole(unit), "guess"
+    local peer = peers[plainName(UnitName(unit))]
+    if peer and peer.role then return peer.role, "sync" end
+    return nil
 end
 
 ---------------------------------------------------------------------------------------------------

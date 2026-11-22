@@ -741,8 +741,8 @@ local function buildKinds(parent, width, _, page)
     return -top + 44
 end
 
--- Roles of the group: everyone in the party or raid with the role the frames use and where it came
--- from; a role set by hand ("mark") wins over everything but the dungeon finder and the main tank.
+-- Tanks of the group: everyone in the party or raid, tank or not and where it came from. A mark set by
+-- hand wins over everything: "Tank" for a tank the addon misses, "Not a tank" for a stance it misreads.
 local function buildRoleMarks(parent, width)
     local su, R = ui.SuiteUI, ui.Suite and ui.Suite.Roles
     if not su or not R or not ui.Suite.GroupRole then return su and su.Unavailable(parent, width) or 20 end
@@ -750,7 +750,7 @@ local function buildRoleMarks(parent, width)
     local refresh
     local title = W.Text(parent, W.fonts.label)
     title:SetPoint("TOPLEFT", 0, 0)
-    title:SetText(L("Роли игроков группы", "Roles in the group"))
+    title:SetText(L("Танки группы", "Tanks in the group"))
     local listWidth = math.min(width, 420)
     local list = su.List(parent, listWidth, 8, 22, function(index)
         state.index = index
@@ -758,9 +758,8 @@ local function buildRoleMarks(parent, width)
     end)
     list:SetPoint("TOPLEFT", 0, -20)
     local y = -20 - (8 * 22 + 4) - 8
-    local values = { { "auto", L("Авто", "Auto") }, { "TANK", R.labels.TANK }, { "HEALER", R.labels.HEALER },
-        { "DAMAGER", R.labels.DAMAGER } }
-    local markRow = W.Select(parent, { type = "select", label = L("Роль выбранного игрока", "Role of the chosen player"),
+    local values = { { "auto", L("Авто", "Auto") }, { "TANK", R.labels.TANK }, { "NONE", R.labels.NONE } }
+    local markRow = W.Select(parent, { type = "select", label = L("Выбранный игрок", "The chosen player"),
         values = values }, {
         get = function()
             local member = state.members[state.index]
@@ -773,12 +772,14 @@ local function buildRoleMarks(parent, width)
     }, math.min(width, 260))
     markRow:SetPoint("TOPLEFT", 0, y)
     y = y - 54
-    local hint = W.Description(parent, L("Откуда роль: назначена (поиск группы, главный танк), метка (выбрана здесь), "
-        .. "таланты (ваши), аддон (у игрока тоже ForeverUI), стойка (стойка или облик танка, Древо жизни), осмотр "
-        .. "(таланты по осмотру — по одному, вне боя, рядом), класс (только боевые классы). «?» — пока неизвестна.",
-        "Where a role comes from: assigned (dungeon finder, main tank), mark (chosen here), talents (yours), addon (the "
-        .. "player runs ForeverUI too), stance (a tank stance or form, Tree of Life), inspect (talents by inspecting: "
-        .. "one at a time, out of combat, nearby), class (damage-only classes). “?”: not known yet."), width)
+    local hint = W.Description(parent, L("Распознаются только танки. Откуда: метка (выбрана здесь), назначен (главный "
+        .. "танк рейда, поиск группы), таланты (ваши: «Защита» воина или паладина), стойка (Защитная стойка, Праведное "
+        .. "неистовство, облик медведя, власть льда; держится ещё 10 с после выхода из стойки). Лекари и бойцы роли не "
+        .. "получают. «Не танк» убирает значок у того, кого стойка выдаёт за танка.",
+        "Only tanks are recognised. Where from: mark (chosen here), assigned (the raid's main tank, dungeon finder), "
+        .. "talents (yours: Protection warrior or paladin), stance (Defensive Stance, Righteous Fury, Bear Form, Frost "
+        .. "Presence; kept 10 s after leaving the stance). Healers and damage dealers get no role. “Not a tank” removes "
+        .. "the icon from someone the stance makes look like a tank."), width)
     hint:SetPoint("TOPLEFT", 0, y)
     y = y - math.ceil(hint:GetHeight() or 0) - 4
 
@@ -804,13 +805,14 @@ local function buildRoleMarks(parent, width)
     local function render(row, member)
         local rf = RF()
         if not (member.role and rf and rf.SetRoleTexture(row.icon, member.role, rf.Settings().rfRoleSet)) then
-            row.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-            row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            row.icon:SetTexture(nil)
         end
         local color = member.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.class]
         row.text:SetText(color and ("|cff%02x%02x%02x%s|r"):format(math.floor(color.r * 255), math.floor(color.g * 255), math.floor(color.b * 255), member.name)
             or member.name)
-        row.sub:SetText(member.role and (R.labels[member.role] .. ", " .. (R.sourceLabels[member.source] or "?")) or "?")
+        local mark = R.Mark(member.name)
+        row.sub:SetText(member.role and (R.labels.TANK .. ", " .. (R.sourceLabels[member.source] or "?"))
+            or (mark == "NONE" and (R.labels.NONE .. ", " .. R.sourceLabels.mark)) or "—")
     end
     refresh = function()
         local chosen = state.members[state.index]
@@ -944,7 +946,9 @@ ui.RegisterOptions("raidframes", {
                     "The \"Group\" label appears when you hover the frames; drag it to move the group without Edit Mode. Disabled in combat.") },
         } },
         { id = "roles", title = L("Роли и сортировка", "Roles and sorting"), group = G_MAIN, options = {
-            { "toggle", "rfRoleIcon", L("Показывать иконку роли", "Show the role icon"), default = true },
+            { "toggle", "rfRoleIcon", L("Показывать иконку танка", "Show the tank icon"),
+                tooltip = L("Значок ставится только танкам. Лекари и бойцы значка не получают.",
+                    "Only tanks get the icon. Healers and damage dealers get none."), default = true },
             { "select", "rfRoleSet", L("Набор иконок", "Icon set"), default = "blizzard2", depends = "rfRoleIcon",
                 values = function()
                     local values = {}
@@ -956,28 +960,16 @@ ui.RegisterOptions("raidframes", {
             { "select", "rfRoleAnchor", L("Позиция", "Position"), values = anchors, default = "TOPLEFT", depends = "rfRoleIcon" },
             { "range", "rfRoleX", L("Смещение X", "Offset X"), min = -40, max = 40, step = 1, default = 2, depends = "rfRoleIcon" },
             { "range", "rfRoleY", L("Смещение Y", "Offset Y"), min = -40, max = 40, step = 1, default = -2, depends = "rfRoleIcon" },
-            { "toggle", "rfRoleHideDamager", L("Не показывать иконку ДД", "Hide the damage dealer icon"), default = false,
-                depends = "rfRoleIcon" },
             { "toggle", "rfRoleHideClient", L("Скрыть иконку роли клиента", "Hide the client's role icon"), default = true,
                 depends = "rfRoleIcon" },
-            { "toggle", "rfRoleSort", L("Сортировать ряд по ролям", "Sort the row by role"), default = false, protected = true,
+            { "toggle", "rfRoleSort", L("Танков — в начало ряда", "Tanks first in the row"), default = false, protected = true,
                 tooltip = L("Работает, когда фреймы идут одним списком (без «держать группы вместе»). Применяется вне боя.",
                     "Works when the frames form one list (not “keep groups together”). Applies out of combat.") },
-            { "select", "rfRoleOrder", L("Порядок ролей", "Role order"), default = "THD", depends = "rfRoleSort", protected = true,
-                values = { { "THD", L("Танки, хилы, ДД", "Tanks, healers, damage") },
-                    { "HTD", L("Хилы, танки, ДД", "Healers, tanks, damage") },
-                    { "TDH", L("Танки, ДД, хилы", "Tanks, damage, healers") } } },
-            { "toggle", "rfRoleInspect", L("Узнавать роли осмотром талантов", "Learn roles by inspecting talents"),
-                default = true, width = "full", tooltip = L("В рейде, собранном вручную, клиент ролей не знает. Тех, "
-                    .. "чью роль не дали назначение, метка, аддон или стойка, модуль по одному осматривает вне боя "
-                    .. "(раз в 1,5 с, только рядом) и запоминает на час.", "In a raid built by hand the client knows "
-                    .. "no roles. Players whose role no assignment, mark, addon or stance gives are inspected one at a "
-                    .. "time out of combat (every 1.5 s, nearby only) and remembered for an hour.") },
-            { "toggle", "rfRoleFadeGuess", L("Угаданную роль рисовать бледнее", "Draw a worked-out role fainter"),
-                default = false, width = "full", depends = "rfRoleIcon", tooltip = L("Роль по стойке, осмотру или "
-                    .. "классу — полупрозрачной иконкой; назначенная, отмеченная и от аддона — яркой.", "A role from a "
-                    .. "stance, inspection or class gets a half transparent icon; an assigned, marked or announced one "
-                    .. "stays bright.") },
+            { "toggle", "rfRoleFadeGuess", L("Танка по стойке рисовать бледнее", "Draw a tank known by the stance fainter"),
+                default = false, width = "full", depends = "rfRoleIcon", tooltip = L("Танк, узнанный только по стойке, "
+                    .. "облику или власти, — полупрозрачной иконкой; главный танк, метка и ваши таланты — яркой.",
+                    "A tank known only by the stance, form or presence gets a half transparent icon; the main tank, "
+                    .. "a mark and your own talents stay bright.") },
             { "custom", build = buildRoleMarks, refresh = function(holder)
                 if holder.refreshRoles then holder.refreshRoles() end
             end },

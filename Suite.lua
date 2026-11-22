@@ -662,7 +662,8 @@ end
 -- Group role of a unit: "TANK", "HEALER", "DAMAGER" or nil. 3.3.5 UnitGroupRolesAssigned returns three
 -- booleans (later clients return a string); the raid main tank assignment counts as a tank.
 function Suite.UnitRole(unit)
-    if not unit or not UnitExists(unit) then return nil end
+    -- Pets have no role; the client answers "raidpet1 is not in your group" in chat when asked.
+    if not unit or unit:find("pet%d*$") or not UnitExists(unit) then return nil end
     if UnitGroupRolesAssigned then
         local a, b, c = UnitGroupRolesAssigned(unit)
         if type(a) == "string" then
