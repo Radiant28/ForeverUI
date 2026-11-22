@@ -358,7 +358,7 @@ assert(rec.installed and rec.specs[1].role == "HEALER" and rec.specs[1].scaleMod
 assert(rec.specs[1].style == "retail" and rec.specs[1].layout.CastingBarFrame.position, "style and layout saved")
 assert(rec.specs[1].modules.cursor == false, "cursor outline saved for the set")
 assert(chat.saved == ChatFrame1 and ChatFrame1.points[1][5] == Layouts.presets.HEALER.chat.retailY, "chat placed for Retail")
-assert(chat.opened == "Каналы" and #chat.added == 3 and #chat.removed == 3, "server channels moved to their tab")
+assert(not chat.opened and #chat.added == 0 and #chat.removed == 0, "server channels stay in the general window")
 assert(calls.chat, "chat tabs")
 reloaded = false
 

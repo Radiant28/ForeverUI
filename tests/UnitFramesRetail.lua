@@ -67,6 +67,11 @@ local player = unitFrame("PlayerFrame")
 local target = unitFrame("TargetFrame")
 local tot = unitFrame("TargetFrameToT")
 PlayerLevelText = Proto.new()
+-- Faction badges: the client puts them away from the moved portrait.
+TargetFramePVPIcon = Proto.new(); TargetFramePVPIcon.points = { { "TOPRIGHT", target, "TOPRIGHT", 0, 0 } }
+PlayerPVPIcon = Proto.new(); PlayerPVPIcon.points = { { "TOPLEFT", player, "TOPLEFT", 0, 0 } }
+function Proto:GetSize() return self.w or 0, self.h or 0 end
+function Proto:SetDrawLayer(layer, sub) self.layer, self.sublevel = layer, sub end
 SPELL_POWER_MANA = 0
 function hooksecurefunc() end
 function InCombatLockdown() return false end
@@ -87,6 +92,13 @@ assert(loadfile("ForeverUI.lua"))("ForeverUI", ui)
 assert(ui.UnitFrames.ApplyLayout, "ApplyLayout is exported")
 
 loader.scripts.OnEvent(loader, "ADDON_LOADED", "ForeverUI")
+
+-- The faction badge sits on the portrait's outer top corner: right of the target's portrait, left of the player's.
+local tp, pp = TargetFramePVPIcon.points[1], PlayerPVPIcon.points[1]
+assert(tp[1] == "CENTER" and tp[2] == TargetFramePortrait and tp[3] == "TOPRIGHT", "target faction badge on its portrait")
+assert(pp[1] == "CENTER" and pp[2] == PlayerFramePortrait and pp[3] == "TOPLEFT", "player faction badge on its portrait")
+assert(TargetFramePVPIcon.parent ~= nil and TargetFramePVPIcon.parent == TargetFramePortrait.parent,
+    "badge on the portrait layer, over the ring")
 
 
 -- Name accent (reaction gradient behind the target name): a little see-through in Classic, more in Retail.

@@ -125,6 +125,8 @@ local function paintMerchant()
             local shade = available == 0 and 0.5 or 0.9
             U.Paint(itemIcon(itemButton), red, shade)
             U.Paint(itemButton.GetNormalTexture and itemButton:GetNormalTexture(), red, shade)
+            -- the WoW Forever cell edge of the window skin (WindowSkin.lua) stands in for the faded slot frame
+            if itemButton.foreverCellEdge then U.Paint(itemButton.foreverCellEdge, red, shade) end
             -- name plate and slot of the row, as the client does (1, 0, 0; 0.5 when sold out)
             local plateShade = available == 0 and 0.5 or 1
             U.Paint(_G["MerchantItem" .. i .. "NameFrame"], red, plateShade)

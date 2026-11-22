@@ -141,7 +141,7 @@ local function newDraft(mode)
         role = role, guessed = role, style = style(),
         scaleMode = state and state.scaleMode or "auto", scale = state and state.scale or nil,
         layout = "role", modules = modules,
-        chat = { tabs = true, place = true, channels = true, font = false, fontSize = 14 },
+        chat = { tabs = true, place = true, font = false, fontSize = 14 },
     }
 end
 
@@ -290,7 +290,7 @@ local function finish()
         applyModules()
         if mode == "full" then
             local chat = draft.chat
-            Setup.ApplyChat({ tabs = chat.tabs, place = chat.place, channels = chat.channels,
+            Setup.ApplyChat({ tabs = chat.tabs, place = chat.place,
                 fontSize = chat.font and chat.fontSize or nil }, draft.role, style())
         end
         local rec = Setup.Char(true)
@@ -710,7 +710,6 @@ function builders.chat(page)
     local items = {
         { "tabs", L("Вкладки: Группа/Рейд, Гильдия, Добыча", "Tabs: Party/Raid, Guild, Loot") },
         { "place", L("Положение и размер окна под раскладку", "Chat position and size for the layout") },
-        { "channels", L("Общий, Торговля, Поиск — во вкладку «Каналы»", "General, Trade, LFG into a Channels tab") },
         { "font", L("Свой размер шрифта", "Own font size") },
     }
     local rows = {}
@@ -768,7 +767,6 @@ function builders.done(page)
                 local parts = {}
                 if c.tabs then parts[#parts + 1] = L("вкладки", "tabs") end
                 if c.place then parts[#parts + 1] = L("положение", "position") end
-                if c.channels then parts[#parts + 1] = L("каналы", "channels") end
                 if c.font then parts[#parts + 1] = L("шрифт ", "font ") .. c.fontSize end
                 add(L("Чат", "Chat"), #parts > 0 and table.concat(parts, ", ") or L("не трогать", "untouched"))
             end

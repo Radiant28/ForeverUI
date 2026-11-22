@@ -184,6 +184,10 @@ ui.RegisterOptions("prd", {
             { "range", "prdAuraCount", L("Иконок не больше", "Icons at most"), min = 1, max = 12, step = 1, default = 6 },
             { "range", "prdAuraSize", L("Размер иконок", "Icon size"), min = 14, max = 48, step = 1, default = 24, suffix = " px" },
             { "toggle", "prdAuraHideRaid", L("Скрывать рейдовые баффы", "Hide raid buffs"), default = true },
+            { "toggle", "prdAuraKeepVisible", L("Не скрывать баффы в покое", "Keep buffs visible at rest"), default = true,
+                tooltip = L("Иконки баффов остаются видны, когда панель затухает при полном здоровье и ресурсе вне боя "
+                    .. "(с прозрачностью «Активна»). Полосы затухают как обычно.", "Buff icons stay visible while the panel "
+                    .. "fades at full health and power out of combat (at the \"Active\" opacity). The bars fade as usual.") },
             { "toggle", "prdAuraProcGlow", L("Подсветка проков к нажатию", "Glow on procs to press"), default = true },
             { "color", "prdAuraGlowColor", L("Цвет подсветки", "Glow colour"), default = { 1, 0.85, 0.2 },
                 depends = "prdAuraProcGlow" },

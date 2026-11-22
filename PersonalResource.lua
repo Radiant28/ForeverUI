@@ -349,7 +349,19 @@ local function newGlow(parent, size)
 end
 
 -- Aura strip -------------------------------------------------------------------------------------
-local auraStrip = CreateFrame("Frame", nil, root)
+-- The strip lives in its own holder (child of UIParent, shown and scaled with root) so it can keep its
+-- opacity while the rest of the panel fades at full health and power (prdAuraKeepVisible). 3.3.5 has no
+-- SetIgnoreParentAlpha, so a child of root could never be more opaque than root itself.
+local auraHolder = CreateFrame("Frame", nil, UIParent)
+auraHolder:SetFrameStrata("MEDIUM")
+auraHolder:SetAllPoints(root)
+auraHolder:SetAlpha(0)
+auraHolder:Hide()
+PRD.auraHolder = auraHolder
+root:HookScript("OnShow", function() auraHolder:Show() end)
+root:HookScript("OnHide", function() auraHolder:Hide() end)
+hooksecurefunc(root, "SetScale", function(_, scale) auraHolder:SetScale(scale) end)   -- Edit Mode scales root too
+local auraStrip = CreateFrame("Frame", nil, auraHolder)
 auraStrip:SetHeight(24)
 local auraIcons = {}
 PRD.auraIcons = auraIcons
@@ -375,7 +387,7 @@ local function auraIcon(index)
     icon.count = newText(top)
     icon.count:SetPoint("TOPRIGHT", icon, "TOPRIGHT", -1, -1)
     icon.glow = newGlow(icon, 2)
-    icon:EnableMouse(PRD.mouseOn or false)
+    icon:EnableMouse(PRD.auraMouseOn or false)
     icon:SetScript("OnEnter", function(self)
         if not self.auraIndex and not self.spellId then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
@@ -1050,26 +1062,43 @@ function PRD.WantedAlpha()
     return (C("prdAlphaIdle") or 0) / 100
 end
 
+-- Opacity of the aura strip: the panel's, or never below the "active" opacity while the option keeps
+-- buffs visible at rest (full health and power).
+function PRD.AuraAlpha(alpha)
+    alpha = alpha or state.alpha or 0
+    if C("prdShowAuras") and C("prdAuraKeepVisible") then
+        return max(alpha, (C("prdAlphaActive") or 100) / 100)
+    end
+    return alpha
+end
+
+function PRD.SetAlpha(alpha)
+    state.alpha = alpha
+    root:SetAlpha(alpha)
+    auraHolder:SetAlpha(PRD.AuraAlpha(alpha))
+end
+
 local modifiers = { shift = IsShiftKeyDown, ctrl = IsControlKeyDown, alt = IsAltKeyDown }
-function PRD.MouseWanted()
+function PRD.MouseWanted(alpha)
     if PRD.editing then return false end   -- the Edit Mode outline takes the clicks
     if not C("prdClickThrough") then return true end
     local check = modifiers[C("prdModifier") or "shift"]
     if check and check() then return true end
     if state.combat then return false end
-    return C("prdTooltips") and state.alpha > 0.05 or false
+    return C("prdTooltips") and (alpha or state.alpha) > 0.05 or false
 end
 
 function PRD.UpdateMouse()
     local want = PRD.MouseWanted() and true or false
-    if want == PRD.mouseOn then return end
-    PRD.mouseOn = want
+    local auraWant = PRD.MouseWanted(PRD.AuraAlpha()) and true or false
+    if want == PRD.mouseOn and auraWant == PRD.auraMouseOn then return end
+    PRD.mouseOn, PRD.auraMouseOn = want, auraWant
     health:EnableMouse(want)
     power:EnableMouse(want)
-    for _, icon in ipairs(auraIcons) do icon:EnableMouse(want) end
+    for _, icon in ipairs(auraIcons) do icon:EnableMouse(auraWant) end
     for _, c in ipairs(cells) do c:EnableMouse(want and PRD.classMode == "totems") end
 end
-PRD.ResetMouse = function() PRD.mouseOn = nil end
+PRD.ResetMouse = function() PRD.mouseOn, PRD.auraMouseOn = nil, nil end
 
 function PRD.Evaluate()
     if not root:IsShown() then return end
@@ -1138,11 +1167,10 @@ local function step(self, elapsed)
     if abs(target - state.alpha) > 0.001 then
         local speed = 1 / max(0.05, C("prdFadeTime") or 0.4)
         if target > state.alpha then
-            state.alpha = min(target, state.alpha + elapsed * speed)
+            PRD.SetAlpha(min(target, state.alpha + elapsed * speed))
         else
-            state.alpha = max(target, state.alpha - elapsed * speed)
+            PRD.SetAlpha(max(target, state.alpha - elapsed * speed))
         end
-        root:SetAlpha(state.alpha)
         active = true
         PRD.UpdateMouse()
     end
@@ -1445,8 +1473,8 @@ function PRD.Apply()
     if not PRD.applied then
         PRD.applied = true
         state.alpha = PRD.WantedAlpha()
-        root:SetAlpha(state.alpha)
     end
+    PRD.SetAlpha(state.alpha)   -- also when prdAuraKeepVisible changed
     PRD.Wake()
 end
 
@@ -1526,5 +1554,6 @@ SlashCmdList.FOREVERUIPRD = function(input)
         tostring(PRD.healSource), floor(state.heal or 0), tostring(UnitGetTotalAbsorbs ~= nil), floor(state.absorb or 0),
         tostring(state.shield), state.tickGap and format("%.2f", state.tickGap) or "-", tostring(GetRuneCooldown ~= nil),
         tostring(GetTotemInfo ~= nil), tostring(GetComboPoints ~= nil)))
-    ui.Print(format("auras shown=%d spec=%d perSpec=%s", #auraList, PRD.TalentGroup(), tostring(mainDB().prdPerSpec)))
+    ui.Print(format("auras shown=%d keepVisible=%s auraAlpha=%.2f spec=%d perSpec=%s", #auraList,
+        tostring(C("prdAuraKeepVisible")), auraHolder:GetAlpha(), PRD.TalentGroup(), tostring(mainDB().prdPerSpec)))
 end

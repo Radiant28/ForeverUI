@@ -195,7 +195,13 @@ local WINDOWS = {
     { "PlayerTalentFrame", "Таланты", "Talents", unit = "player",
         portraits = { "PlayerTalentFramePortrait" },
         refresh = { "PlayerTalentFrame_Refresh" },
-        refreshFrames = { "GlyphFrame" } },
+        refreshFrames = { "GlyphFrame" },
+        -- Glyph tab: at the full raise a strip of window background showed between the header and the glyph art.
+        raise = GENERIC_RAISE - 2,
+        -- The left edge 5 px further out (checked in game on the glyph tab).
+        leftOut = 5,
+        -- Shown again on a tab switch, the glyph frame came up above the chrome and its ornate border covered the header.
+        under = { "GlyphFrame" } },
     { "TradeSkillFrame", "Профессии", "Professions" },
     { "TradeSkillCompactFrame", "Профессии (компактное окно)", "Professions (compact)" },
     { "LFDParentFrame", "Поиск подземелий", "Dungeon Finder", portrait = "HK_LFDPortraitFrame", portraitWhole = true,
@@ -229,6 +235,9 @@ local WINDOWS = {
     { "QuestFrame", "Задание у NPC", "Quest (NPC)", rect = { 11, -12, -32, 46 } },
     { "GossipFrame", "Разговор с NPC", "Gossip", rect = { 11, -12, -32, 46 } },
     { "MerchantFrame", "Торговец", "Merchant", rect = { 11, -12, -32, 76 },
+        merchantCells = true, -- WoW Forever cells instead of the client's slot art
+        -- after every page update: empty rows lose their name plate (skinMerchantCells)
+        refresh = { "MerchantFrame_UpdateMerchantInfo", "MerchantFrame_UpdateBuybackInfo" },
         -- Repair buttons: the WoW Forever hammer, anvil and guild anvil (cells of merchant.tga).
         icons = {
             MerchantRepairItemButton = { match = "ui%-merchant%-repairicons", cell = { 74, 64, 148, 138 } },
@@ -252,8 +261,12 @@ local WINDOWS = {
     -- 10 px too low, checked in game), the tabs stay behind it; the side tabs of the bank (GuildBankTabN, right of the
     -- window) stay above the right edge.
     { "GuildBankFrame", "Гильдейский банк", "Guild bank", rect = { 11, -12, 0, 8 }, tabOverlap = 10,
+        guildCells = true, -- WoW Forever cells instead of the client's column art
+        raise = GENERIC_RAISE - 5, -- header band 5 px lower than in other windows (checked in game)
         above = { "GuildBankTab1", "GuildBankTab2", "GuildBankTab3", "GuildBankTab4", "GuildBankTab5", "GuildBankTab6",
-            "GuildBankTab7", "GuildBankTab8" } },
+            "GuildBankTab7", "GuildBankTab8",
+            -- The guild emblem on top of the window: the header band covered it.
+            "GuildBankEmblemFrame" } },
     { "LFRParentFrame", "Поиск рейда", "Raid browser", rect = { 11, -12, -3, 4 } },
     { "PVPParentFrame", "PvP", "PvP", rect = { 11, -12, -32, 76 } },
     { "BattlefieldFrame", "Поля боя", "Battlegrounds", rect = { 11, -12, -32, 76 } },
@@ -281,7 +294,7 @@ for _, w in ipairs(WINDOWS) do
         headerButtons = w.headerButtons, headerShare = w.headerShare, headerArt = w.headerArt, ground = w.ground,
         unit = w.unit, portraits = w.portraits, refresh = w.refresh, refreshFrames = w.refreshFrames,
         portrait = w.portrait, portraitScale = w.portraitScale, portraitWhole = w.portraitWhole, tabs = w.tabs,
-        icons = w.icons, tabsOver = w.tabsOver, tabOverlap = w.tabOverlap,
+        icons = w.icons, tabsOver = w.tabsOver, tabOverlap = w.tabOverlap, raise = w.raise, under = w.under, leftOut = w.leftOut, guildCells = w.guildCells, merchantCells = w.merchantCells,
         icon = w.icon, hide = w.hide }
     if w.slots then
         recipe.slots = {}
@@ -409,6 +422,20 @@ local function topLevel(frame, skip, depth, best, maxDepth)
         end
     end
     return best
+end
+
+-- recipe.under: frames of the window (and everything inside them) that must stay under the chrome. The client
+-- may put such a frame up when it is shown again (the glyph tab). The chrome offset this needs, or 0.
+local function underOffset(recipe, windowLevel)
+    local need = 0
+    for _, frameName in ipairs(recipe.under or {}) do
+        local frame = _G[frameName]
+        if frame and frame.GetFrameLevel and frame:IsShown() then
+            local top = topLevel(frame, {}, 0, frame:GetFrameLevel(), 2)
+            if top + 1 - windowLevel > need then need = top + 1 - windowLevel end
+        end
+    end
+    return need
 end
 
 local function isTexture(region)
@@ -575,6 +602,71 @@ local function skinSlot(st, button)
     end
     if name then fade(st, _G[name .. "Frame"]) end
     rim:Show()
+end
+
+-- Item cells of the guild bank (recipe.guildCells) and the merchant (recipe.merchantCells): the client's cell art
+-- (guild bank columns UI-GuildBankFrame-Slots, the merchant's UI-EmptySlot) and each button's UI-Quickslot2 frame
+-- are made transparent; every cell gets the WoW Forever bag cell and its bronze edge, as in the unified bag
+-- (Bags.lua). Icon, count and highlight are not touched. The edge is button.foreverCellEdge: the merchant paints it
+-- red for an item the character cannot use (Merchant.lua), as the client did with the faded frame.
+local CELL_FILL = "Interface\\AddOns\\ForeverUI\\Art\\Forever\\Bag-Slot"
+local CELL_EDGE = "Interface\\AddOns\\ForeverUI\\Art\\Backpack-Chrome"
+local GUILD_COLUMNS, GUILD_ROWS = 7, 14
+local MERCHANT_CELLS = 12 -- 10 items on a page, 12 on the buyback page
+
+local function skinCell(st, button)
+    if not (button and button.CreateTexture) then return end
+    st.cells = st.cells or {}
+    local cell = st.cells[button]
+    if not cell then
+        local fill = button:CreateTexture(nil, "BACKGROUND", nil, -2)
+        fill:SetTexture(CELL_FILL)
+        fill:SetTexCoord(1 / 64, 63 / 64, 1 / 64, 63 / 64)
+        fill:SetPoint("TOPLEFT", button, "TOPLEFT", 2, -2)
+        fill:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -2, 2)
+        local edge = button:CreateTexture(nil, "ARTWORK", nil, 2)
+        edge:SetTexture(CELL_EDGE)
+        edge:SetTexCoord(0, 0.25, 0, 0.5)
+        edge:SetAllPoints(button)
+        cell = { fill, edge }
+        st.cells[button] = cell
+        st.own[fill], st.own[edge] = true, true
+        button.foreverCellEdge = edge
+    end
+    local name = button.GetName and button:GetName()
+    fade(st, name and _G[name .. "NormalTexture"])
+    cell[1]:Show()
+    cell[2]:Show()
+end
+
+local function skinGuildCells(st)
+    for c = 1, GUILD_COLUMNS do
+        fade(st, _G["GuildBankColumn" .. c .. "Background"])
+        for b = 1, GUILD_ROWS do skinCell(st, _G["GuildBankColumn" .. c .. "Button" .. b]) end
+    end
+end
+
+-- A row without an item (the client hides its item button) keeps no empty name plate: the plate is faded while
+-- the row is empty and given back when an item comes (page change, buyback tab, MERCHANT_UPDATE).
+local function emptyPlate(st, plate, empty)
+    if not plate or not plate.SetAlpha then return end
+    if empty then
+        fade(st, plate)
+    elseif st.alpha[plate] ~= nil then
+        plate:SetAlpha(st.alpha[plate])
+        st.alpha[plate] = nil
+    end
+end
+
+local function skinMerchantCells(st)
+    for i = 1, MERCHANT_CELLS do
+        fade(st, _G["MerchantItem" .. i .. "SlotTexture"])
+        local button = _G["MerchantItem" .. i .. "ItemButton"]
+        skinCell(st, button)
+        emptyPlate(st, _G["MerchantItem" .. i .. "NameFrame"], button and not button:IsShown())
+    end
+    fade(st, _G["MerchantBuyBackItemSlotTexture"])
+    skinCell(st, _G["MerchantBuyBackItemItemButton"])
 end
 
 -- Slots the recipe does not name (the ammo slot, client additions): any slot-sized (30..80 px) char-paperdoll-parts
@@ -1113,6 +1205,20 @@ local function belowStratum(frame, chrome)
     return (STRATA[frame:GetFrameStrata()] or 3) < (STRATA[chrome:GetFrameStrata()] or 3)
 end
 
+-- recipe.under frames in a higher stratum than the chrome (levels alone cannot put the chrome over them): the
+-- chrome goes up to their stratum; the frames lifted above the chrome follow it there (raise()).
+local function underStrata(st)
+    local best = st.window:GetFrameStrata()
+    for _, frameName in ipairs(st.recipe.under or {}) do
+        local frame = _G[frameName]
+        if frame and frame.GetFrameStrata and frame:IsShown() then
+            local strata = frame:GetFrameStrata()
+            if (STRATA[strata] or 3) > (STRATA[best] or 3) then best = strata end
+        end
+    end
+    return best
+end
+
 local function raise(st, frame, above)
     if not frame or not frame.GetFrameLevel then return end
     if belowStratum(frame, st.chrome) then
@@ -1276,7 +1382,7 @@ local function applyWindow(window, recipe)
     chrome:ClearAllPoints()
     -- The header band sat too low over the window content (checked in game): the top edge of every window, the
     -- character window included, goes GENERIC_RAISE px higher.
-    local raiseTop = GENERIC_RAISE
+    local raiseTop = recipe.raise or GENERIC_RAISE
     -- A window with tabs below (not the character window, tuned as it is): the bottom edge sits right on top of the
     -- tabs, wherever the client (or an addon) put them; the merchant's tabs on Nozdor are higher than ElvUI's
     -- measure. Offset from `base`'s bottom, or nil.
@@ -1301,7 +1407,7 @@ local function applyWindow(window, recipe)
         local edge = tabEdge(base)
         if edge then bottom = math.max(edge, bottom) end
         top = (tonumber(option("foreverWindowOutsetTop", 0)) or 0) + raiseTop
-        local left = -x
+        local left = -x - (recipe.leftOut or 0)
         top, left = keepOnScreen(base, top, left, recipe)
         chrome:SetPoint("TOPLEFT", base, "TOPLEFT", left, top)
         -- The title is placed from the window's top: a chrome that starts lower moves it down as much.
@@ -1353,6 +1459,8 @@ local function applyWindow(window, recipe)
     for _, tab in ipairs(st.tabs) do
         if tab.GetFrameLevel then st.chromeOffset = math.max(st.chromeOffset, tab:GetFrameLevel() + 1 - windowLevel) end
     end
+    st.chromeOffset = math.max(st.chromeOffset, underOffset(recipe, windowLevel))
+    if recipe.under then chrome:SetFrameStrata(underStrata(st)) end
     local level = windowLevel + st.chromeOffset
     chrome:SetFrameLevel(level)
     -- Frames that stay above the chrome, with their place relative to it (relevel() puts them back there).
@@ -1402,6 +1510,8 @@ local function applyWindow(window, recipe)
         for _, n in ipairs(recipe.slots) do skinSlot(st, _G[n]) end
         skinSlotFrames(st, window, 0)
     end
+    if recipe.guildCells then skinGuildCells(st) end
+    if recipe.merchantCells then skinMerchantCells(st) end
     skinStats(st)
     local s = (tonumber(option("foreverWindowScale", 50)) or 50) / 100
     if metal then
@@ -1619,6 +1729,8 @@ local function needsRepair(st)
     for _, tab in ipairs(st.tabs or {}) do
         if tab:GetFrameLevel() >= level then return "level" end
     end
+    if underOffset(st.recipe, window:GetFrameLevel()) > level - window:GetFrameLevel() then return "level" end
+    if st.recipe.under and chrome:GetFrameStrata() ~= underStrata(st) then return "level" end
     for _, entry in ipairs(st.lifts or {}) do
         local frame = entry[1]
         if frame:GetFrameLevel() <= level + entry[2] or belowStratum(frame, chrome) then return "level" end
@@ -1634,6 +1746,9 @@ local function relevel(st)
         local need = tab:GetFrameLevel() + 1 - windowLevel
         if need > (st.chromeOffset or 1) then st.chromeOffset = need end
     end
+    local under = underOffset(st.recipe, windowLevel)
+    if under > (st.chromeOffset or 1) then st.chromeOffset = under end
+    if st.recipe.under then st.chrome:SetFrameStrata(underStrata(st)) end
     local level = windowLevel + (st.chromeOffset or 1)
     st.chrome:SetFrameLevel(level)
     for _, entry in ipairs(st.lifts or {}) do raise(st, entry[1], level + entry[2]) end
@@ -1754,6 +1869,26 @@ local function dump(name)
         return out(ok and (count .. " lines saved; type /reload to write them to SavedVariables")
             or "dump failed, the error is saved in SavedVariables")
     end
+    local layersOf = name:match("^layers%s*(.*)$")
+    if layersOf then
+        -- /fuiframe layers [window]: strata and levels of the window, the new chrome and the frames kept under it.
+        local window = _G[(layersOf ~= "" and layersOf) or "PlayerTalentFrame"]
+        if not window then return out("no such frame") end
+        local function line(label, frame)
+            if not frame then return out(label .. ": none") end
+            local parent = frame:GetParent()
+            out(label .. ": " .. tostring(frame:GetFrameStrata()) .. " lvl " .. tostring(frame:GetFrameLevel())
+                .. (frame.IsShown and (frame:IsShown() and " shown" or " hidden") or "")
+                .. " parent " .. tostring(parent and parent.GetName and parent:GetName() or parent)
+                .. " top " .. tostring(topLevel(frame, {}, 0, frame:GetFrameLevel(), 3)))
+        end
+        line("window", window)
+        local st = skins[window]
+        line("chrome", st and st.chrome)
+        line("close", st and st.closeButton)
+        for _, frameName in ipairs(st and st.recipe.under or { "GlyphFrame" }) do line(frameName, _G[frameName]) end
+        return
+    end
     if name == "mouse" then
         -- /fuiframe mouse: the frame under the cursor and its parent, with every texture.
         local frame = GetMouseFocus and GetMouseFocus()
@@ -1840,6 +1975,7 @@ local function refreshHandler(name)
             if not (st and st.active) then return end
             skinStats(st)
             hidePortraits(st)
+            if st.recipe.merchantCells then skinMerchantCells(st) end
             if win:IsShown() then
                 local need = needsRepair(st)
                 if need == "move" then

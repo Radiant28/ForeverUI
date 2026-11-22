@@ -545,11 +545,13 @@ local function bindTooltip(frame, row)
             W.ShowTooltip(frame, row.opt.label, row.opt.tooltip, row.opt.module and row.opt)
         end
         if row.OnHover then row:OnHover(true) end
+        if W.onRowHover then W.onRowHover(row, true) end
         W.Redraw(frame)
     end)
     frame:HookScript("OnLeave", function()
         GameTooltip:Hide()
         if row.OnHover then row:OnHover(false) end
+        if W.onRowHover then W.onRowHover(row, false) end
         W.Redraw(frame)
     end)
 end

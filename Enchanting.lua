@@ -659,7 +659,7 @@ local function step(fromClick)
     -- Enchants on items open the targeting cursor synchronously; no cursor means the client refused the call.
     if not SpellIsTargeting() then
         if fromClick then
-            stopRepeat(L("Клиент не начал наложение чар.", "The client did not start the enchant."))
+            stopRepeat(nil, true)
         end
         return false
     end
@@ -694,11 +694,6 @@ local function startRepeat()
     re.active, re.recipe, re.done, re.total = true, name, 0, repeatCount()
     re.stepMode = not setting("enchantAutoChain", true) or setting("enchantAutoChainBlocked", false) == true
     re.autoFails = 0
-    local key = E.KeyLabel()
-    if key then
-        say((L("%s подтверждает замену чар и запускает следующий повтор.",
-            "%s confirms the enchant replacement and starts the next repeat.")):format(key))
-    end
     if re.target and not targetValid(re.target) then re.target = nil end
     driver:Show()
     step(true)

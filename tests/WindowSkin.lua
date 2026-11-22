@@ -435,6 +435,12 @@ gbank.w, gbank.h, gbank.level, gbank.top, gbank.bottom = 769, 512, 3, 612, 100
 local gbTab = CreateFrame("Button", "GuildBankFrameTab1", gbank); gbTab.level = 5; gbTab.top = 112
 local gbSide = CreateFrame("Frame", "GuildBankTab1", gbank); gbSide.level = 4
 local gbClose = CreateFrame("Button", "GuildBankFrameXCloseButton", gbank)
+local gbColumn = CreateFrame("Frame", "GuildBankColumn1", gbank)
+local gbColumnArt = gbColumn:CreateTexture("GuildBankColumn1Background", "BACKGROUND"); _G.GuildBankColumn1Background = gbColumnArt
+local gbCell = CreateFrame("Button", "GuildBankColumn1Button1", gbColumn)
+gbCell.w, gbCell.h = 37, 37
+local gbCellIcon = gbCell:CreateTexture("GuildBankColumn1Button1IconTexture", "BORDER"); _G.GuildBankColumn1Button1IconTexture = gbCellIcon
+local gbCellFrame = gbCell:CreateTexture("GuildBankColumn1Button1NormalTexture", "ARTWORK"); _G.GuildBankColumn1Button1NormalTexture = gbCellFrame
 gbank.shown = true
 fire("ADDON_LOADED", "Blizzard_GuildBankUI")
 local gst = WS.skins[gbank]
@@ -444,6 +450,11 @@ assert(gst.chrome.level > gbTab.level, "bottom tabs behind the bottom edge")
 assert(gbSide.level > gst.chrome.level, "side tabs over the chrome")
 assert(gst.closeButton == gbClose and gbClose.level > gst.chrome.level and gst.closeFace.shown,
     "close button found among the children, WoW Forever face, over the chrome")
+local gbCellArt = gst.cells and gst.cells[gbCell]
+assert(gbColumnArt.alpha == 0 and gbCellFrame.alpha == 0 and gbCellIcon.alpha == 1,
+    "guild bank: column art and slot frame hidden, icon kept")
+assert(gbCellArt and gbCellArt[1].texture:find("Bag%-Slot") and gbCellArt[2].texture:find("Backpack%-Chrome")
+    and gbCellArt[1].shown and gbCellArt[2].shown, "guild bank: WoW Forever cell and edge")
 assert(not WS.Recipes.AuctionFrame, "no auction house skin")
 -- A window without any close button gets one of its own; it goes with the chrome.
 local noClose = CreateFrame("Frame", "PetitionFrame", UIParent)
@@ -664,10 +675,33 @@ repairIcon.coords = { 0.28, 0, 0.28, 0.56, 0.56, 0, 0.56, 0.56 }
 local merchantTab = CreateFrame("Button", "MerchantFrameTab1", merchant)
 merchantTab.level = merchant.level + 5        -- Nozdor: above the client's chrome level
 merchantTab.top = 141
+local mItem = CreateFrame("Frame", "MerchantItem1", merchant)
+local mSlot = mItem:CreateTexture(); _G.MerchantItem1SlotTexture = mSlot
+local mButton = CreateFrame("Button", "MerchantItem1ItemButton", mItem)
+mButton.w, mButton.h = 37, 37
+local mIcon = mButton:CreateTexture(); _G.MerchantItem1ItemButtonIconTexture = mIcon
+local mFrame = mButton:CreateTexture(); _G.MerchantItem1ItemButtonNormalTexture = mFrame
+local mPlate = mItem:CreateTexture(); _G.MerchantItem1NameFrame = mPlate
+local mItem2 = CreateFrame("Frame", "MerchantItem2", merchant)
+local mPlate2 = mItem2:CreateTexture(); _G.MerchantItem2NameFrame = mPlate2
+local mButton2 = CreateFrame("Button", "MerchantItem2ItemButton", mItem2)
+mButton2.shown = false
+function MerchantFrame_UpdateMerchantInfo() end
 merchant.shown = true
 fire("ADDON_LOADED", "Blizzard_Anything")
 local mst = WS.skins[merchant]
 assert(merchantInsetBg.texture:find("Window%-InsetGround"), "merchant insets on the warm WoW Forever ground")
+assert(mSlot.alpha == 0 and mFrame.alpha == 0 and mIcon.alpha == 1, "merchant: slot art and slot frame hidden, icon kept")
+assert(mst.cells[mButton] and mst.cells[mButton][1].texture:find("Bag%-Slot") and mst.cells[mButton][2].shown
+    and mButton.foreverCellEdge == mst.cells[mButton][2], "merchant: WoW Forever cell and edge")
+assert(mPlate.alpha == 1 and mPlate2.alpha == 0, "merchant: an empty row has no name plate")
+-- Next page: the second row gets an item, the first is empty.
+mButton2.shown, mButton.shown = true, false
+MerchantFrame_UpdateMerchantInfo()
+assert(mPlate.alpha == 0 and mPlate2.alpha == 1, "merchant: plates follow the rows after a page update")
+mButton.shown = true
+MerchantFrame_UpdateMerchantInfo()
+assert(mPlate.alpha == 1, "merchant: plate back with the item")
 -- Repair unavailable: the WoW Forever icon goes grey with its button; available again: in colour.
 assert(not repairIcon.desaturated, "repair icon in colour while the button works")
 function repairButton:IsEnabled() return nil end
@@ -745,6 +779,25 @@ do
     assert(ts.portrait.shown and ts.portrait.portraitUnit == "player", "glyphs tab: player portrait stays visible")
     assert(not specRingIcon.shown, "glyphs tab: specRingIcon kept hidden")
     assert(not talentPortrait.shown, "glyphs tab: client portrait kept hidden")
+
+    -- Glyph tab shown again: the client put the glyph frame (and its ornate border) above the chrome.
+    glyph:Hide()
+    local glyphArt = CreateFrame("Frame", nil, glyph)
+    glyph.level, glyphArt.level = ts.chrome.level + 2, ts.chrome.level + 3
+    glyph:Show()
+    assert(ts.chrome.level > glyphArt.level, "glyph frame and its children stay under the chrome")
+    assert(not ts.closeButton or ts.closeButton.level > ts.chrome.level, "close button still above the chrome")
+
+    -- Or the client puts the glyph frame into a higher stratum: the chrome (and what sits above it) follows.
+    glyph:Hide()
+    glyph.strata = "HIGH"
+    glyph:Show()
+    assert(ts.chrome:GetFrameStrata() == "HIGH", "chrome goes up to the glyph frame's stratum")
+    assert(not ts.closeButton or ts.closeButton:GetFrameStrata() == "HIGH", "close button follows the chrome's stratum")
+    glyph.strata = nil
+    glyph:Hide()
+    glyph:Show()
+    assert(ts.chrome:GetFrameStrata() == "MEDIUM", "chrome back to the window's stratum")
 
     -- Switch to Runes tab: window resizes to 512x424 and selected tab rises; watchdog keeps chrome and portrait.
     talents.w, talents.h = 512, 424

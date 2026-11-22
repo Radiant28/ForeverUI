@@ -443,6 +443,16 @@ local function apply(frame, style, originX, originY, scale, flip)
         feedback:SetDrawLayer("OVERLAY", 7)
         center(feedback, portrait)
     end
+    -- The faction badge stayed on the client's spot, far from the moved portrait: it now sits on the portrait's
+    -- outer top corner (the side away from the bars), over the ring, and follows the portrait in either layout.
+    if pvpIcon then
+        local outerRight = (style.portrait[1] > style.health[1]) ~= (flip and true or false)
+        pvpIcon:SetParent(portraitLayer)
+        pvpIcon:SetDrawLayer("OVERLAY", 3)
+        pvpIcon:ClearAllPoints()
+        pvpIcon:SetPoint("CENTER", portrait, outerRight and "TOPRIGHT" or "TOPLEFT",
+            (outerRight and -2 or 2) * scale, -4 * scale)
+    end
     local portraitSize = style.portrait[3] * scale
     local ring = portraitLayer:CreateTexture(nil, "ARTWORK", nil, -3)
     if style.chrome then

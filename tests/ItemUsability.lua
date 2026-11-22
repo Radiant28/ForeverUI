@@ -250,6 +250,8 @@ for i = 1, 12 do
     icon:SetTexture("Interface\\Icons\\INV_Belt_01")
     itemButton.normal = itemButton:CreateTexture()
     itemButton.normal:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+    -- the WoW Forever cell edge the window skin puts in place of the slot frame
+    itemButton.foreverCellEdge = itemButton:CreateTexture()
 end
 -- pages: { link, isUsable (stock), numAvailable }
 local merchant = {
@@ -316,6 +318,8 @@ merchant[1][2] = 1
 MerchantFrame_Update()
 check(isRed(icon(1)), "stock verdict missing: the tooltip check paints it red")
 check(isRed(_G["MerchantItem1ItemButton"].normal), "the slot border is red as well")
+check(isRed(_G["MerchantItem1ItemButton"].foreverCellEdge), "the WoW Forever cell edge is red as well")
+check(not isRed(_G["MerchantItem2ItemButton"].foreverCellEdge), "a usable item's cell edge stays bronze")
 check(isWhite(icon(2)), "usable item stays white")
 
 -- Next page: slot 1 now holds a usable item, slot 2 an unusable one.

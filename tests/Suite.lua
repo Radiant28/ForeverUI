@@ -230,7 +230,7 @@ local function load(path)
 end
 for _, path in ipairs({ "Core/Config.lua", "Core/Widgets.lua", "Core/OptionsFrame.lua", "Core/Compat.lua" }) do load(path) end
 ui.bundledMedia = { font = {}, statusbar = {}, background = {}, border = {} }
-for _, path in ipairs({ "Media.lua", "Suite.lua", "RaidFrames.lua", "ClickCast.lua", "CooldownManager.lua",
+for _, path in ipairs({ "Media.lua", "Suite.lua", "Roles.lua", "RaidFrames.lua", "ClickCast.lua", "CooldownManager.lua",
     "Options/SuiteWidgets.lua", "Options/CooldownManager.lua", "Options/RaidFrames.lua", "Options/ClickCast.lua",
     "Options/Profiles.lua" }) do
     load(path)
@@ -815,6 +815,28 @@ do
     RF.EachFrame(function(f, dd) if f == button then d = dd end end)
     local widget = d.indicators[index]
     assert(widget and widget.shown and widget.square.texture == "ps", "others' saves reach the indicators")
+    -- everyone's, others faded: another priest's Renew is faded, my own copy wins and is bright
+    local renew = Suite.Part("raid").indicators[1]
+    assert(renew.name == "Renew", "Renew is the first indicator")
+    renew.mine, renew.dimOthers = false, true
+    RF.Apply()
+    local savedBuffs = auras.raid1.HELPFUL
+    auras.raid1.HELPFUL = { { name = "Renew", icon = "renew", duration = 15, expiration = now + 9, caster = "raid2", id = 139 } }
+    fire("UNIT_AURA", "raid1")
+    tick(0.05)
+    assert(d.indicators[1].shown and d.indicators[1].alpha == RF.OTHERS_ALPHA, "the others' Renew is faded")
+    local othersStart = d.indicators[1].cooldown.start
+    table.insert(auras.raid1.HELPFUL, { name = "Renew", icon = "renew", duration = 15, expiration = now + 3,
+        caster = "player", id = 139 })
+    fire("UNIT_AURA", "raid1")
+    tick(0.05)
+    assert(d.indicators[1].alpha == 1 and math.abs(d.indicators[1].cooldown.start - (othersStart - 6)) < 0.1,
+        "my own Renew wins over the other priest's")
+    auras.raid1.HELPFUL = savedBuffs
+    renew.mine, renew.dimOthers = true, nil
+    RF.Apply()
+    fire("UNIT_AURA", "raid1")
+    tick(0.05)
     -- list order is the layer order: moving an indicator up puts it over the ones below
     local list = Suite.Part("raid").indicators
     local first = d.indicators[1]
@@ -1122,19 +1144,175 @@ do
     tab.scripts.OnClick(tab)
     assert(cdmPage.activeTab == titles["Условия загрузки"], "a tab click selects it")
 end
-local side = RF.previews[#RF.previews]:GetParent()
-assert(#RF.previews >= 3 and side:GetParent() == ForeverUIOptions, "three previews beside the options window")
--- the page holder drives the panel (the real client sends OnHide/OnShow to children; the mock does not)
-local holder
-local function findHolder(frame)
-    for _, child in ipairs(frame.children or {}) do
-        if child.previews and child.previews[1] == RF.previews[#RF.previews - 2] then return child end
-        local found = findHolder(child)
-        if found then return found end
+-- The raid page is a list of parts (Cell style); the preview panel beside the window shows the chosen part.
+local raidPage
+ui.OpenOptions("raidframes")
+do
+    local function findPage(frame)
+        for _, child in ipairs(frame.children or {}) do
+            if child.spec and child.spec.id == "raidframes" and child.listItems then return child end
+            local found = findPage(child)
+            if found then return found end
+        end
     end
+    raidPage = findPage(ForeverUIOptions)
 end
-holder = findHolder(ForeverUIOptions)
-assert(holder, "the raid page keeps its previews")
+assert(raidPage and #raidPage.listItems == 18 and not raidPage.sectionTabs, "the raid page lists its parts instead of tabs")
+local ids = {}
+for i, item in ipairs(raidPage.listItems) do ids[item.section.id] = i end
+for _, id in ipairs({ "overview", "visibility", "position", "roles", "bars", "heal", "shield", "threat", "range", "name",
+    "hover", "drink", "buffs", "tracked", "debuffs", "dispel", "exclusions", "indicators" }) do
+    assert(ids[id], "list item " .. id)
+end
+assert(ids.overview == 1 and raidPage.activeItem == 1, "the page opens on the overview")
+local preview = raidPage.previewObj
+local side = preview.side
+assert(side:GetParent() == ForeverUIOptions and RF.previews[#RF.previews]:GetParent() == side,
+    "the preview panel stands beside the options window")
+local function shownFrames()
+    local list = {}
+    for _, frame in ipairs(preview.frames) do if frame.shown then list[#list + 1] = frame end end
+    return list
+end
+assert(#shownFrames() == 3 and preview.frames[1].mask == nil, "the overview shows three full frames")
+-- only one item's settings are on screen at a time
+for i, item in ipairs(raidPage.listItems) do assert(item.container.shown == (i == 1), "one container per item") end
+raidPage.listItems[ids.name].button.scripts.OnClick(raidPage.listItems[ids.name].button)
+assert(raidPage.activeItem == ids.name and raidPage.listItems[ids.name].container.shown
+    and not raidPage.listItems[1].container.shown, "a list click opens its item")
+-- the page, not the overview block, ends the edited group type: hiding the overview container is not leaving
+RF.SetEditKind("raid10")
+assert(RF.ViewKind() == "raid10", "editing raid 10")
+raidPage:SelectItem(ids.shield)
+assert(RF.ViewKind() == "raid10", "other items keep the edited group type")
+raidPage.scripts.OnHide(raidPage)
+assert(not side:IsShown() and not RF.editKind, "leaving the page hides the preview and goes back to the live type")
+raidPage.scripts.OnShow(raidPage)
+assert(side:IsShown(), "and the preview comes back with the page")
+-- the frame profile is one dropdown (the live type marked with *), not three buttons
+do
+    local picker
+    local function find(frame)
+        for _, child in ipairs(frame.children or {}) do
+            if child.kind == "select" and child.opt and child.opt.label == ui.L("Профиль фреймов", "Frame profile") then
+                return child
+            end
+            local found = find(child)
+            if found then return found end
+        end
+    end
+    picker = find(raidPage.listItems[ids.overview].container)
+    assert(picker, "the frame profile dropdown")
+    local items = ui.OptionValues(picker.opt)
+    assert(#items == 3 and items[1][2]:find("%*$"), "three group types, the live one marked")
+    picker.access.set("raid25")
+    assert(RF.ViewKind() == "raid25" and RF.editKind == "raid25", "picking a type edits it")
+    picker.access.set(RF.LiveKind())
+    assert(RF.editKind == nil, "picking the live type goes back to it")
+end
+-- the focused preview draws only what the item changes
+local function signature(frame)
+    frame:Refresh()
+    local d, parts = frame.deco, {}
+    for i, widget in pairs(d.indicators) do
+        if widget.shown then parts[#parts + 1] = "i" .. i .. "=" .. tostring(widget.square.texture) end
+    end
+    table.sort(parts)
+    for _, kind in ipairs({ "buffs", "debuffs" }) do
+        for i, icon in ipairs(d[kind]) do
+            if icon.shown then parts[#parts + 1] = kind .. i .. "=" .. tostring(icon.texture.texture) end
+        end
+    end
+    return table.concat(parts, " ") .. (d.dispelTint.shown and " dispel" or "")
+end
+raidPage:SelectItem(ids.overview)
+do
+    local frames = shownFrames()
+    local first = signature(frames[1])
+    assert(first:find("i1=") and first:find("debuffs1=") and first:find("dispel"), "the overview shows indicators, debuffs and dispel")
+    assert(signature(frames[2]) == first and signature(frames[3]) == first, "all three overview frames show the same auras")
+end
+raidPage:SelectItem(ids.name)
+do
+    local frames = shownFrames()
+    assert(#frames == 3 and frames[1].mask.name, "the name item has its own samples")
+    for _, frame in ipairs(frames) do
+        assert(signature(frame) == "", "no auras on the name samples")
+        assert(frame.deco.name.shown and not frame.deco.role.shown and not frame.deco.drink.shown, "only the name is drawn")
+    end
+    assert(frames[2].deco.previewName ~= frames[1].deco.previewName, "a long and a short name")
+end
+raidPage:SelectItem(ids.dispel)
+do
+    local frames = shownFrames()
+    assert(#frames == 4, "one sample per dispel type")
+    local colours = {}
+    for _, frame in ipairs(frames) do
+        frame:Refresh()
+        assert(frame.deco.dispelTint.shown, "every type lights its frame")
+        colours[table.concat(frame.deco.dispelTint.color or {}, ",", 1, 3)] = true
+    end
+    local distinct = 0
+    for _ in pairs(colours) do distinct = distinct + 1 end
+    assert(distinct == 4, "four type colours")
+    assert(#frames[1].deco.debuffs >= 1 and frames[1].deco.debuffs[1].shown, "the dispel samples keep their debuff icon")
+end
+raidPage:SelectItem(ids.shield)
+for _, frame in ipairs(shownFrames()) do
+    assert(frame.deco.shield.shown and not frame.deco.name.shown and signature(frame) == "", "the shield item shows only shields")
+end
+-- unit states: out of range fades, dead hides the bars' extras, combat stops drinking
+raidPage:SelectItem(ids.drink)
+assert(preview.frames[1].deco.drink.shown, "the drinking sample drinks")
+preview.stateRow.access = preview.stateRow.access
+preview.state = "combat"
+preview.Refresh()
+assert(not preview.frames[1].deco.drink.shown, "nobody drinks in combat")
+preview.state = "range"
+preview.Refresh()
+assert(math.abs(preview.frames[1].alpha - (RF.Settings().rfRangeMode == "custom" and RF.Settings().rfRangeAlpha or 0.55)) < 0.001,
+    "out of range fades like the real frames")
+preview.state = "dead"
+preview.Refresh()
+assert(preview.frames[1].deco.text.shown and preview.frames[1].healthBar.value == 0, "a dead sample has no health")
+preview.state = "normal"
+preview.Refresh()
+assert(preview.frames[1].alpha == 1, "back to normal")
+-- before / after: the defaults are drawn and the setting is put back at once
+raidPage:SelectItem(ids.name)
+ui.SetOption("raidframes", "rfNameSize", 20)
+preview.ShowDefaults(true)
+assert(RF.Settings().rfNameSize == 20 and preview.defaults, "the defaults are only drawn, not saved")
+assert(preview.shownText.text:find(ui.L("По умолчанию", "Defaults")), "the panel says it shows the defaults")
+preview.ShowDefaults(false)
+assert(not preview.defaults, "released")
+-- a dot marks the items with changed settings; "Reset item" resets only that item
+local nameItem = raidPage.listItems[ids.name]
+raidPage:Refresh()
+assert(nameItem.button.dot.shown and not raidPage.listItems[ids.drink].button.dot.shown, "a dot on the changed item")
+ui.SetOption("raidframes", "rfDrinkX", 9)
+raidPage.resetButton.scripts.OnClick(raidPage.resetButton)
+StaticPopupDialogs.FOREVERUI_RESET_SECTION.OnAccept({ data = { raidPage.spec, nameItem.section } })
+assert(RF.Settings().rfNameSize == ui.GetDefault("raidframes", "rfNameSize") and RF.Settings().rfDrinkX == 9,
+    "resetting the name item leaves the drinking settings")
+ui.ResetOption("raidframes", "rfDrinkX")
+raidPage:Refresh()
+assert(not nameItem.button.dot.shown, "the dot goes with the reset")
+-- hovering a setting flashes its part of the preview
+local hoverRow = { opt = ui.GetModule("raidframes").byKey.rfNameSize }
+ui.Widgets.onRowHover(hoverRow, true)
+assert(preview.frames[1].flash and preview.frames[1].flash.shown, "the name flashes while its setting is hovered")
+ui.Widgets.onRowHover(hoverRow, false)
+assert(not preview.frames[1].flash.shown, "and stops")
+-- the search jumps to the first item with a match
+ForeverUIOptions.search:SetText(ui.L("Толщина рамки угрозы", "Threat border size"))
+ForeverUIOptions.search.scripts.OnTextChanged(ForeverUIOptions.search)
+assert(raidPage.activeItem == ids.threat, "the search opens the threat item")
+ForeverUIOptions.search:SetText("")
+ForeverUIOptions.search.scripts.OnTextChanged(ForeverUIOptions.search)
+-- opening the page at an item (right click on the raid anchor in Edit Mode)
+ui.OpenOptions("raidframes", "position")
+assert(raidPage.activeItem == ids.position, "the anchor opens Position")
 -- exclusion editors: add by id or name, no duplicates, recommended merge, remove
 do
     local function findEditor(frame, key)
@@ -1160,47 +1338,98 @@ do
     Suite.Part("raid").rfDebuffHide = RF.defaultExclusionText.rfDebuffHide
     editor.refreshrfDebuffHide()
 end
-holder.scripts.OnHide(holder)
-assert(not side:IsShown(), "the side preview hides with the page")
-holder.scripts.OnShow(holder)
-assert(side:IsShown(), "and shows with it")
--- The three preview frames show the same indicators, buff and debuff icons.
+-- Indicators: your own copy wins, the others' are faded or hidden; the chosen one can be dragged.
+raidPage:SelectItem(ids.indicators)
+local renewEntry = Suite.Part("raid").indicators[1]
 do
-    local function signature(preview)
-        preview:Refresh()
-        local d, parts = preview.deco, {}
-        for i, widget in pairs(d.indicators) do
-            if widget.shown then parts[#parts + 1] = "i" .. i .. "=" .. tostring(widget.square.texture) end
+    local mine, others = preview.frames[1], preview.frames[2]
+    assert(others.data.others and not mine.data.others, "a sample with my auras and one with the others'")
+    renewEntry.mine, renewEntry.dimOthers = true, nil
+    RF.Apply()
+    assert(mine.deco.indicators[1].shown and not (others.deco.indicators[1] and others.deco.indicators[1].shown),
+        "mine only: the others' Renew is not shown")
+    renewEntry.mine, renewEntry.dimOthers = false, true
+    RF.Apply()
+    assert(mine.deco.indicators[1].alpha == 1 and others.deco.indicators[1].shown
+        and others.deco.indicators[1].alpha == RF.OTHERS_ALPHA, "everyone's, the others' faded")
+    renewEntry.dimOthers = false
+    RF.Apply()
+    assert(others.deco.indicators[1].alpha == 1, "everyone's alike")
+    renewEntry.mine, renewEntry.dimOthers = true, nil
+    RF.Apply()
+end
+-- drop spots: thirds of the bar pick the anchor, the widget's centre lands on the cursor
+do
+    local point, x, y = RF.IndicatorDrop(118, 39, 5, 34, 8)
+    assert(point == "TOPLEFT" and x == 0 and y == 0, "top left corner")
+    point, x, y = RF.IndicatorDrop(118, 39, 59, 19.5, 8)
+    assert(point == "CENTER" and x == 0 and y == 0, "centre")
+    point, x, y = RF.IndicatorDrop(118, 39, 118, 0, 8)
+    assert(point == "BOTTOMRIGHT" and x == 5 and y == -5, "bottom right corner")
+    point, x, y = RF.IndicatorDrop(118, 39, 400, 300, 8)
+    assert(x == 30 and y == 30, "offsets stay in the option range")
+end
+-- dragging the chosen indicator on the first sample moves it
+do
+    local function findHolder(frame)
+        for _, child in ipairs(frame.children or {}) do
+            if child.selectIndicator then return child end
+            local found = findHolder(child)
+            if found then return found end
         end
-        table.sort(parts)
-        for _, kind in ipairs({ "buffs", "debuffs" }) do
-            for i, icon in ipairs(d[kind]) do
-                if icon.shown then parts[#parts + 1] = kind .. i .. "=" .. tostring(icon.texture.texture) end
-            end
-        end
-        return table.concat(parts, " ") .. (d.dispelOutline.shown and " dispel" or "")
     end
-    local n = #RF.previews
-    local first = signature(RF.previews[n - 2])
-    assert(first:find("i1=") and first:find("debuffs1=") and first:find("dispel"), "the preview shows indicators, debuffs and dispel")
-    assert(signature(RF.previews[n - 1]) == first and signature(RF.previews[n]) == first, "all three previews show the same auras")
+    local holder = findHolder(ForeverUIOptions)
+    holder.selectIndicator(1)
+    local first = preview.frames[1]
+    assert(first.deco.indicators[1].flash == nil and first.flash and first.flash.shown, "the chosen indicator flashes")
+    local savedPoint, savedX, savedY = renewEntry.point, renewEntry.x, renewEntry.y
+    renewEntry.point = "BOTTOM"
+    RF.Apply()
+    local realCursor = GetCursorPosition
+    first.healthBar.GetBottom = function() return 0 end
+    GetCursorPosition = function() return 100 + 5, 34 end
+    first.scripts.OnMouseDown(first, "LeftButton")
+    assert(first.scripts.OnUpdate, "the drag follows the cursor")
+    first.scripts.OnUpdate(first, 0.02)
+    first.scripts.OnMouseUp(first, "LeftButton")
+    GetCursorPosition = realCursor
+    assert(renewEntry.point == "TOPLEFT" and renewEntry.x == 0 and renewEntry.y == 0 and not first.scripts.OnUpdate,
+        "dropped in the top left corner")
+    renewEntry.point, renewEntry.x, renewEntry.y = savedPoint, savedX, savedY
+    holder.selectIndicator(nil)
+    RF.Apply()
 end
 -- Edited indicators restyle in the preview too (entries change in place).
-local renewEntry = Suite.Part("raid").indicators[1]
 local oldSize = renewEntry.size
 renewEntry.size = 20
 RF.Apply()
-local resized
-for _, preview in ipairs(RF.previews) do
-    for _, child in ipairs(preview.children) do
-        for _, w in ipairs(child.children or {}) do
-            if w.stamp == renewEntry and w.shown then resized = w.width end
-        end
-    end
-end
-assert(resized == 20, "the preview indicator follows its new size")
+assert(preview.frames[1].deco.indicators[1].width == 20, "the preview indicator follows its new size")
 renewEntry.size = oldSize
 RF.Apply()
+raidPage:SelectItem(ids.overview)
+-- /fuiraid profile: the client's raid profile (saved table, no API in the mock) goes into a snapshot
+do
+    local me = UnitName("player")
+    CompactRaidFrameDB = { [me] = { ACTIVE_PROFILE = { ttl = 0, value = "Main" }, PROFILES = { ttl = 0, value = {
+        { name = "Main", frameWidth = 72, frameHeight = 36, horizontalGroups = false, keepGroupsTogether = 1,
+            displayPets = false, sortBy = "group" } } } } }
+    local printed = {}
+    local realPrint = ui.Print
+    ui.Print = function(text) printed[#printed + 1] = text end
+    SlashCmdList.FOREVERUIRAID("profile")
+    ui.Print = realPrint
+    local dumps = ui.Settings().raidDumps
+    local dump
+    for _, value in pairs(dumps or {}) do dump = value end
+    assert(dump and dump.saved.char and dump.saved.active == "Main" and dump.saved.profiles[1].frameWidth == 72
+        and dump.saved.profiles[1].active and dump.saved.profiles[1].keepGroupsTogether == 1, "the saved profile is read")
+    assert(#dump.missing > 0 and dump.api.active == nil, "missing client functions are listed")
+    local joined = table.concat(printed, " | ")
+    assert(joined:find("72x36") and joined:find("horizontal=false") and not joined:find("[\128-\255]"),
+        "the chat summary is ASCII and shows the profile")
+    CompactRaidFrameDB = nil
+    ui.Settings().raidDumps = nil
+end
 -- Scroll frames repaint after a change and keep their offset.
 local pageScroll
 local function findScroll(frame)
@@ -1592,7 +1821,14 @@ do
 
     -- real buttons: owners side by side, the client put the pet at the end of the row
     local raid = Suite.Part("raid")
-    raid.rfEnabled, raid.rfPetsUnder = true, true
+    -- the old switch moves to the choice of three: off was the client's own place
+    raid.rfPetsUnder, raid.rfPetMode = false, "block"
+    RF.Apply()
+    assert(raid.rfPetMode == "client" and raid.rfPetsUnder == nil, "old 'pets under owners' off becomes 'client'")
+    raid.rfPetMode = "under"
+    RF.Apply()
+    assert(raid.rfPetMode == "block", "the dropped 'under owners' mode becomes the block")
+    raid.rfEnabled = true
     local function make(name, unit, left)
         local f = CreateFrame("Button", name, UIParent)
         f.healthBar = CreateFrame("StatusBar", nil, f)
@@ -1612,29 +1848,42 @@ do
     tick(0.05)
     RF.LayoutPets()
     local point, relative, relativePoint, x, y = pet:GetPoint()
-    assert(point == "TOPLEFT" and relative == owner2 and relativePoint == "BOTTOMLEFT" and x == 0 and y == -2,
-        "the pet is hung under its owner")
+    assert(point == "TOPLEFT" and relative == owner1 and relativePoint == "BOTTOMLEFT" and x == 0 and y == -14,
+        "rows: the pets block under the groups, not under the owner")
     -- off: the client lays it out again (nothing is moved by us)
     local before = pet.points[1]
-    raid.rfPetsUnder = false
+    raid.rfPetMode = "client"
     RF.LayoutPets()
     assert(pet.points[1] == before, "turned off: no more moves")
-    -- vertical layout: nothing is moved
-    raid.rfPetsUnder = true
-    owner2.GetLeft = function() return 0 end
-    owner2.GetTop = function() return 560 end
+    -- block, rows of players: under the lowest row (its left player), below a "Pets" title line
+    raid.rfPetMode = "block"
     pet:ClearAllPoints()
     RF.LayoutPets()
-    assert(pet:GetNumPoints() == 0, "vertical layout: the client keeps the pets")
+    point, relative, relativePoint, x, y = pet:GetPoint()
+    assert(relative == owner1 and relativePoint == "BOTTOMLEFT" and y == -14, "rows: the pets block under the groups")
+    assert(ForeverStockUIRaidPetTitle and ForeverStockUIRaidPetTitle.shown
+        and select(2, ForeverStockUIRaidPetTitle:GetPoint()) == pet, "the block has its title")
+    -- columns of players: the block right of the top-right player
+    owner2.GetLeft = function() return 0 end
+    owner2.GetTop = function() return 560 end
+    owner2.GetRight = function() return 100 end
+    owner2.GetBottom = function() return 520 end
+    pet:ClearAllPoints()
+    RF.LayoutPets()
+    point, relative, relativePoint, x, y = pet:GetPoint()
+    assert(relative == owner1 and relativePoint == "TOPRIGHT" and y == -14, "columns: the block right of the groups")
     -- combat: queued, not moved
     owner2.GetLeft = function() return 102 end
     owner2.GetTop = function() return 600 end
+    owner2.GetRight = function() return 202 end
+    owner2.GetBottom = function() return 560 end
+    pet:ClearAllPoints()
     combat = true
     RF.LayoutPets()
     assert(pet:GetNumPoints() == 0 and ui.HasCombatQueue(), "no move in combat")
     combat = false
     fire("PLAYER_REGEN_ENABLED")
-    assert(pet:GetNumPoints() == 1 and select(2, pet:GetPoint()) == owner2, "moved after combat")
+    assert(pet:GetNumPoints() == 1 and select(2, pet:GetPoint()) == owner1, "moved after combat")
 
     -- sample frames take the size of the real buttons
     owner1.width, owner1.height, owner2.width, owner2.height = 165, 62, 165, 62
@@ -1678,6 +1927,124 @@ do
         "vertical: groups are columns")
     assert(vert.pets[1].x == 204 and vert.pets[1].y == 0 and vert.pets[2].y == -24 and vert.width == 304
         and vert.height == 5 * 42 - 2, "vertical: pets in a column of their own")
+    -- The client's raid profile: the auto-activated profile for the size, else the active one
+    do
+        local profiles = {
+            { name = "Main", frameWidth = 72, frameHeight = 36, horizontalGroups = false, keepGroupsTogether = false },
+            { name = "Big", frameWidth = 108, frameHeight = 40, horizontalGroups = 1, keepGroupsTogether = 1,
+                displayPets = 1, autoActivate25Players = true },
+        }
+        local p = RF.PickProfile(profiles, "Main", 5)
+        assert(p.name == "Main" and p.w == 72 and not p.horizontal and not p.together, "the active profile")
+        p = RF.PickProfile(profiles, "Main", 18)
+        assert(p.name == "Big" and p.horizontal and p.together and p.pets and p.h == 40, "auto activation for 25, 1 is on")
+        assert(RF.AutoActivateKey(40) == "autoActivate40Players" and RF.AutoActivateKey(4) == "autoActivate5Players")
+        p = RF.PickProfile(nil, "Main", 5, function(_, key)
+            return ({ frameWidth = 90, frameHeight = 30, keepGroupsTogether = true })[key] or false
+        end)
+        assert(p and p.source == "api" and p.w == 90 and p.together and not p.horizontal, "the client API when no table")
+        assert(RF.PickProfile(nil, nil, 5) == nil, "no profile at all")
+    end
+    -- The client's flow: kept-together groups are blocks of a 14 px title and five slots
+    do
+        local base = { w = 108, h = 36, together = true, horizontal = false, boxW = 1000, boxH = 396 }
+        local function with(extra)
+            local o = {}
+            for k, v in pairs(base) do o[k] = v end
+            for k, v in pairs(extra) do o[k] = v end
+            return o
+        end
+        local l = RF.ClientLayout(with({ count = 10 }))
+        assert(l.groups[1].w == 108 and l.groups[1].h == 194, "a vertical group is 108 x 194, as seen in game")
+        assert(l.cells[1][1] == 0 and l.cells[1][2] == 14 and l.cells[2][2] == 50, "players under the title, no gaps")
+        assert(l.cells[6][1] == 108 and l.cells[6][2] == 14 and l.width == 216 and l.height == 194, "the next group beside")
+        l = RF.ClientLayout(with({ count = 25, boxW = 300 }))
+        assert(l.groups[3].x == 0 and l.groups[3].y == 194, "groups wrap at the edge of the box")
+        l = RF.ClientLayout(with({ count = 3 }))
+        assert(l.height == 194, "empty slots of a group keep their place")
+        l = RF.ClientLayout(with({ count = 15, horizontal = true, boxH = 120 }))
+        assert(l.groups[1].w == 540 and l.groups[1].h == 50 and l.cells[2][1] == 108 and l.cells[2][2] == 14,
+            "a horizontal group is one row")
+        assert(l.groups[2].y == 50 and l.groups[3].x == 540 and l.groups[3].y == 0, "horizontal groups stack, then wrap")
+        l = RF.ClientLayout(with({ count = 12, together = false, boxW = 300 }))
+        assert(l.cells[2][1] == 108 and l.cells[3][1] == 0 and l.cells[3][2] == 36 and #l.groups == 0,
+            "one list: the buttons flow and wrap, no titles")
+        l = RF.ClientLayout(with({ count = 5, pets = true, hasPet = { false, false, false, true }, petH = 18 }))
+        assert(l.pets[1].x == 108 and l.pets[1].y == 0 and l.pets[1].h == 18, "pets after the groups, on the flow")
+        l = RF.ClientLayout(with({ count = 10, horizontal = true, pets = true, petMode = "under",
+            hasPet = { false, false, false, true }, petH = 18 }))
+        assert(l.groups[2].y == 50 and l.pets[1].x == 0 and l.pets[1].y == 100 + 14 and l.height == 100 + 14 + 18,
+            "rows: no gaps between groups, old 'under owners' gives the block")
+        -- the "Pets" block: a column right of the groups, ten half-height pets per column
+        local has = {}
+        for i = 1, 25 do has[i] = i % 2 == 0 end
+        l = RF.ClientLayout(with({ count = 25, pets = true, petMode = "block", hasPet = has, petH = 18 }))
+        local block = l.groups[#l.groups]
+        assert(block.pets and block.x == 540 and block.y == 0 and l.pets[1].x == 540 and l.pets[1].y == 14
+            and l.pets[2].y == 32, "columns: the pets block right of the groups, under a title line")
+        assert(#l.pets == 12 and l.pets[10].x == 540 and l.pets[11].x == 648 and l.pets[11].y == 14
+            and block.w == 216, "ten pets per column, then the next column")
+        l = RF.ClientLayout(with({ count = 10, horizontal = true, pets = true, petMode = "block",
+            hasPet = { false, true, false, true }, petH = 18 }))
+        assert(l.pets[1].x == 0 and l.pets[1].y == 100 + 14 and l.pets[2].x == 108 and l.groups[3].pets
+            and l.groups[3].y == 100, "rows: the pets block under the groups")
+    end
+    -- the samples follow the client profile, and a seen layout replays exactly
+    do
+        local me = UnitName("player")
+        local container = CompactRaidFrameContainer
+        local cw, ch = container.width, container.height
+        container.width, container.height = 1000, 396
+        CompactRaidFrameDB = { [me] = { ACTIVE_PROFILE = { value = "Main" }, PROFILES = { value = {
+            { name = "Main", frameWidth = 108, frameHeight = 36, horizontalGroups = false, keepGroupsTogether = 1,
+                displayPets = false } } } } }
+        RF.SetEditKind(nil)
+        RF.SetTemplate(true)
+        local plan = RF.templatePlan
+        assert(plan.source == "profile" and plan.w == 108 and plan.h == 36, "the sample size is the profile's")
+        local template = RF.template
+        assert(template.cells[1].width == 108 and template.cells[1].height == 36 and #plan.groups == 1
+            and template.titles[1].shown, "sample cells and the group title")
+        assert(select(5, template.cells[2]:GetPoint(1)) == -50, "the second player under the first")
+        Suite.Part("raid").rfTemplateSize = 40
+        RF.Apply()
+        plan = RF.templatePlan
+        assert(#plan.cells == 40 and #plan.groups == 8 and template.cells[40].shown and plan.width == 864,
+            "forty players: eight columns")
+        Suite.Part("raid").rfTemplateSize = 0
+        -- pets: their own block, drawn simply (no indicators or aura icons) unless asked
+        CompactRaidFrameDB[me].PROFILES.value[1].displayPets = true
+        Suite.Part("raid").rfPetMode = "block"
+        RF.Apply()
+        plan = RF.templatePlan
+        local petCell = template.pets[1]
+        assert(#plan.pets == 2 and plan.groups[#plan.groups].pets and petCell.shown and petCell.mask == RF.petMask,
+            "sample pets in their block, drawn simply")
+        local titles = {}
+        for _, title in ipairs(template.titles) do if title.shown then titles[#titles + 1] = title.text end end
+        assert(titles[#titles] == ui.L("Питомцы", "Pets"), "the block is titled")
+        for _, widget in pairs(petCell.deco.indicators) do assert(not widget.shown, "no indicators on pets") end
+        Suite.Part("raid").rfPetAuras = true
+        RF.Apply()
+        assert(template.pets[1].mask == nil, "pet auras on: drawn like players")
+        Suite.Part("raid").rfPetAuras = false
+        CompactRaidFrameDB[me].PROFILES.value[1].displayPets = false
+        RF.Apply()
+        local snapshot = { cells = {}, pets = {}, width = 600, height = 80 }
+        for i = 1, 5 do snapshot.cells[i] = { (i - 1) * 120, 0, 120, 40 } end
+        local profile = RF.ClientProfile(5)
+        ui.Settings().rfSeenLayouts = { [RF.LayoutKey(5, profile, 1000, 396, RF.PetMode(profile.horizontal))] = snapshot }
+        RF.Apply()
+        plan = RF.templatePlan
+        assert(plan.source == "seen" and plan.w == 120 and plan.h == 40 and plan.cells[3][1] == 240 and plan.cells[3][2] == 0
+            and template.cells[1].width == 120, "a seen layout is replayed")
+        ui.Settings().rfSeenLayouts = nil
+        RF.SetTemplate(false)
+        RF.LearnLayout()
+        CompactRaidFrameDB = nil
+        container.width, container.height = cw, ch
+    end
+    RF.SetTemplate(true)
     fire("PLAYER_REGEN_DISABLED")
     assert(not template:IsShown() and not RF.templateShown, "combat hides the sample frames")
     assert(RF.ToggleTemplate() and template:IsShown())
@@ -1856,6 +2223,114 @@ do
     party.shown = partyWasShown
 end
 
+---------------------------------------------------------------------------------------------------
+-- Group roles in a raid built by hand: assigned, mark, own talents, addon, stance, inspection, class
+---------------------------------------------------------------------------------------------------
+do
+    local R = Suite.Roles
+    local realAssigned, realClass, realRaid = UnitGroupRolesAssigned, UnitClass, GetNumRaidMembers
+    UnitGroupRolesAssigned = function() return false, false, false end
+    local classes = { player = "PRIEST", raid1 = "WARRIOR", raid2 = "PRIEST", raid3 = "MAGE" }
+    UnitClass = function(unit) return classes[unit] or "PRIEST", classes[unit] or "PRIEST" end
+    local realName = UnitName
+    UnitName = function(unit) return unit == "player" and "Tester" or ("N" .. tostring(unit)) end
+    GetNumRaidMembers = function() return 3 end
+    local saved = { auras.raid1.HELPFUL, auras.raid2.HELPFUL, auras.raid3.HELPFUL }
+    auras.raid1.HELPFUL, auras.raid2.HELPFUL, auras.raid3.HELPFUL = {}, {}, {}
+    ui.Settings().roleMarks, ui.Settings().roleCache = nil, nil
+    R.Reset()
+
+    local role, source = Suite.GroupRole("player")
+    assert(role == "HEALER" and source == "talents", "my role from my talents (Holy)")
+    assert(Suite.GroupRole("raid3") == "DAMAGER" and select(2, Suite.GroupRole("raid3")) == "class", "a mage only deals damage")
+    assert(Suite.GroupRole("raid1") == nil and Suite.GroupRole("raid2") == nil, "nothing known about a warrior and a priest")
+    -- stance: Defensive Stance tanks
+    spells[71] = { "Defensive Stance", "Interface\\Icons\\Ability_Warrior_DefensiveStance" }
+    R.ResetNames()
+    auras.raid1.HELPFUL = { { name = "Defensive Stance" } }
+    role, source = Suite.GroupRole("raid1")
+    assert(role == "TANK" and source == "stance", "a tank stance tells the tank")
+    -- another ForeverUI announced its role
+    ui.HealerMana = { peers = { Nraid2 = { role = "HEALER" } } }
+    role, source = Suite.GroupRole("raid2")
+    assert(role == "HEALER" and source == "addon", "the role another ForeverUI announced")
+    ui.HealerMana = nil
+    -- a mark set by hand wins over the stance; the dungeon finder role wins over everything
+    R.SetMark("Nraid1", "HEALER")
+    role, source = Suite.GroupRole("raid1")
+    assert(role == "HEALER" and source == "mark", "a mark wins over the stance")
+    UnitGroupRolesAssigned = function(unit) return unit == "raid1", false, false end
+    role, source = Suite.GroupRole("raid1")
+    assert(role == "TANK" and source == "assigned", "the assigned role wins")
+    UnitGroupRolesAssigned = function() return false, false, false end
+    R.SetMark("Nraid1", nil)
+    auras.raid1.HELPFUL = {}
+
+    -- inspection: one at a time, out of combat, nearby; the answer is cached by name
+    local notified = {}
+    NotifyInspect = function(unit) notified[#notified + 1] = unit end
+    CanInspect = function() return true end
+    CheckInteractDistance = function() return true end
+    ClearInspectPlayer = function() end
+    local realTabs = GetTalentTabInfo
+    GetTalentTabInfo = function(i, inspect)
+        if inspect then return "Tree" .. i, "", i == 3 and 51 or 10 end
+        return realTabs(i)
+    end
+    combat = true
+    assert(R.Step(1000) == nil and #notified == 0, "no inspection in combat")
+    combat = false
+    assert(R.Step(1001) == "raid1" and notified[1] == "raid1" and R.Pending().unit == "raid1", "the first unknown is inspected")
+    assert(R.Step(1001.5) == nil and #notified == 1, "one at a time")
+    assert(R.TalentsReady() == "TANK" and not R.Pending(), "a warrior with Protection tanks")
+    role, source = Suite.GroupRole("raid1")
+    assert(role == "TANK" and source == "inspect", "the inspected role is used")
+    assert(R.Step(1003) == "raid2", "then the next unknown")
+    GetTalentTabInfo = function(i, inspect)
+        if inspect then return "Tree" .. i, "", i == 2 and 51 or 0 end
+        return realTabs(i)
+    end
+    assert(R.TalentsReady() == "HEALER" and Suite.GroupRole("raid2") == "HEALER", "a Holy priest heals")
+    assert(R.Step(1005) == nil, "nobody left to inspect")
+    -- no answer in time: somebody else, this one later
+    ui.Settings().roleCache = nil
+    R.Reset()
+    assert(R.Step(2000) == "raid1")
+    R.Step(2000 + R.INSPECT_TIMEOUT + 1)
+    assert(not R.Pending(), "a silent inspection is given up")
+    assert(R.Step(2010) == "raid2", "the next one is tried")
+    R.Reset()
+    GetTalentTabInfo = realTabs
+
+    -- the frames draw the worked-out role, fainter when asked
+    ui.Settings().roleCache = { Nraid2 = { role = "HEALER", time = 0 } }
+    RF.Settings().rfRoleFadeGuess = true
+    RF.Apply()
+    tick(0.05)
+    ui.Fire("SuiteRolesChanged")
+    local deco2
+    RF.EachFrame(function(f, d) if d.unit == "raid2" then deco2 = d end end)
+    assert(deco2 and deco2.role.shown and deco2.roleSource == "inspect" and deco2.role.alpha == 0.55,
+        "an inspected healer gets a faint healer icon")
+    RF.Settings().rfRoleFadeGuess = false
+    ui.Fire("SuiteRolesChanged")
+    assert(deco2.role.alpha == 1, "bright again")
+    -- /fuiraid roles prints every member in ASCII
+    local printed = {}
+    local realPrint = ui.Print
+    ui.Print = function(text) printed[#printed + 1] = text end
+    SlashCmdList.FOREVERUIRAID("roles")
+    ui.Print = realPrint
+    local joined = table.concat(printed, " | ")
+    assert(joined:find("raid2 PRIEST: HEALER %(inspect%)") and not joined:find("[\128-\255]"), "roles diagnostics")
+
+    ui.Settings().roleMarks, ui.Settings().roleCache = nil, nil
+    auras.raid1.HELPFUL, auras.raid2.HELPFUL, auras.raid3.HELPFUL = saved[1], saved[2], saved[3]
+    UnitGroupRolesAssigned, UnitClass, GetNumRaidMembers, UnitName = realAssigned, realClass, realRaid, realName
+    NotifyInspect, CanInspect, CheckInteractDistance, ClearInspectPlayer = nil, nil, nil, nil
+    ui.Fire("SuiteRolesChanged")
+end
+
 print(("Suite OK: serializer, export strings, profiles and spec switch, cooldown engine (GCD, buffs, reminders, ICD, "
     .. "alerts, load conditions), click-cast plan and combat queue, raid decoration (shield modes, dispel, indicators, visibility, exclusions), "
-    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets under owners, sample frames, group type profiles, frame settings per group type and copy; %d frames"):format(#objects))
+    .. "option pages, late party frames at login, action bar key binding, options window resizing, raid anchor left edge and drag handle, pets block, sample frames, group roles (talents, addon, stance, mark, inspection, class), group type profiles, frame settings per group type and copy; %d frames"):format(#objects))

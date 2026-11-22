@@ -23,8 +23,8 @@ local function new(kind, name, parent)
     if name then _G[name] = f end
     return f
 end
-function methods:Show() self.shown = true end
-function methods:Hide() self.shown = false end
+function methods:Show() local was = self.shown self.shown = true if not was and self.scripts.OnShow then self.scripts.OnShow(self) end end
+function methods:Hide() local was = self.shown self.shown = false if was and self.scripts.OnHide then self.scripts.OnHide(self) end end
 function methods:IsShown() return self.shown end
 function methods:IsVisible() return self.shown end
 function methods:SetAlpha(a) self.alpha = a end
@@ -54,6 +54,11 @@ function methods:EnableMouse(on) self.mouse = on and true or false end
 function methods:SetPoint(...) self.points[#self.points + 1] = { ... } end
 function methods:ClearAllPoints() self.points = {} end
 function methods:SetScale(s) self.scale = s end
+function methods:SetAllPoints(other) self.points = { { "ALL", other } } end
+function hooksecurefunc(t, key, fn)
+    local old = t[key]
+    t[key] = function(...) local r1, r2 = old(...) fn(...) return r1, r2 end
+end
 function methods:GetEffectiveScale() return 1 end
 function methods:GetCenter() return 512 + (self.cx or 0), 384 + (self.cy or 0) end
 function methods:SetCooldown(start, duration) self.cooldown = { start, duration } end
@@ -215,6 +220,20 @@ tick(0.1, 30)
 assert(root.alpha == 0, "idle fade to 0, got " .. root.alpha)
 assert(not PRD.running, "driver stops when idle")
 assert(not PRD.health.mouse, "invisible panel does not take the mouse")
+-- Buffs stay visible at rest (prdAuraKeepVisible, on by default): own holder at the active opacity.
+local holder = PRD.auraHolder
+assert(holder.shown and holder.points[1][2] == root, "aura holder follows the panel")
+assert(math.abs(holder.alpha - 0.8) < 0.001, "buffs keep the active opacity while the panel is idle, got " .. holder.alpha)
+set("prdAuraKeepVisible", false)
+assert(holder.alpha == 0, "option off: buffs fade with the panel")
+set("prdAuraKeepVisible", true)
+assert(math.abs(holder.alpha - 0.8) < 0.001)
+set("prdShowAuras", false)
+assert(holder.alpha == 0, "strip off: nothing to keep")
+set("prdShowAuras", true)
+root:SetScale(1.5)
+assert(holder.scale == 1.5, "holder scaled with the panel")
+root:SetScale(1)
 
 -- Energy spent: wakes to the active opacity.
 P.power[3] = 60
@@ -655,6 +674,12 @@ assert(PRD.power.text.font[2] == 10 and PRD.health.text.font[2] == 11, "power te
 set("prdPowerHeight", 20)
 assert(PRD.power.text.font[2] == 11)
 set("prdPowerHeight", 8)
+
+-- Disabling hides the aura holder with the panel.
+set("prdEnabled", false)
+assert(not PRD.auraHolder.shown, "aura holder hidden with the panel")
+set("prdEnabled", true)
+assert(PRD.auraHolder.shown)
 
 -- Paladin: nothing to show in the class block.
 reload("PALADIN")

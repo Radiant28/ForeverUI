@@ -38,7 +38,7 @@ local DEFAULTS = {
     rfShield = true, rfShieldTexture = "WoW Forever Raid", rfShieldColor = { 0.85, 0.95, 1, 1 }, rfShieldAlpha = 0.7,
     rfShieldHeight = 0, rfShieldMode = "attached", rfShieldAlign = "BOTTOM", rfHideAbsorbGlow = true,
     rfIndicators = true, rfIndicatorTimer = true,
-    rfMoveContainer = true, rfHandle = true, rfPetsUnder = true, rfGrowth = "center",
+    rfMoveContainer = true, rfHandle = true, rfPetMode = "block", rfPetAuras = false, rfRoleInspect = true, rfRoleFadeGuess = false, rfGrowth = "center", rfTemplateSize = 0,
     rfPartyShow = "client", rfRaidShow = "client",
     rfRoleIcon = true, rfRoleSet = "blizzard2", rfRoleSize = 12, rfRoleAnchor = "TOPLEFT", rfRoleX = 2, rfRoleY = -2,
     rfRoleHideDamager = false, rfRoleHideClient = true, rfRoleSort = false, rfRoleOrder = "THD",
@@ -104,6 +104,13 @@ function RF.MigrateExclusions(part)
     if part.rfDebuffHide == nil then part.rfDebuffHide = DEFAULTS.rfDebuffHide end
     -- The drink mug became the label "Пьёт - - -" bottom left: the stored old defaults move along.
     if part.rfDrinkStyle == "icon" then part.rfDrinkStyle = "text" end
+    -- "Pets under their owners" became a choice: off meant the client's own place, on (and the short-lived
+    -- "under" mode) the "Pets" block.
+    if part.rfPetsUnder ~= nil then
+        if part.rfPetsUnder == false then part.rfPetMode = "client" end
+        part.rfPetsUnder = nil
+    end
+    if part.rfPetMode == "under" then part.rfPetMode = "block" end
     if part.rfDrinkAnchor == "TOP" and (part.rfDrinkX or 0) == 0 and part.rfDrinkY == -2 then
         part.rfDrinkAnchor, part.rfDrinkX, part.rfDrinkY = "BOTTOMLEFT", 2, 2
     end
@@ -388,6 +395,25 @@ local pointOffsets = {
     TOPLEFT = { 1, -1 }, TOP = { 0, -1 }, TOPRIGHT = { -1, -1 }, LEFT = { 1, 0 }, CENTER = { 0, 0 },
     RIGHT = { -1, 0 }, BOTTOMLEFT = { 1, 1 }, BOTTOM = { 0, 1 }, BOTTOMRIGHT = { -1, 1 },
 }
+RF.pointOffsets = pointOffsets
+
+-- Where an indicator dropped on the preview goes: the health bar is w x h, (x, y) is the drop spot (the
+-- centre of the widget) from its bottom-left corner. The nearest of the nine anchors (thirds of the bar)
+-- wins; the offset puts the widget's centre on the spot, clamped to the option range (+-30).
+function RF.IndicatorDrop(w, h, x, y, size)
+    size = size or 8
+    local col = x < w / 3 and "LEFT" or x > w * 2 / 3 and "RIGHT" or ""
+    local row = y > h * 2 / 3 and "TOP" or y < h / 3 and "BOTTOM" or ""
+    local point = row .. col
+    if point == "" then point = "CENTER" end
+    local px = col == "LEFT" and -1 or col == "RIGHT" and 1 or 0
+    local py = row == "TOP" and 1 or row == "BOTTOM" and -1 or 0
+    local hx = col == "LEFT" and 0 or col == "RIGHT" and w or w / 2
+    local hy = row == "TOP" and h or row == "BOTTOM" and 0 or h / 2
+    local o = pointOffsets[point]
+    local function clamp(v) return max(-30, min(30, floor(v + 0.5))) end
+    return point, clamp(x + px * size / 2 - hx - o[1]), clamp(y + py * size / 2 - hy - o[2])
+end
 
 -- Client textures that glow around absorbs (retail names, plus anything named like a shield glow).
 local glowFields = { "overAbsorbGlow", "overHealAbsorbGlow", "absorbGlow", "shieldGlow" }
@@ -592,8 +618,10 @@ local function updateName(deco)
     local color
     if settings.rfNameColorMode == "class" then
         local class = deco.previewClass
-        if not class and unit and UnitExists(unit) then
-            local _, token = UnitClass(unit)
+        -- A pet takes its owner's colour (a hunter's wolf is green, a warlock's imp purple).
+        local classUnit = RF.PetOwner(unit) or unit
+        if not class and classUnit and UnitExists(classUnit) then
+            local _, token = UnitClass(classUnit)
             class = token
         end
         color = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
@@ -1036,6 +1064,7 @@ end
 
 local scratchDebuffs = {}
 local foundIndicator = {}
+RF.OTHERS_ALPHA = 0.45   -- indicators in "everyone's, others dimmed" mode for an aura cast by someone else
 
 local INDICATOR_LAYERS = 24
 local function indicatorWidget(deco, index, entry)
@@ -1223,8 +1252,10 @@ local function drawIndicators(deco, buffs, debuffs, now)
                 if hits then
                     for _, index in ipairs(hits) do
                         local entry = list[index]
+                        local found = foundIndicator[index]
+                        -- My own copy wins over somebody else's (two priests' Renew on one target).
                         if entry and (entry.harmful and pass == 2 or not entry.harmful and pass == 1)
-                            and (not entry.mine or aura.mine) and not foundIndicator[index] then
+                            and (not entry.mine or aura.mine) and (not found or (aura.mine and not found.mine)) then
                             foundIndicator[index] = aura
                             if entry.kind ~= "missing" then aura.indicated = true end
                         end
@@ -1267,6 +1298,8 @@ local function drawIndicators(deco, buffs, debuffs, now)
             widget.text:SetTextColor(entry.style == "text" and c[1] or 1, entry.style == "text" and c[2] or 1,
                 entry.style == "text" and c[3] or 1)
             widget.expiration = entry.style == "text" and aura and duration > 0 and aura.expiration or nil
+            -- "Everyone's, others dimmed": somebody else's aura is drawn faded.
+            widget:SetAlpha((entry.dimOthers and not entry.mine and aura and not aura.mine) and RF.OTHERS_ALPHA or 1)
             widget:Show()
         elseif widget then
             widget:Hide()
@@ -1290,11 +1323,23 @@ local function updateAuras(deco)
     local unit = deco.unit
     local now = GetTime()
     local settings = cfg()
+    -- A stance or form (bear, Righteous Fury, Tree of Life) is an aura: the role icon follows it.
+    if unit and UnitExists(unit) then RF.UpdateRole(deco) end
     -- The client may create more aura icons later (more max buffs): keep them hidden too.
     if settings.rfEnabled and settings.rfHideClientAuras then hideClientAuras(deco, true) end
     if not unit or not UnitExists(unit) or not settings.rfEnabled then
         RF.DrawAuras(deco, buffList, debuffList, now)
         drawIndicators(deco, buffList, debuffList, now)
+        return
+    end
+    -- Pets are drawn simply: no indicators, buff or debuff icons (unless "Pet auras" is on), only the
+    -- dispel highlight of a debuff you can remove.
+    if not settings.rfPetAuras and RF.IsPetDeco(deco) then
+        collect(unit, "HARMFUL", debuffList, false)
+        RF.DrawAuras(deco, buffList, debuffList, now)
+        for _, icon in ipairs(deco.debuffs) do icon:Hide() end
+        for _, widget in pairs(deco.indicators) do widget:Hide() end
+        release(debuffList)
         return
     end
     -- Every buff is collected: indicators of others' shields and saves need them. "Whose buffs" only
@@ -1594,7 +1639,13 @@ local function installHooks()
         RF.MarkDirty()
         RF.SyncAnchor()
         RF.LayoutPets()
+        RF.LearnLayout()
     end)
+    -- A changed raid profile or container size of the client re-lays the sample frames.
+    for _, name in ipairs({ "CompactUnitFrameProfiles_ApplyProfile", "CompactRaidFrameManager_SetSetting",
+        "CompactRaidFrameManager_ResizeFrame_UpdateContainerSize" }) do
+        hookGlobal(name, function() if RF.templateShown then RF.LayoutTemplate() end end)
+    end
     for _, name in ipairs({ "CompactPartyFrame_UpdateLayout", "CompactPartyFrame_Generate" }) do
         hookGlobal(name, function() RF.LayoutPets() end)
     end
@@ -2034,7 +2085,7 @@ function RF.Init()
     if ui.RegisterEditFrame then
         local entry = ui.RegisterEditFrame(anchor, L("Фреймы группы и рейда", "Party and raid frames"), "raidframes")
         if entry then
-            entry.onRightClick = function() ui.OpenOptions("raidframes") end
+            entry.onRightClick = function() ui.OpenOptions("raidframes", "position") end
             entry.resetPosition = function()
                 if entry.config then entry.config.width, entry.config.height = nil, nil end
                 RF.SyncAnchor()
@@ -2132,13 +2183,18 @@ end
 
 function RF.UpdateRole(deco, forcedRole)
     local settings = cfg()
-    local role = forcedRole or Suite.UnitRole(deco.unit)
+    local role, source = forcedRole, nil
+    if not role and Suite.GroupRole then role, source = Suite.GroupRole(deco.unit) end
+    if not role and not forcedRole then role = Suite.UnitRole(deco.unit) end
     if not (settings.rfEnabled and settings.rfRoleIcon) or not role
         or (role == "DAMAGER" and settings.rfRoleHideDamager) then
         deco.role:Hide()
         deco.roleKey = nil
         return
     end
+    -- A worked-out role (stance, inspection, class) may be drawn faded.
+    deco.role:SetAlpha((settings.rfRoleFadeGuess and Suite.Roles and Suite.Roles.guessed[source or ""]) and 0.55 or 1)
+    deco.roleSource = source
     local key = role .. settings.rfRoleSet .. settings.rfRoleSize .. settings.rfRoleAnchor .. settings.rfRoleX .. settings.rfRoleY
     if deco.roleKey ~= key then
         deco.roleKey = key
@@ -2234,7 +2290,8 @@ end
 local function makeRoleSort(original)
     return function(a, b)
         local rank = orders[cfg().rfRoleOrder] or orders.THD
-        local ra, rb = rank[Suite.UnitRole(a) or ""] or 4, rank[Suite.UnitRole(b) or ""] or 4
+        local role = Suite.GroupRole or Suite.UnitRole
+        local ra, rb = rank[role(a) or ""] or 4, rank[role(b) or ""] or 4
         if ra ~= rb then return ra < rb end
         if original then return original(a, b) end
         local ia, ib = unitIndex(a), unitIndex(b)
@@ -2315,8 +2372,9 @@ end
 local function isPetDeco(deco)
     if RF.PetOwner(deco.unit) then return true end
     local name = deco.frame.GetName and deco.frame:GetName()
-    return name ~= nil and name:match("^CompactPartyFramePet%d+$") ~= nil
+    return type(name) == "string" and name:match("^CompactPartyFramePet%d+$") ~= nil
 end
+RF.IsPetDeco = isPetDeco
 
 -- Owner deco of a pet deco: by unit token, else CompactPartyFramePetN under CompactPartyFrameMemberN.
 local function ownerOf(deco, byUnit)
@@ -2349,14 +2407,61 @@ function RF.IsHorizontal()
 end
 
 local petsMoved
+-- Where the pet buttons go (rfPetMode): "block" - a block of their own titled "Pets" beside the groups
+-- (a column right of them when groups are columns, rows of five under them when groups are rows;
+-- half-height pets, so a column is as tall as five players), "client" - where the client puts them.
+-- Moves only out of combat; the client's own re-layout is followed by the hook.
+local PET_TITLE, PET_PER_GROUP = 14, 5
+local petTitle
+local function petBlockTitle(parent)
+    if not petTitle then
+        petTitle = CreateFrame("Frame", "ForeverStockUIRaidPetTitle", parent or UIParent)
+        petTitle:EnableMouse(false)
+        petTitle:SetHeight(PET_TITLE)
+        petTitle.text = petTitle:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        petTitle.text:SetPoint("BOTTOMLEFT", 2, 1)
+        petTitle.text:SetText(L("Питомцы", "Pets"))
+    end
+    if parent and petTitle:GetParent() ~= parent then petTitle:SetParent(parent) end
+    return petTitle
+end
+
+-- The pet mode in force ("block" or "client").
+function RF.PetMode()
+    local settings = cfg()
+    local mode = settings.rfEnabled and settings.rfPetMode or "client"
+    if mode == "under" then mode = "block" end
+    if mode ~= "block" then mode = "client" end
+    return mode
+end
+
+local function edges(frame)
+    return frame:GetLeft(), frame:GetTop(), frame:GetRight(), frame:GetBottom()
+end
+
 function RF.LayoutPets()
     if InCombatLockdown() then
         ui.RunOutOfCombat("rfPets", RF.LayoutPets)
         return
     end
-    local settings = cfg()
-    if not (settings.rfEnabled and settings.rfPetsUnder) then
-        if petsMoved then
+    local horizontal = RF.IsHorizontal()
+    local mode = RF.PetMode(horizontal)
+    local players, pets, byUnit = {}, {}, {}
+    if mode ~= "client" then
+        for _, deco in ipairs(ordered) do
+            if deco.frame:IsVisible() then
+                if isPetDeco(deco) then
+                    pets[#pets + 1] = deco
+                else
+                    players[#players + 1] = deco
+                    if deco.unit then byUnit[deco.unit] = deco end
+                end
+            end
+        end
+    end
+    if mode == "client" or #pets == 0 or #players == 0 then
+        if petTitle then petTitle:Hide() end
+        if mode == "client" and petsMoved then
             petsMoved = nil
             for _, container in ipairs({ _G.CompactRaidFrameContainer, _G.CompactPartyFrame }) do
                 if container then
@@ -2370,22 +2475,55 @@ function RF.LayoutPets()
         end
         return
     end
-    if not RF.IsHorizontal() then return end
-    local byUnit = {}
-    for _, deco in ipairs(ordered) do
-        if deco.unit and deco.frame:IsVisible() and not isPetDeco(deco) then byUnit[deco.unit] = deco end
-    end
     attaching = true
-    for _, deco in ipairs(ordered) do
-        if deco.frame:IsVisible() and isPetDeco(deco) then
-            local owner = ownerOf(deco, byUnit)
-            if owner then
-                deco.frame:ClearAllPoints()
-                deco.frame:SetPoint("TOPLEFT", owner.frame, "BOTTOMLEFT", 0, -PET_GAP)
-                petsMoved = true
-            end
+    -- Block: the anchor is the top-right player (columns) or the left player of the lowest row (rows).
+    local anchorDeco, best
+    for _, deco in ipairs(players) do
+        local l, t, r, b = edges(deco.frame)
+        if l and t and r and b then
+            local score
+            if horizontal then score = -b * 10000 - l else score = r * 10000 + t end
+            if not best or score > best then anchorDeco, best = deco, score end
         end
     end
+    if not anchorDeco then
+        attaching = nil
+        return
+    end
+    -- Kept-together groups already leave a title line above their players; one list does not.
+    local profile = RF.ClientProfile and RF.ClientProfile(#players)
+    local together = profile and profile.together
+    local playerH = anchorDeco.frame:GetHeight() or 0
+    local petH = pets[1].frame:GetHeight() or 0
+    local perLine = horizontal and PET_PER_GROUP
+        or max(1, floor((PET_PER_GROUP * playerH) / max(1, petH) + 0.01))
+    local lineFirst, previous
+    for k, deco in ipairs(pets) do
+        local frame = deco.frame
+        frame:ClearAllPoints()
+        if k == 1 then
+            if horizontal then
+                frame:SetPoint("TOPLEFT", anchorDeco.frame, "BOTTOMLEFT", 0, -PET_TITLE)
+            else
+                frame:SetPoint("TOPLEFT", anchorDeco.frame, "TOPRIGHT", 0, together and 0 or -PET_TITLE)
+            end
+            lineFirst = frame
+        elseif (k - 1) % perLine == 0 then
+            frame:SetPoint("TOPLEFT", lineFirst, horizontal and "BOTTOMLEFT" or "TOPRIGHT", 0, 0)
+            lineFirst = frame
+        else
+            frame:SetPoint("TOPLEFT", previous, horizontal and "TOPRIGHT" or "BOTTOMLEFT", 0, 0)
+        end
+        previous = frame
+    end
+    petsMoved = true
+    local first = pets[1].frame
+    local title = petBlockTitle(first:GetParent())
+    title:ClearAllPoints()
+    title:SetPoint("BOTTOMLEFT", first, "TOPLEFT", 0, 0)
+    title:SetWidth(first:GetWidth() or 60)
+    title:SetFrameLevel((first:GetFrameLevel() or 1) + 8)
+    title:Show()
     attaching = nil
     RF.SyncAnchor()
 end
@@ -2634,6 +2772,17 @@ ui.RegisterCallback("SuiteSpellsChanged", function()
     for _, deco in ipairs(ordered) do deco.auraDirty = true end
     anyDirty = true
 end, "RaidFramesSpells")
+-- Roles learned (roster, main tank, inspection, another ForeverUI, a mark): icons, and the sort order
+-- when a role really changed.
+ui.RegisterCallback("SuiteRolesChanged", function()
+    local changed = false
+    for _, deco in ipairs(ordered) do
+        local before = deco.roleKey
+        RF.UpdateRole(deco)
+        if deco.roleKey ~= before then changed = true end
+    end
+    if changed then RF.ApplySort(true) end
+end, "RaidFramesRoles")
 
 ---------------------------------------------------------------------------------------------------
 -- Live preview for the options page: a mock unit button decorated by the same code
@@ -2699,26 +2848,49 @@ local function previewAuras()
     return buffs, debuffs
 end
 
-local function demoAuras(list, now)
+-- others = true: the auras were cast by somebody else (a raid member), as in the "others dimmed" example.
+local function demoAuras(list, now, others)
     local result = {}
     for i, aura in ipairs(list) do
         result[i] = { name = aura.name, icon = aura.icon, count = aura.count or 0, type = aura.type, id = aura.id,
-            duration = aura.duration, expiration = now + (aura.left or 0), mine = true, raid = true, caster = "player" }
+            duration = aura.duration, expiration = now + (aura.left or 0), mine = not others, raid = true,
+            caster = others and "raid1" or "player" }
     end
     return result
 end
 
+-- What a pet button shows unless "Pet auras" is on: bars, name and the dispel highlight.
+RF.petMask = { name = true, text = true, heal = true, shield = true, threat = true, target = true, hover = true,
+    dispel = true }
+
+-- One debuff of each dispel type for the "Dispel" preview.
+local dispelDemo = {
+    Magic = { name = "Shadow Word: Pain", icon = "Interface\\Icons\\Spell_Shadow_ShadowWordPain", type = "Magic",
+        duration = 18, left = 11 },
+    Curse = previewDebuffs[1],
+    Disease = { name = "Plague", icon = "Interface\\Icons\\Spell_Shadow_CreepingPlague", type = "Disease",
+        duration = 21, left = 7 },
+    Poison = previewDebuffs[2],
+}
+
+local function mergeData(variant, override)
+    local data = previewVariants[variant or "healer"] or previewVariants.healer
+    if not override then return data end
+    local merged = {}
+    for key, value in pairs(data) do merged[key] = value end
+    for key, value in pairs(override) do merged[key] = value end
+    return merged
+end
+
 -- Live preview for the options page: a mock unit button decorated by the same code.
--- `override` (optional) replaces fields of the variant for this cell: name, class, role, health.
+-- `override` (optional) replaces fields of the variant for this cell: name, class, role, health, heal,
+-- absorb, threat, target, hover, drink, deficit, dispelType (one debuff of that type, dispelled by "you"),
+-- others (auras cast by somebody else).
+-- frame:SetData(variant, override) changes the member later, frame:SetMask({ part = true }) draws only
+-- those parts (nil = everything; parts: name, text, role, heal, shield, threat, drink, target, hover,
+-- buffs, debuffs, dispel, indicators), frame:SetState("range" | "dead" | "combat" | nil) shows a unit state.
 function RF.BuildPreview(parent, width, height, variant, override)
     width, height = width or 120, height or 48
-    local data = previewVariants[variant or "healer"] or previewVariants.healer
-    if override then
-        local merged = {}
-        for key, value in pairs(data) do merged[key] = value end
-        for key, value in pairs(override) do merged[key] = value end
-        data = merged
-    end
     local frame = CreateFrame("Frame", nil, parent)
     frame:SetWidth(width)
     frame:SetHeight(height)
@@ -2727,7 +2899,6 @@ function RF.BuildPreview(parent, width, height, variant, override)
     frame.healthBar:SetWidth(width - 2)
     frame.healthBar:SetHeight(height - 9)
     frame.healthBar:SetMinMaxValues(0, 1)
-    frame.healthBar:SetValue(data.health)
     frame.powerBar = CreateFrame("StatusBar", nil, frame)
     frame.powerBar:SetPoint("TOPLEFT", frame.healthBar, "BOTTOMLEFT", 0, -1)
     frame.powerBar:SetPoint("BOTTOMRIGHT", -1, 1)
@@ -2737,61 +2908,188 @@ function RF.BuildPreview(parent, width, height, variant, override)
     local deco = createDeco(frame)
     deco.preview = true
     frame.deco = deco
-    -- The name, the target border (healer) and the hover highlight (damage dealer) follow the settings.
-    deco.previewName, deco.previewClass, deco.previewTarget = data.name, data.class, data.target
-    local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[data.class]
+    frame.data = mergeData(variant, override)
+    function frame:SetData(newVariant, newOverride)
+        self.data = mergeData(newVariant, newOverride)
+        deco.nameKey = nil
+    end
+    function frame:SetMask(mask) self.mask = mask end
+    function frame:SetState(state) self.state = state end
     applyStyle(deco)
     function frame:Refresh()
         applyStyle(deco)
+        local data, mask, state = self.data, self.mask, self.state
+        local function on(part) return not mask or mask[part] and true or false end
         local settings = cfg()
+        local dead = state == "dead"
+        local health = dead and 0 or data.health
+        -- The name, the target border (healer) and the hover highlight (damage dealer) follow the settings.
+        deco.previewName, deco.previewClass, deco.previewTarget = data.name, data.class, data.target
+        local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[data.class]
         local mode = settings.rfHealthColorMode
         local bar = frame.healthBar
+        bar:SetValue(health)
         if mode == "class" and color then
             bar:SetStatusBarColor(color.r, color.g, color.b)
         elseif mode == "custom" then
             local c = settings.rfHealthColor
             bar:SetStatusBarColor(c[1], c[2], c[3])
         elseif mode == "gradient" then
-            local f = data.health
+            local f = health
             if f > 0.5 then bar:SetStatusBarColor((1 - f) * 2, 1, 0) else bar:SetStatusBarColor(1, f * 2, 0) end
         else
             bar:SetStatusBarColor(0.1, 0.75, 0.2)
         end
-        RF.DrawBars(deco, data.health, data.heal, data.absorb)
+        RF.DrawBars(deco, health, (not dead and on("heal")) and data.heal or 0,
+            (not dead and on("shield")) and data.absorb or 0)
         local now = GetTime()
         local buffSet, debuffSet = previewAuras()
-        local buffs, debuffs = demoAuras(buffSet, now), demoAuras(debuffSet, now)
+        if data.dispelType then debuffSet = { dispelDemo[data.dispelType] or previewDebuffs[1] } end
+        if dead then buffSet, debuffSet = {}, {} end
+        local buffs, debuffs = demoAuras(buffSet, now, data.others), demoAuras(debuffSet, now, data.others)
         deco.unit = "player"
         drawIndicators(deco, buffs, debuffs, now)
         local canDispel = Suite.CanDispel
-        Suite.CanDispel = function(kind) return kind == PREVIEW_DISPEL end
+        local dispelAll = data.dispelType ~= nil
+        Suite.CanDispel = function(kind) return dispelAll or kind == PREVIEW_DISPEL end
         RF.DrawAuras(deco, buffs, debuffs, now)
         Suite.CanDispel = canDispel
-        if data.threat and settings.rfEnabled and settings.rfThreat then
+        if not on("indicators") or dead then
+            for _, widget in pairs(deco.indicators) do widget:Hide() end
+        end
+        if not on("buffs") then for _, icon in ipairs(deco.buffs) do icon:Hide() end end
+        if not on("debuffs") then for _, icon in ipairs(deco.debuffs) do icon:Hide() end end
+        if not on("dispel") then
+            deco.dispelTint:Hide()
+            deco.dispelOutline:Hide()
+            deco.dispelIcon:Hide()
+        end
+        if data.threat and on("threat") and settings.rfEnabled and settings.rfThreat then
             deco.border:SetBackdropBorderColor(1, 0.15, 0.1, 1)
             deco.border:Show()
         else
             deco.border:Hide()
         end
-        if data.noRole then deco.role:Hide() else RF.UpdateRole(deco, data.role) end
-        -- The healer drinks in the preview (the style decides the text, 42% mana in the "mana" style).
+        if data.noRole or not on("role") then deco.role:Hide() else RF.UpdateRole(deco, data.role) end
+        -- The healer drinks in the preview (the style decides the text, 42% mana in the "mana" style);
+        -- in combat or dead nobody drinks.
         local drinkText
-        if data.drink and settings.rfEnabled and settings.rfDrink then
+        if data.drink and on("drink") and not dead and state ~= "combat" and settings.rfEnabled and settings.rfDrink then
             drinkText = RF.DrinkLabel(settings.rfDrinkStyle, 42)
         end
         RF.DrawDrink(deco, drinkText)
         updateName(deco)
+        if not on("name") then deco.name:Hide() end
         updateTarget(deco)
-        drawHover(deco, data.hover)
+        if not on("target") then deco.target:Hide() end
+        drawHover(deco, data.hover and on("hover"))
         local text = settings.rfDeficitText
-        deco.text:SetText(text == "percent" and (math.floor(data.health * 100) .. "%")
-            or text == "current" and Suite.ShortNumber(data.health * 25000) or data.deficit)
-        Suite.Shown(deco.text, settings.rfEnabled and text ~= "none")
+        if dead then
+            -- The state is what this sample shows, so its label stays whatever the item.
+            deco.text:SetText(L("Мёртв", "Dead"))
+            deco.text:Show()
+        else
+            deco.text:SetText(text == "percent" and (math.floor(health * 100) .. "%")
+                or text == "current" and Suite.ShortNumber(health * 25000) or data.deficit)
+            Suite.Shown(deco.text, settings.rfEnabled and text ~= "none" and on("text"))
+        end
+        -- Out of range: the opacity the real frames get (about half with the client's own fade).
+        if state == "range" or data.outOfRange then
+            frame:SetAlpha(settings.rfRangeMode == "custom" and settings.rfRangeAlpha or 0.55)
+        else
+            frame:SetAlpha(1)
+        end
+        if frame.flashPart then RF.FlashPreview(frame, frame.flashPart, frame.flashIndex) end
     end
     frame:Refresh()
     RF.previews[#RF.previews + 1] = frame
     RF.preview = frame
     return frame
+end
+
+-- Regions of one part of a preview frame that are on screen now.
+local function partRegions(frame, part, index)
+    local deco, list = frame.deco, {}
+    local function add(region) if region and region:IsShown() then list[#list + 1] = region end end
+    if part == "buffs" or part == "debuffs" then
+        for _, icon in ipairs(deco[part]) do add(icon) end
+    elseif part == "indicators" then
+        if index then
+            add(deco.indicators[index])
+        else
+            for _, widget in pairs(deco.indicators) do add(widget) end
+        end
+    elseif part == "dispel" then
+        add(deco.dispelIcon)
+        if deco.dispelTint:IsShown() or deco.dispelOutline:IsShown() then add(deco.health) end
+    elseif part == "threat" then
+        add(deco.border)
+    elseif part == "hover" then
+        add(deco.hoverEdge)
+        add(deco.hoverFill)
+    elseif part == "health" then
+        add(deco.health)
+    elseif part == "frame" then
+        add(frame)
+    else
+        add(deco[part])
+    end
+    return list
+end
+RF.PreviewPartRegions = partRegions
+
+-- Pulsing outline around one part of a preview frame (the setting under the cursor). part = nil stops it.
+function RF.FlashPreview(frame, part, index)
+    local flash = frame.flash
+    frame.flashPart, frame.flashIndex = part, index
+    local regions = part and partRegions(frame, part, index) or {}
+    if #regions == 0 then
+        if flash then
+            flash:Hide()
+            flash:SetScript("OnUpdate", nil)
+        end
+        return
+    end
+    if not flash then
+        flash = CreateFrame("Frame", nil, frame)
+        flash:SetFrameLevel(frame:GetFrameLevel() + 40)
+        flash:EnableMouse(false)
+        flash:SetBackdrop({ edgeFile = white, edgeSize = 1 })
+        flash:SetBackdropBorderColor(1, 0.82, 0.2, 1)
+        flash.fill = flash:CreateTexture(nil, "BACKGROUND")
+        flash.fill:SetAllPoints(flash)
+        flash.fill:SetTexture(white)
+        flash.fill:SetBlendMode("ADD")
+        flash.fill:SetVertexColor(1, 0.82, 0.2, 0.18)
+        frame.flash = flash
+    end
+    flash:ClearAllPoints()
+    -- One box around every region of the part, in the frame's own units (all regions share its scale).
+    local left, right, top, bottom
+    local fl, fb = frame:GetLeft(), frame:GetBottom()
+    for _, region in ipairs(regions) do
+        local l, r, t, b = region:GetLeft(), region:GetRight(), region:GetTop(), region:GetBottom()
+        if not (l and r and t and b) then
+            left = nil
+            break
+        end
+        left, right = min(left or l, l), max(right or r, r)
+        top, bottom = max(top or t, t), min(bottom or b, b)
+    end
+    if left and fl and fb then
+        flash:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", left - fl - 2, top - fb + 2)
+        flash:SetPoint("BOTTOMRIGHT", frame, "BOTTOMLEFT", right - fl + 2, bottom - fb - 2)
+    else
+        flash:SetPoint("TOPLEFT", regions[1], "TOPLEFT", -2, 2)
+        flash:SetPoint("BOTTOMRIGHT", regions[#regions], "BOTTOMRIGHT", 2, -2)
+    end
+    local elapsed = 0
+    flash:SetScript("OnUpdate", function(self, delta)
+        elapsed = elapsed + (delta or 0)
+        self:SetAlpha(0.35 + 0.65 * math.abs(math.sin(elapsed * 4)))
+    end)
+    flash:SetAlpha(1)
+    flash:Show()
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -2825,8 +3123,21 @@ local templateHealth = { 1, 0.86, 0.62, 1, 0.45, 0.93, 1, 0.71, 0.34, 1, 0.8, 0.
 -- What one sample cell shows. Each state (threat, target, drinking, shield, incoming heals) is on one
 -- cell only: a template where every healer looked targeted and every damage dealer hovered did not
 -- read as a group.
+-- A raid of 40 (the raid 25 profile covers it): the raid 25 roster and three more groups.
+do
+    local raid40 = {}
+    for i, member in ipairs(RF.templateRoster.raid25) do raid40[i] = member end
+    local extra = { { T, "DEATHKNIGHT" }, { H, "SHAMAN" }, { D, "MAGE" }, { D, "ROGUE" }, { D, "HUNTER", pet = 1 },
+        { H, "PALADIN" }, { D, "WARLOCK", pet = 2 }, { D, "DRUID" }, { D, "WARRIOR" }, { D, "MAGE" },
+        { H, "PRIEST" }, { D, "SHAMAN" }, { D, "ROGUE" }, { D, "DEATHKNIGHT" }, { D, "HUNTER" } }
+    for _, member in ipairs(extra) do raid40[#raid40 + 1] = member end
+    RF.templateRoster.raid40 = raid40
+end
+
 function RF.TemplateMember(kind, index)
     local roster = RF.templateRoster[kind] or RF.templateRoster.party
+    -- More sample players than the type has (40 on the raid 25 profile): the 40 roster.
+    if index > #roster then roster = RF.templateRoster.raid40 end
     local member = roster[index]
     if not member then return end
     local names = { tank = L("Танк", "Tank"), healer = L("Лекарь", "Healer"), dps = L("Боец", "Damage") }
@@ -2947,6 +3258,316 @@ function RF.TemplateHorizontal(kind)
     return value ~= false
 end
 
+---------------------------------------------------------------------------------------------------
+-- The client's own raid profile (Interface > Raid profiles): button size, rows or columns, groups kept
+-- together, pets. Read from the saved table of this character (CompactRaidFrameDB, the values exactly
+-- as saved), then from the client API (GetRaidProfileOption errors on options that are off, so an error
+-- there means "off"). Checked in game with /fuiraid profile: the API and the table both exist.
+---------------------------------------------------------------------------------------------------
+local function truthy(value) return value == true or value == 1 or value == "1" end
+
+-- Which "activate automatically for N players" box decides the profile of a group of `players`.
+function RF.AutoActivateKey(players)
+    if players <= 2 then return "autoActivate2Players" end
+    if players <= 3 then return "autoActivate3Players" end
+    if players <= 5 then return "autoActivate5Players" end
+    if players <= 10 then return "autoActivate10Players" end
+    if players <= 15 then return "autoActivate15Players" end
+    if players <= 25 then return "autoActivate25Players" end
+    return "autoActivate40Players"
+end
+
+-- profiles: the PROFILES list of CompactRaidFrameDB[character] (or nil), active: the active name.
+-- Returns { w, h, horizontal, together, pets, flagged, sortBy, name, source } or nil.
+function RF.PickProfile(profiles, active, players, apiOption)
+    local chosen
+    if type(profiles) == "table" then
+        local auto = players and RF.AutoActivateKey(players)
+        for _, profile in ipairs(profiles) do
+            if type(profile) == "table" and auto and truthy(profile[auto]) then
+                chosen = profile
+                break
+            end
+        end
+        if not chosen then
+            for _, profile in ipairs(profiles) do
+                if type(profile) == "table" and profile.name == active then
+                    chosen = profile
+                    break
+                end
+            end
+        end
+        if not chosen and type(profiles[1]) == "table" then chosen = profiles[1] end
+    end
+    if not chosen and not (active and apiOption) then return nil end
+    local function option(key)
+        if chosen and chosen[key] ~= nil then return chosen[key] end
+        if active and apiOption then return apiOption(active, key) end
+    end
+    local w, h = tonumber(option("frameWidth")), tonumber(option("frameHeight"))
+    if not (w and h and w > 0 and h > 0) then return nil end
+    return { w = w, h = h, horizontal = truthy(option("horizontalGroups")),
+        together = truthy(option("keepGroupsTogether")), pets = truthy(option("displayPets")),
+        flagged = truthy(option("displayMainTankAndAssist")), sortBy = option("sortBy"),
+        name = chosen and chosen.name or active, source = chosen and "saved" or "api" }
+end
+
+function RF.ClientProfile(players)
+    local db = _G.CompactRaidFrameDB
+    local entry = type(db) == "table" and db[UnitName("player") or ""] or nil
+    local profiles = type(entry) == "table" and type(entry.PROFILES) == "table" and entry.PROFILES.value or nil
+    local active = type(entry) == "table" and type(entry.ACTIVE_PROFILE) == "table" and entry.ACTIVE_PROFILE.value or nil
+    if type(GetActiveRaidProfile) == "function" then
+        local ok, name = pcall(GetActiveRaidProfile)
+        if ok and type(name) == "string" then active = name end
+    end
+    local apiOption
+    if type(GetRaidProfileOption) == "function" then
+        apiOption = function(name, key)
+            local ok, value = pcall(GetRaidProfileOption, name, key)
+            if ok then return value end
+            return false
+        end
+    end
+    return RF.PickProfile(profiles, active, players, apiOption)
+end
+
+-- The client's flow container: the box it fills (the raid manager's resize handle sets it) and the
+-- spacing between its objects, in UIParent units. Without the container, a wide default box.
+function RF.ContainerBox()
+    local container = _G.CompactRaidFrameContainer
+    local ratio, w, h = 1, 1000, 400
+    if container and container.GetWidth then
+        ratio = (container:GetEffectiveScale() or 1) / (UIParent:GetEffectiveScale() or 1)
+        w, h = container:GetWidth() or w, container:GetHeight() or h
+    end
+    local function spacing(key)
+        local value = container and container[key]
+        return type(value) == "number" and value or 0
+    end
+    return w, h, ratio, spacing("flowHorizontalSpacing"), spacing("flowVerticalSpacing")
+end
+
+local GROUP_TITLE, GROUP_SIZE = 14, 5   -- measured in game: a group is its 14 px title and five slots
+
+-- Positions (x right, y down from the container's top-left) as the client's flow container lays the
+-- buttons out. o = { count, w, h, petW, petH, hasPet = {}, together, horizontal, pets, petMode,
+-- boxW, boxH, gapX, gapY }.
+-- Kept together: every group is one block (title + five slots, empty slots included), a column when
+-- groups are vertical and a row when they are horizontal. The blocks flow across (vertical groups) or
+-- down (horizontal groups) and wrap at the edge of the box. Seen in game for a vertical group: the
+-- block is w x (14 + 5h) and the flow runs across.
+-- Not kept together: the buttons themselves flow the same way without titles. Not seen in game yet:
+-- the first real raid replaces the guess with what the client really does (RF.LearnLayout).
+-- Pets (o.petMode): "client" - they continue the same flow after everyone (the retail client adds them
+-- without a line break); "block" - a titled block of their own, right of the groups when they are
+-- columns (half-height pets, a column as tall as five players) or under them when they are rows (five
+-- per row), as RF.LayoutPets places the real buttons. No gaps anywhere: the client has none either.
+function RF.ClientLayout(o)
+    local out = { cells = {}, pets = {}, groups = {}, width = 0, height = 0 }
+    local count = o.count or 0
+    if count == 0 then return out end
+    local w, h, gapX, gapY = o.w, o.h, o.gapX or 0, o.gapY or 0
+    local across = not o.horizontal   -- primary direction of the flow: across (x) or down (y)
+    local boxW, boxH = max(o.boxW or 1000, w), max(o.boxH or 400, h)
+    -- flow state: position on the current line and the line's thickness
+    local x, y, line = 0, 0, 0
+    local function place(ow, oh)
+        if across then
+            if x > 0 and x + ow > boxW then x, y, line = 0, y + line + gapY, 0 end
+            local px, py = x, y
+            x = x + ow + gapX
+            line = max(line, oh)
+            return px, py
+        end
+        if y > 0 and y + oh > boxH then y, x, line = 0, x + line + gapX, 0 end
+        local px, py = x, y
+        y = y + oh + gapY
+        line = max(line, ow)
+        return px, py
+    end
+    local petMode = (o.petMode == "block" or o.petMode == "under") and "block" or "client"
+    if o.together then
+        local groups = math.ceil(count / GROUP_SIZE)
+        local gw = o.horizontal and GROUP_SIZE * w or w
+        local gh = GROUP_TITLE + (o.horizontal and h or GROUP_SIZE * h)
+        for g = 1, groups do
+            local gx, gy = place(gw, gh)
+            out.groups[g] = { x = gx, y = gy, w = gw, h = gh, index = g }
+            for slot = 1, GROUP_SIZE do
+                local i = (g - 1) * GROUP_SIZE + slot
+                if i > count then break end
+                local cx = gx + (o.horizontal and (slot - 1) * w or 0)
+                local cy = gy + GROUP_TITLE + (o.horizontal and 0 or (slot - 1) * h)
+                out.cells[i] = { cx, cy }
+            end
+        end
+    else
+        for i = 1, count do
+            local cx, cy = place(w, h)
+            out.cells[i] = { cx, cy }
+        end
+    end
+    if o.pets and petMode == "block" then
+        local petW, petH = o.petW or w, o.petH or max(12, floor(h / 2))
+        local right, bottom = 0, 0
+        for _, group in ipairs(out.groups) do
+            right, bottom = max(right, group.x + group.w), max(bottom, group.y + group.h)
+        end
+        for i = 1, count do
+            right, bottom = max(right, out.cells[i][1] + w), max(bottom, out.cells[i][2] + h)
+        end
+        -- columns: beside the top of the groups, under the title line; rows: a title line under them
+        local startX = o.horizontal and 0 or right
+        local startY = o.horizontal and (bottom + GROUP_TITLE) or GROUP_TITLE
+        local perLine = o.horizontal and GROUP_SIZE or max(1, floor(GROUP_SIZE * h / petH + 0.01))
+        local k = 0
+        for i = 1, count do
+            if o.hasPet and o.hasPet[i] then
+                local line, slot = floor(k / perLine), k % perLine
+                local px = o.horizontal and startX + slot * petW or startX + line * petW
+                local py = o.horizontal and startY + line * petH or startY + slot * petH
+                out.pets[#out.pets + 1] = { owner = i, x = px, y = py, w = petW, h = petH }
+                k = k + 1
+            end
+        end
+        if k > 0 then
+            local lines = math.ceil(k / perLine)
+            local bw = o.horizontal and min(k, perLine) * petW or lines * petW
+            local bh = o.horizontal and lines * petH or min(k, perLine) * petH
+            out.groups[#out.groups + 1] = { x = startX, y = startY - GROUP_TITLE, w = bw, h = bh + GROUP_TITLE,
+                index = #out.groups + 1, pets = true }
+        end
+    elseif o.pets then
+        local petW, petH = o.petW or w, o.petH or max(12, floor(h / 2))
+        for i = 1, count do
+            if o.hasPet and o.hasPet[i] then
+                local px, py = place(petW, petH)
+                out.pets[#out.pets + 1] = { owner = i, x = px, y = py, w = petW, h = petH }
+            end
+        end
+    end
+    -- extent of everything placed
+    local right, bottom = 0, 0
+    for _, group in ipairs(out.groups) do
+        right, bottom = max(right, group.x + group.w), max(bottom, group.y + group.h)
+    end
+    for _, cell in ipairs(out.cells) do right, bottom = max(right, cell[1] + w), max(bottom, cell[2] + h) end
+    for _, pet in ipairs(out.pets) do right, bottom = max(right, pet.x + pet.w), max(bottom, pet.y + pet.h) end
+    out.width, out.height = right, bottom
+    return out
+end
+
+-- A snapshot of the real layout, taken whenever the client shows a group (not while the samples hide
+-- it): button size and the place of each player and pet button in the container, per profile, number
+-- of players and box. The sample frames replay it exactly when the same case comes back.
+local function layoutKey(count, profile, boxW, boxH, petMode)
+    return ("%d/%dx%d/%s%s%s%s/%dx%d"):format(count, profile.w, profile.h, profile.together and "T" or "F",
+        profile.horizontal and "H" or "V", profile.pets and "P" or "-", tostring(petMode or "client"):sub(1, 1),
+        floor(boxW + 0.5), floor(boxH + 0.5))
+end
+RF.LayoutKey = layoutKey
+
+-- Order of the client's buttons: group, then slot (CompactRaidGroup2Member3), else the button number.
+local function buttonOrder(frame)
+    local name = frame:GetName() or ""
+    local group, member = name:match("Group(%d+)Member(%d+)$")
+    if group then return tonumber(group) * 10 + tonumber(member) end
+    member = name:match("Member(%d+)$") or name:match("(%d+)$")
+    return tonumber(member) or 999
+end
+
+function RF.LearnLayout()
+    if RF.templateFaded or RF.templateShown then return end
+    local container = _G.CompactRaidFrameContainer
+    if not (container and container:IsVisible()) then return end
+    local players, pets = {}, {}
+    for _, deco in ipairs(ordered) do
+        if deco.frame:IsVisible() then
+            local list = isPetDeco(deco) and pets or players
+            list[#list + 1] = deco.frame
+        end
+    end
+    if #players < 2 then return end
+    local cl, _, _, ct = screenRect(container)
+    if not cl then return end
+    local boxW, boxH, ratio = RF.ContainerBox()
+    local profile = RF.ClientProfile(#players)
+    if not profile then return end
+    table.sort(players, function(a, b) return buttonOrder(a) < buttonOrder(b) end)
+    table.sort(pets, function(a, b) return buttonOrder(a) < buttonOrder(b) end)
+    local snapshot = { cells = {}, pets = {}, ratio = ratio }
+    local right, bottom = 0, 0
+    local function add(list, frame)
+        local l, b, r, t = screenRect(frame)
+        if not l then return false end
+        list[#list + 1] = { floor(l - cl + 0.5), floor(ct - t + 0.5), floor(r - l + 0.5), floor(t - b + 0.5) }
+        right, bottom = max(right, r - cl), max(bottom, ct - b)
+        return true
+    end
+    for _, frame in ipairs(players) do if not add(snapshot.cells, frame) then return end end
+    for _, frame in ipairs(pets) do add(snapshot.pets, frame) end
+    snapshot.width, snapshot.height = floor(right + 0.5), floor(bottom + 0.5)
+    local settings = ui.Settings()
+    if type(settings.rfSeenLayouts) ~= "table" then settings.rfSeenLayouts = {} end
+    settings.rfSeenLayouts[layoutKey(#players, profile, boxW * ratio, boxH * ratio, RF.PetMode())] = snapshot
+    return snapshot
+end
+
+-- How many sample players: the option (0 = by group type: 5, 10, 25).
+function RF.TemplateCount(kind)
+    local chosen = tonumber(cfg().rfTemplateSize) or 0
+    if chosen > 0 then return min(40, chosen) end
+    return RF.templateKinds[kind] or 5
+end
+
+-- The plan of the sample frames: size, cells, pets, group titles and where it came from
+-- ("seen" = the client's own layout, "profile" = computed from the client's raid profile,
+-- "measured" = no profile, the old rows or columns of five).
+function RF.TemplatePlan(kind, count, hasPet)
+    local profile = RF.ClientProfile(count)
+    local petMode = RF.PetMode()
+    if profile then
+        local boxW, boxH, ratio, gapX, gapY = RF.ContainerBox()
+        local w, h = floor(profile.w * ratio + 0.5), floor(profile.h * ratio + 0.5)
+        local petH = max(8, floor(h / 2 + 0.5))
+        local plan = RF.ClientLayout({ count = count, w = w, h = h, petW = w, petH = petH, hasPet = hasPet,
+            together = profile.together, horizontal = profile.horizontal, pets = profile.pets, petMode = petMode,
+            boxW = boxW * ratio, boxH = boxH * ratio, gapX = gapX * ratio, gapY = gapY * ratio })
+        plan.w, plan.h, plan.petW, plan.petH, plan.source, plan.profile = w, h, w, petH, "profile", profile
+        local seen = ui.Settings().rfSeenLayouts
+        local snapshot = type(seen) == "table" and seen[layoutKey(count, profile, boxW * ratio, boxH * ratio, petMode)]
+        if snapshot and #snapshot.cells == count then
+            plan.source = "seen"
+            for i, cell in ipairs(snapshot.cells) do plan.cells[i] = { cell[1], cell[2] } end
+            if snapshot.cells[1] then plan.w, plan.h = snapshot.cells[1][3] or w, snapshot.cells[1][4] or h end
+            -- Pets: the seen places when the sample has as many pets, else the computed ones.
+            if #snapshot.pets == #plan.pets then
+                for k, pet in ipairs(plan.pets) do
+                    local spot = snapshot.pets[k]
+                    pet.x, pet.y, pet.w, pet.h = spot[1], spot[2], spot[3] or pet.w, spot[4] or pet.h
+                end
+            end
+            -- The titles cannot be told from a snapshot: only the pets block title is kept.
+            local kept = {}
+            for _, group in ipairs(plan.groups) do
+                if group.pets and #snapshot.pets == #plan.pets then kept[#kept + 1] = group end
+            end
+            plan.groups = kept
+            plan.width, plan.height = max(plan.width, snapshot.width or 0), max(plan.height, snapshot.height or 0)
+        end
+        return plan
+    end
+    -- No client profile: the real button size, groups kept together, rows or columns as last seen.
+    local w, h, petW, petH = RF.TemplateMetrics()
+    local boxW, boxH, ratio = RF.ContainerBox()
+    local plan = RF.ClientLayout({ count = count, w = w, h = h, petW = petW, petH = petH, hasPet = hasPet,
+        together = true, horizontal = RF.TemplateHorizontal(kind), pets = true, petMode = petMode,
+        boxW = boxW * ratio, boxH = boxH * ratio })
+    plan.w, plan.h, plan.petW, plan.petH, plan.source = w, h, petW, petH, "measured"
+    return plan
+end
+
 local templateFrame
 local function getTemplateFrame()
     if templateFrame then return templateFrame end
@@ -2996,9 +3617,8 @@ RF.FadeClientFrames = fadeClientFrames
 
 function RF.LayoutTemplate()
     local frame = getTemplateFrame()
-    local settings = cfg()
     local kind = RF.ViewKind()
-    local count = RF.templateKinds[kind] or 5
+    local count = RF.TemplateCount(kind)
     local hasPet, members = {}, {}
     for i = 1, count do
         local variant, data, pet = RF.TemplateMember(kind, i)
@@ -3006,9 +3626,9 @@ function RF.LayoutTemplate()
         hasPet[i] = pet ~= nil
     end
     -- measured before the real frames fade (they stay measurable: alpha does not hide them)
-    local w, h, petW, petH = RF.TemplateMetrics()
-    local vertical = not RF.TemplateHorizontal(kind)
-    local key = kind .. "/" .. w .. "x" .. h .. "/" .. petW .. "x" .. petH
+    local plan = RF.TemplatePlan(kind, count, hasPet)
+    local w, h, petW, petH = plan.w, plan.h, plan.petW, plan.petH
+    local key = kind .. "/" .. count .. "/" .. w .. "x" .. h .. "/" .. petW .. "x" .. petH
     if frame.poolKey ~= key then
         for _, list in ipairs({ frame.cells, frame.pets }) do
             for _, cell in ipairs(list) do cell:Hide() end
@@ -3016,21 +3636,46 @@ function RF.LayoutTemplate()
         frame.pools[key] = frame.pools[key] or { cells = {}, pets = {} }
         frame.cells, frame.pets, frame.poolKey = frame.pools[key].cells, frame.pools[key].pets, key
     end
-    local layout = RF.TemplateLayout(hasPet, TEMPLATE_ROW, w, h, petH, TEMPLATE_GAP, settings.rfPetsUnder ~= false, vertical)
     for i = 1, count do
-        placeCell(frame, frame.cells, i, members[i][1], w, h, members[i][2], layout.cells[i][1], layout.cells[i][2])
+        placeCell(frame, frame.cells, i, members[i][1], w, h, members[i][2], plan.cells[i][1], -plan.cells[i][2])
     end
     for i = count + 1, #frame.cells do frame.cells[i]:Hide() end
     local petNames = { L("Волк", "Wolf"), L("Бес", "Imp") }
-    for k, pet in ipairs(layout.pets) do
+    local petMask = not cfg().rfPetAuras and RF.petMask or nil
+    for k, pet in ipairs(plan.pets) do
         local which = members[pet.owner][3] or 1
         placeCell(frame, frame.pets, k, "pet", petW, petH,
-            { name = petNames[which], class = which == 2 and "WARLOCK" or "HUNTER" }, pet.x, pet.y)
+            { name = petNames[which], class = which == 2 and "WARLOCK" or "HUNTER" }, pet.x, -pet.y)
+        if frame.pets[k].mask ~= petMask then
+            frame.pets[k]:SetMask(petMask)
+            frame.pets[k]:Refresh()
+        end
     end
-    for k = #layout.pets + 1, #frame.pets do frame.pets[k]:Hide() end
-    frame:SetWidth(max(layout.width, 1))
-    frame:SetHeight(max(layout.height, 1))
-    return layout
+    for k = #plan.pets + 1, #frame.pets do frame.pets[k]:Hide() end
+    -- Group titles, as the client writes them above each kept-together group.
+    frame.titles = frame.titles or {}
+    for g, group in ipairs(plan.groups) do
+        local title = frame.titles[g]
+        if not title then
+            title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            frame.titles[g] = title
+        end
+        title:ClearAllPoints()
+        title:SetPoint("TOPLEFT", frame, "TOPLEFT", group.x + 2, -group.y - 1)
+        if group.pets then
+            title:SetText(L("Питомцы", "Pets"))
+        elseif kind == "party" and g == 1 and not (plan.groups[2] and not plan.groups[2].pets) then
+            title:SetText(L("Группа", "Party"))
+        else
+            title:SetText((L("Группа %d", "Group %d")):format(g))
+        end
+        title:Show()
+    end
+    for g = #plan.groups + 1, #frame.titles do frame.titles[g]:Hide() end
+    frame:SetWidth(max(plan.width, 1))
+    frame:SetHeight(max(plan.height, 1))
+    RF.templatePlan = plan
+    return plan
 end
 
 function RF.SetTemplate(on)
@@ -3052,8 +3697,216 @@ function RF.ToggleTemplate()
 end
 
 ---------------------------------------------------------------------------------------------------
--- Diagnostics: /fuiraid lists the client buttons found and the fields this module uses
+-- Diagnostics: /fuiraid profile — how the client lays out its raid frames (its raid profile, the
+-- functions it has, the container and every shown button). The sample frames must follow the same
+-- rules, and the client's Lua was never seen, so this is read in game first. The full snapshot goes to
+-- ForeverStockUIDB.raidDumps[<group type>] (written to SavedVariables on /reload or logout); the chat
+-- gets a short summary. Values only, ASCII text: some chat fonts print Cyrillic as "?".
 ---------------------------------------------------------------------------------------------------
+local profileKeys = { "frameWidth", "frameHeight", "horizontalGroups", "keepGroupsTogether", "displayPets",
+    "displayMainTankAndAssist", "displayPowerBar", "displayBorder", "sortBy", "healthText", "isDynamic", "locked",
+    "shown", "autoActivate2Players", "autoActivate3Players", "autoActivate5Players", "autoActivate10Players",
+    "autoActivate15Players", "autoActivate25Players", "autoActivate40Players", "autoActivatePvP", "autoActivatePvE" }
+local profileFunctions = { "GetActiveRaidProfile", "GetRaidProfileOption", "GetRaidProfileFlattenedOptions",
+    "GetNumRaidProfiles", "GetRaidProfileName", "RaidProfileExists", "GetRaidProfileSavedPosition",
+    "CompactUnitFrameProfiles_ApplyProfile", "CompactUnitFrameProfiles_ApplyCurrentSettings",
+    "CompactUnitFrameProfiles_ActivateRaidProfile", "CompactUnitFrameProfiles_GetAutoActivationState",
+    "CompactUnitFrameProfiles_CheckAutoActivation", "CompactRaidFrameContainer_SetGroupMode",
+    "CompactRaidFrameContainer_SetFlowFilterFunction", "CompactRaidFrameContainer_SetFlowSortFunction",
+    "CompactRaidFrameContainer_SetDisplayPets", "CompactRaidFrameContainer_SetDisplayMainTankAndAssist",
+    "CompactRaidFrameContainer_LayoutFrames", "CompactRaidFrameContainer_ApplyToFrames",
+    "CompactRaidFrameManager_SetSetting", "CompactRaidFrameManager_ResizeFrame_UpdateContainerSize",
+    "CompactRaidGroup_UpdateLayout", "CompactRaidGroup_GenerateForGroup", "CompactPartyFrame_UpdateLayout",
+    "FlowContainer_DoLayout", "FlowContainer_SetOrientation", "FlowContainer_SetMaxPerLine",
+    "FlowContainer_SetHorizontalSpacing", "FlowContainer_SetVerticalSpacing", "DefaultCompactUnitFrameSetup",
+    "DefaultCompactMiniFrameSetup" }
+
+local function plain(value)
+    local kind = type(value)
+    if kind == "number" then return floor(value * 100 + 0.5) / 100 end
+    if kind == "string" or kind == "boolean" or kind == "nil" then return value end
+    return "<" .. kind .. ">"
+end
+
+-- number, string and boolean fields of a frame (the client keeps its layout state there)
+local function scalarFields(frame, limit)
+    local out = {}
+    if type(frame) ~= "table" then return out end
+    local n = 0
+    for key, value in pairs(frame) do
+        local kind = type(value)
+        if type(key) == "string" and (kind == "number" or kind == "string" or kind == "boolean") then
+            out[key] = plain(value)
+            n = n + 1
+            if n >= (limit or 60) then break end
+        end
+    end
+    return out
+end
+
+local function rectOf(frame, origin)
+    if not (frame and frame.GetLeft) then return nil end
+    local l, b, r, t = screenRect(frame)
+    local rect = { shown = frame:IsShown() and true or false, visible = frame:IsVisible() and true or false,
+        w = plain(frame:GetWidth()), h = plain(frame:GetHeight()), scale = plain(frame:GetScale()),
+        effective = plain(frame:GetEffectiveScale() / UIParent:GetEffectiveScale()) }
+    if l then
+        rect.left, rect.top, rect.right, rect.bottom = plain(l), plain(t), plain(r), plain(b)
+        if origin then rect.x, rect.y = plain(l - origin[1]), plain(origin[2] - t) end
+    end
+    local parent = frame:GetParent()
+    rect.parent = parent and (parent:GetName() or "?") or "-"
+    local point, relative, relativePoint, x, y = frame:GetPoint(1)
+    if point then
+        rect.point = ("%s %s %s %s %s"):format(point, relative and (relative:GetName() or "?") or "-",
+            tostring(relativePoint), tostring(plain(x)), tostring(plain(y)))
+    end
+    return rect
+end
+
+function RF.DumpProfile()
+    local dump = { kind = RF.LiveKind(), raid = GetNumRaidMembers and GetNumRaidMembers() or -1,
+        party = GetNumPartyMembers and GetNumPartyMembers() or -1, functions = {}, missing = {} }
+    for _, name in ipairs(profileFunctions) do
+        if type(_G[name]) == "function" then
+            dump.functions[#dump.functions + 1] = name
+        else
+            dump.missing[#dump.missing + 1] = name
+        end
+    end
+    -- The client API (retail names), when there is one.
+    local api = {}
+    if type(GetActiveRaidProfile) == "function" then
+        local ok, active = pcall(GetActiveRaidProfile)
+        api.active = ok and plain(active) or "error"
+        if ok and active and type(GetRaidProfileOption) == "function" then
+            api.options = {}
+            for _, key in ipairs(profileKeys) do
+                local okOption, value = pcall(GetRaidProfileOption, active, key)
+                api.options[key] = okOption and plain(value) or "error"
+            end
+        end
+    end
+    if type(GetNumRaidProfiles) == "function" then
+        local ok, count = pcall(GetNumRaidProfiles)
+        api.count = ok and plain(count) or "error"
+    end
+    dump.api = api
+    -- The saved table of the client, for this character.
+    local db = _G.CompactRaidFrameDB
+    local char = UnitName("player")
+    local saved = { present = type(db) == "table", char = type(db) == "table" and type(db[char]) == "table" }
+    if saved.char then
+        local entry = db[char]
+        saved.active = type(entry.ACTIVE_PROFILE) == "table" and plain(entry.ACTIVE_PROFILE.value) or plain(entry.ACTIVE_PROFILE)
+        saved.profiles = {}
+        local list = type(entry.PROFILES) == "table" and entry.PROFILES.value or nil
+        for i, profile in ipairs(type(list) == "table" and list or {}) do
+            local copy = { index = i, active = profile.name == saved.active }
+            for _, key in ipairs(profileKeys) do copy[key] = plain(profile[key]) end
+            saved.profiles[i] = copy
+        end
+        saved.keys = {}
+        for key in pairs(entry) do saved.keys[#saved.keys + 1] = tostring(key) end
+    end
+    dump.saved = saved
+    -- The container, the group frames and every unit button with its place in the container.
+    local raid, party = containers()
+    local origin
+    if raid and raid.GetLeft then
+        local l, _, _, t = screenRect(raid)
+        if l then origin = { l, t } end
+    end
+    dump.container = rectOf(raid)
+    dump.containerFields = scalarFields(raid)
+    dump.partyFrame = rectOf(party)
+    dump.partyFields = scalarFields(party, 30)
+    dump.manager = rectOf(_G.CompactRaidFrameManager)
+    dump.managerFields = scalarFields(_G.CompactRaidFrameManager, 40)
+    dump.groups = {}
+    for i = 1, 8 do
+        local group = _G["CompactRaidGroup" .. i]
+        if group then
+            local rect = rectOf(group, origin)
+            rect.index = i
+            rect.fields = scalarFields(group, 20)
+            dump.groups[#dump.groups + 1] = rect
+        end
+    end
+    dump.buttons = {}
+    for _, deco in ipairs(ordered) do
+        local frame = deco.frame
+        if frame:IsVisible() then
+            local rect = rectOf(frame, origin)
+            rect.name = frame:GetName() or "?"
+            rect.unit = plain(deco.unit or frame.displayedUnit or frame.unit)
+            rect.pet = isPetDeco(deco) or nil
+            dump.buttons[#dump.buttons + 1] = rect
+        end
+    end
+    dump.horizontalSeen = RF.IsHorizontal()
+    dump.metrics = { RF.TemplateMetrics() }
+    -- What the sample frames would use now for this group type.
+    local viewKind = RF.ViewKind()
+    local count = RF.TemplateCount(viewKind)
+    local has = {}
+    for i = 1, count do has[i] = select(3, RF.TemplateMember(viewKind, i)) ~= nil end
+    local plan = RF.TemplatePlan(viewKind, count, has)
+    local snapshots = 0
+    for _ in pairs(type(ui.Settings().rfSeenLayouts) == "table" and ui.Settings().rfSeenLayouts or {}) do
+        snapshots = snapshots + 1
+    end
+    dump.template = { count = count, source = plan.source, w = plan.w, h = plan.h, groups = #plan.groups,
+        width = plan.width, height = plan.height, snapshots = snapshots }
+    local settings = ui.Settings()
+    if type(settings.raidDumps) ~= "table" then settings.raidDumps = {} end
+    -- One snapshot per group size: raids over 25 apart, since the client may lay out 40 differently.
+    local key = dump.raid > 25 and "raid40" or dump.raid > 0 and dump.kind or dump.party > 0 and "party" or "solo"
+    dump.key = key
+    settings.raidDumps[key] = dump
+    return dump
+end
+
+local function printProfile(dump)
+    local function yesno(value) return value == nil and "-" or tostring(value) end
+    ui.Print(("Raid profile dump [%s]: raid=%d party=%d, saved to ForeverStockUIDB.raidDumps (/reload writes it)")
+        :format(dump.key, dump.raid, dump.party))
+    ui.Print(("Client API: %d of %d functions. Active (API): %s"):format(#dump.functions,
+        #dump.functions + #dump.missing, yesno(dump.api.active and "yes")))
+    local options = dump.api.options
+    if not options then
+        for _, profile in ipairs(dump.saved.profiles or {}) do
+            if profile.active or not options then options = profile end
+        end
+    end
+    if options then
+        ui.Print(("Profile: %sx%s horizontal=%s together=%s pets=%s tanks=%s power=%s border=%s sort=%s"):format(
+            yesno(options.frameWidth), yesno(options.frameHeight), yesno(options.horizontalGroups),
+            yesno(options.keepGroupsTogether), yesno(options.displayPets), yesno(options.displayMainTankAndAssist),
+            yesno(options.displayPowerBar), yesno(options.displayBorder), yesno(options.sortBy)))
+    else
+        ui.Print("Profile: not found (no API, no CompactRaidFrameDB entry for this character)")
+    end
+    local c = dump.container
+    if c then
+        ui.Print(("Container: %sx%s scale=%s effective=%s shown=%s"):format(yesno(c.w), yesno(c.h), yesno(c.scale),
+            yesno(c.effective), yesno(c.visible)))
+    end
+    local first, second = dump.buttons[1], dump.buttons[2]
+    ui.Print(("Buttons shown: %d, groups: %d, horizontal seen: %s"):format(#dump.buttons, #dump.groups,
+        tostring(dump.horizontalSeen)))
+    if first then
+        ui.Print(("First: %sx%s at %s,%s; second at %s,%s"):format(yesno(first.w), yesno(first.h), yesno(first.x),
+            yesno(first.y), yesno(second and second.x), yesno(second and second.y)))
+    end
+    local plan = dump.template
+    if plan then
+        ui.Print(("Samples: %d players from %s, %sx%s, %s groups, %d snapshots saved"):format(plan.count, plan.source,
+            yesno(plan.w), yesno(plan.h), yesno(plan.groups), plan.snapshots))
+    end
+end
+RF.PrintProfile = printProfile
+
 SLASH_FOREVERUIRAID1 = "/fuiraid"
 SlashCmdList.FOREVERUIRAID = function(input)
     if (input or ""):lower():match("preview") then
@@ -3061,6 +3914,33 @@ SlashCmdList.FOREVERUIRAID = function(input)
         return
     end
     RF.Scan()
+    if (input or ""):lower():match("profile") then
+        printProfile(RF.DumpProfile())
+        return
+    end
+    if (input or ""):lower():match("role") then
+        -- Every group member: class, role and where the role came from. ASCII only (no names).
+        local R = Suite.Roles
+        local pending = R and R.Pending()
+        ui.Print(("Roles: inspect=%s pending=%s"):format(tostring(cfg().rfRoleInspect ~= false),
+            tostring(pending and pending.unit or "-")))
+        local units = { "player" }
+        local raid = GetNumRaidMembers and GetNumRaidMembers() or 0
+        if raid > 0 then
+            units = {}
+            for i = 1, raid do units[#units + 1] = "raid" .. i end
+        else
+            for i = 1, (GetNumPartyMembers and GetNumPartyMembers() or 0) do units[#units + 1] = "party" .. i end
+        end
+        for _, unit in ipairs(units) do
+            if UnitExists(unit) then
+                local role, source = (Suite.GroupRole or Suite.UnitRole)(unit)
+                local _, class = UnitClass(unit)
+                ui.Print(("%s %s: %s (%s)"):format(unit, tostring(class), tostring(role or "?"), tostring(source or "-")))
+            end
+        end
+        return
+    end
     if (input or ""):lower():match("pos") then
         -- Where the group should stand (saved spot of this talent set) and where it really is. ASCII only.
         local config = editEntry() and editEntry().config or {}

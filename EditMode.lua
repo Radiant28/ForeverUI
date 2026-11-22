@@ -1117,7 +1117,18 @@ add("TargetFrameToT", "Цель цели", "Target of target")
 add("FocusFrame", "Фокус", "Focus")
 add("FocusFrameToT", "Цель фокуса", "Focus target")
 add("PetFrame", "Питомец", "Pet")
-add("CastingBarFrame", "Полоса заклинаний", "Cast bar")
+local castEntry = add("CastingBarFrame", "Полоса заклинаний", "Cast bar")
+-- UIParent_ManageFramePositions adds its own BOTTOM point to the cast bar without ClearAllPoints. Next to the
+-- saved TOPRIGHT point that stretches the bar to a huge height, and schedule() does not run in combat, so the
+-- bar stayed stretched until combat ended. The bar is not protected: pin it back at once, in combat too.
+if castEntry then
+    hooksecurefunc(castEntry.frame, "SetPoint", function(frame)
+        if placing or dragging == castEntry or not castEntry.config or castEntry.removed or held(castEntry) then return end
+        if frame:IsProtected() and InCombatLockdown() then return end
+        local position = getPosition(castEntry)
+        if position then move(castEntry, position[1], position[2]) end
+    end)
+end
 add("MinimapCluster", "Миникарта", "Minimap")
 local buffs = add("ConsolidatedBuffs", "Бафы", "Buffs", { "TemporaryEnchantFrame", "BuffFrame" })
 if buffs then

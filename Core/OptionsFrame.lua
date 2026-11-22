@@ -47,7 +47,7 @@ local function moduleMatches(spec, needle)
     return false
 end
 
-local function layoutSection(page, child, section, spec, y, width)
+local function layoutSection(page, child, section, spec, y, width, columnsOverride)
     if section.title then
         local header = W.Header(child, section.title, width)
         header:SetPoint("TOPLEFT", 0, y)
@@ -58,7 +58,7 @@ local function layoutSection(page, child, section, spec, y, width)
         text:SetPoint("TOPLEFT", 0, y)
         y = y - text:GetHeight() - 8
     end
-    local columns = section.columns or 2
+    local columns = columnsOverride or section.columns or 2
     local columnWidth = floor((width - S.columnGap * (columns - 1)) / columns)
     local column, lineHeight = 0, 0
     local function newLine()
@@ -75,14 +75,14 @@ local function layoutSection(page, child, section, spec, y, width)
                 local holder = CreateFrame("Frame", nil, child)
                 holder:SetPoint("TOPLEFT", 0, y)
                 holder:SetWidth(width)
-                local height = opt.build(holder, width, spec) or 0
+                local height = opt.build(holder, width, spec, page) or 0
                 holder:SetHeight(max(1, height))
                 for _, anchor in ipairs(holder.anchors or {}) do
                     page.customTabs[#page.customTabs + 1] = { title = anchor.title, top = -y + (anchor.top or 0),
                         section = page.layingSection }
                 end
                 y = y - height - S.rowGap
-                page.customs[#page.customs + 1] = { frame = holder, opt = opt }
+                page.customs[#page.customs + 1] = { frame = holder, opt = opt, section = page.layingSection }
             else
                 local full = opt.width == "full" or opt.type == "header" or opt.type == "description"
                 if full then newLine() end
@@ -95,7 +95,7 @@ local function layoutSection(page, child, section, spec, y, width)
                     end
                     row:SetPoint("TOPLEFT", column * (columnWidth + S.columnGap), y)
                     lineHeight = max(lineHeight, row:GetHeight())
-                    page.rows[#page.rows + 1] = { row = row, opt = opt }
+                    page.rows[#page.rows + 1] = { row = row, opt = opt, section = page.layingSection }
                     if full then
                         column = columns
                     else
@@ -109,6 +109,29 @@ local function layoutSection(page, child, section, spec, y, width)
     newLine()
     return y - S.sectionGap + S.rowGap
 end
+
+-- A setting that differs from its default (the reset arrow shows on it).
+local function optionChanged(spec, opt)
+    return opt.key and opt.default ~= nil and not opt.noReset and not ui.IsDefault(spec.id, opt.key) or false
+end
+
+local function sectionChanged(spec, section)
+    for _, opt in ipairs(section.options or {}) do
+        if optionChanged(spec, opt) then return true end
+    end
+    return section.changed and section.changed() and true or false
+end
+
+local function sectionMatches(section, needle)
+    if needle == "" then return false end
+    if W.Fold((section.title or "") .. " " .. (section.description or "")):find(needle, 1, true) then return true end
+    for _, opt in ipairs(section.options or {}) do
+        if matches(opt, needle) then return true end
+    end
+    return false
+end
+
+local paintItem, updateListReset
 
 local function refreshPage(page)
     local spec = page.spec
@@ -129,13 +152,31 @@ local function refreshPage(page)
         if entry.opt.refresh then entry.opt.refresh(entry.frame, enabled) end
     end
     W.Redraw(page.scroll)
-    if page.resetButton then
+    if page.listItems then
+        -- A new search jumps to the first item with a match unless the open one has one.
+        if page.lastSearch ~= searchText then
+            page.lastSearch = searchText
+            local active = page.listItems[page.activeItem]
+            if searchText ~= "" and not (active and sectionMatches(active.section, searchText)) then
+                for i, item in ipairs(page.listItems) do
+                    if sectionMatches(item.section, searchText) then
+                        page:SelectItem(i)
+                        break
+                    end
+                end
+            end
+        end
+        for _, item in ipairs(page.listItems) do paintItem(page, item) end
+        updateListReset(page)
+        W.Redraw(page.nav)
+    elseif page.resetButton then
         local any = false
         for _, opt in ipairs(spec.options) do
             if opt.key and opt.default ~= nil and not ui.IsDefault(spec.id, opt.key) then any = true break end
         end
         if any then page.resetButton:Enable() else page.resetButton:Disable() end
     end
+    if page.previewObj and spec.preview.refresh then spec.preview.refresh(page.previewObj) end
 end
 
 local function confirmReset(spec)
@@ -147,6 +188,22 @@ local function confirmReset(spec)
         "Reset every setting of “%s”?")
     local dialog = StaticPopup_Show("FOREVERUI_RESET_MODULE", spec.title)
     if dialog then dialog.data = spec.id end
+end
+
+local function resetSection(spec, section)
+    for _, opt in ipairs(section.options or {}) do
+        if opt.key and opt.default ~= nil and not opt.noReset then ui.ResetOption(spec.id, opt.key) end
+    end
+end
+
+local function confirmResetSection(spec, section)
+    StaticPopupDialogs.FOREVERUI_RESET_SECTION = StaticPopupDialogs.FOREVERUI_RESET_SECTION or {
+        button1 = YES, button2 = NO, timeout = 0, whileDead = 1, hideOnEscape = 1,
+        OnAccept = function(self) if self.data then resetSection(self.data[1], self.data[2]) end end,
+    }
+    StaticPopupDialogs.FOREVERUI_RESET_SECTION.text = L("Сбросить настройки пункта «%s»?", "Reset the “%s” settings?")
+    local dialog = StaticPopup_Show("FOREVERUI_RESET_SECTION", section.title or spec.title)
+    if dialog then dialog.data = { spec, section } end
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -248,6 +305,170 @@ local function setActiveTab(page, index)
     end
 end
 
+---------------------------------------------------------------------------------------------------
+-- List layout (spec.layout = "list", Cell style): sub-items on the left, the settings of the chosen
+-- one on the right. Every section is an item; section.group starts a group label, section.icon is
+-- optional, section.overview marks the item that stands for the whole page (no single part chosen).
+-- spec.preview = { build(page, spec) -> obj, select(obj, section), hover(obj, opt|nil, section),
+-- refresh(obj) } drives a preview that shows only what the chosen item changes.
+---------------------------------------------------------------------------------------------------
+local NAV_WIDTH, NAV_GAP, NAV_ROW, NAV_GROUP = 184, 14, 24, 24
+
+function paintItem(page, item)
+    local button = item.button
+    local selected = item.index == page.activeItem
+    W.SetVisible(button.activeBg, selected)
+    local hit = sectionMatches(item.section, searchText)
+    button.text:SetTextColor(rgba(selected and { 1, 1, 1 } or hit and S.accentText or S.text))
+    -- A dot marks the items where something differs from the defaults.
+    W.SetVisible(button.dot, not item.section.overview and sectionChanged(page.spec, item.section))
+end
+
+function updateListReset(page)
+    local button = page.resetButton
+    if not button then return end
+    local item = page.listItems[page.activeItem]
+    local single = item and not item.section.overview
+    button:SetText(single and L("Сбросить пункт", "Reset item") or L("Сбросить раздел", "Reset section"))
+    local any
+    if single then
+        any = sectionChanged(page.spec, item.section)
+    else
+        for _, opt in ipairs(page.spec.options) do
+            if optionChanged(page.spec, opt) then any = true break end
+        end
+    end
+    if any then button:Enable() else button:Disable() end
+end
+
+local function navButton(page, item, child)
+    local button = CreateFrame("Button", nil, child)
+    button:SetHeight(NAV_ROW)
+    button.activeBg = button:CreateTexture(nil, "BACKGROUND")
+    W.ApplyUV(button.activeBg, W.UV.listActive)
+    button.activeBg:SetAllPoints(button)
+    button.activeBg:Hide()
+    local hover = button:CreateTexture(nil, "HIGHLIGHT")
+    W.ApplyUV(hover, W.UV.listHover)
+    hover:SetAllPoints(button)
+    local left = 10
+    if item.section.icon then
+        local icon = button:CreateTexture(nil, "ARTWORK")
+        icon:SetSize(14, 14)
+        icon:SetPoint("LEFT", 8, 0)
+        icon:SetTexture(item.section.icon)
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        button.icon = icon
+        left = 28
+    end
+    button.text = W.Text(button, W.fonts.label)
+    button.text:SetPoint("LEFT", left, 0)
+    button.text:SetPoint("RIGHT", -14, 0)
+    button.text:SetHeight(NAV_ROW)
+    button.text:SetText(item.title)
+    button.dot = button:CreateTexture(nil, "OVERLAY")
+    button.dot:SetTexture("Interface\\Buttons\\WHITE8X8")
+    button.dot:SetVertexColor(rgba(S.accent, 0.95))
+    button.dot:SetSize(5, 5)
+    button.dot:SetPoint("RIGHT", -6, 0)
+    button.dot:Hide()
+    button:SetScript("OnClick", function()
+        PlaySound("igMainMenuOptionCheckBoxOn")
+        page:SelectItem(item.index)
+    end)
+    if item.section.hint then
+        button:SetScript("OnEnter", function(self) W.ShowTooltip(self, item.title, item.section.hint) end)
+        button:SetScript("OnLeave", GameTooltip_Hide)
+    end
+    return button
+end
+
+local function buildListPage(page, spec, width)
+    local navWidth = min(NAV_WIDTH, max(120, floor(width * 0.4)))
+    local contentWidth = max(120, width - navWidth - NAV_GAP)
+    -- One column when the content is narrow: two columns of sliders would cut their labels.
+    local columns = contentWidth < 470 and 1 or nil
+
+    local navHost = CreateFrame("Frame", nil, page)
+    navHost:SetPoint("TOPLEFT", 20, -PAGE_HEADER - 8)
+    navHost:SetPoint("BOTTOMLEFT", 20, 16)
+    navHost:SetWidth(navWidth)
+    W.Skin(navHost, { 0.045, 0.032, 0.022, 0.68 }, S.border)
+    local nav = W.Scroll(navHost, 6, 2)
+    nav:SetPoint("TOPLEFT", 3, -4)
+    nav:SetPoint("BOTTOMRIGHT", -12, 4)
+    nav.child:SetWidth(navWidth - 16)
+    page.nav, page.navHost = nav, navHost
+
+    local scroll = W.Scroll(page)
+    scroll:SetPoint("TOPLEFT", 20 + navWidth + NAV_GAP, -PAGE_HEADER - 8)
+    scroll:SetPoint("BOTTOMRIGHT", -28, 16)
+    scroll.child:SetWidth(contentWidth)
+    page.scroll, page.builtWidth = scroll, width
+
+    page.listItems, page.customTabs = {}, {}
+    local y, group = -4, nil
+    for index, section in ipairs(spec.sections) do
+        local container = CreateFrame("Frame", nil, scroll.child)
+        container:SetPoint("TOPLEFT", 0, 0)
+        container:SetWidth(contentWidth)
+        page.layingSection = index
+        local height = -layoutSection(page, container, section, spec, 0, contentWidth, columns)
+        container:SetHeight(max(1, height))
+        container:Hide()
+        local item = { index = index, section = section, container = container, height = height,
+            title = section.title or (index == 1 and L("Общий вид", "Overview")) or "?" }
+        page.listItems[index] = item
+        if section.group and section.group ~= group then
+            group = section.group
+            local label = W.Text(nav.child, W.fonts.group)
+            label:SetPoint("TOPLEFT", 10, y - 6)
+            label:SetText(group:upper())
+            local line = W.Divider(nav.child)
+            line:SetPoint("TOPLEFT", 8, y - 20)
+            line:SetPoint("RIGHT", nav.child, "RIGHT", -4, 0)
+            y = y - NAV_GROUP
+        end
+        local button = navButton(page, item, nav.child)
+        button:SetPoint("TOPLEFT", 0, y)
+        button:SetPoint("RIGHT", nav.child, "RIGHT", 0, 0)
+        item.button = button
+        y = y - NAV_ROW
+    end
+    page.layingSection = nil
+    nav:SetContentHeight(-y + 6)
+
+    function page:SelectItem(i)
+        local item = self.listItems[i]
+        if not item then return end
+        W.CloseList()
+        local old = self.listItems[self.activeItem]
+        if old and old ~= item then old.container:Hide() end
+        self.activeItem = i
+        item.container:Show()
+        scroll:SetContentHeight(item.height)
+        scroll:ScrollTo(0)
+        for _, other in ipairs(self.listItems) do paintItem(self, other) end
+        updateListReset(self)
+        if self.previewObj and spec.preview.select then spec.preview.select(self.previewObj, item.section, item) end
+        W.Redraw(scroll)
+        W.Redraw(nav)
+    end
+    page.ShowSection = page.SelectItem
+    function page:SelectItemById(id)
+        for i, item in ipairs(self.listItems) do
+            if item.section.id == id then
+                self:SelectItem(i)
+                return true
+            end
+        end
+    end
+    function page:ActiveSection()
+        local item = self.listItems[self.activeItem]
+        return item and item.section
+    end
+end
+
 local function buildPage(spec)
     local page = CreateFrame("Frame", nil, window.content)
     page:SetAllPoints(window.content)
@@ -271,7 +492,10 @@ local function buildPage(spec)
         if opt.key and opt.default ~= nil and not opt.noReset then hasDefaults = true break end
     end
     if hasDefaults then
-        local reset = W.Button(page, L("Сбросить раздел", "Reset section"), 140, function() confirmReset(spec) end, 24)
+        local reset = W.Button(page, L("Сбросить раздел", "Reset section"), 140, function()
+            local section = page.ActiveSection and page:ActiveSection()
+            if section and not section.overview then confirmResetSection(spec, section) else confirmReset(spec) end
+        end, 24)
         reset:SetPoint("TOPRIGHT", -20, -14)
         page.resetButton = reset
     end
@@ -289,6 +513,15 @@ local function buildPage(spec)
 
     ui.NormalizeModule(spec.id)
     local width = pageWidth(window:GetWidth())
+    if spec.layout == "list" then
+        buildListPage(page, spec, width)
+        if spec.preview and spec.preview.build then page.previewObj = spec.preview.build(page, spec) end
+        page.Refresh = refreshPage
+        page:SelectItem(1)
+        page.lastSearch = nil
+        page:Refresh()
+        return page
+    end
     local scroll = W.Scroll(page)
     page.builtWidth = width
     scroll.child:SetWidth(width)
@@ -341,6 +574,7 @@ local function buildPage(spec)
         end
         page.activeTab = 1
     end
+    if spec.preview and spec.preview.build then page.previewObj = spec.preview.build(page, spec) end
     page.Refresh = refreshPage
     page:Refresh()
     return page
@@ -771,7 +1005,8 @@ local function createWindow()
     restorePosition()
 end
 
-function ui.OpenOptions(target)
+-- target: module id; item (optional): the id of a list item to open on a list page.
+function ui.OpenOptions(target, item)
     if type(target) == "table" and target.foreverModule then target = target.foreverModule end
     if type(target) == "table" then
         InterfaceOptionsFrame_OpenToCategory(target)
@@ -785,6 +1020,16 @@ function ui.OpenOptions(target)
     window:Show()
     PlaySound("igMainMenuOpen")
     if id then selectModule(id) end
+    local page = id and pages[id]
+    if item and page and page.SelectItemById then page:SelectItemById(item) end
+end
+
+-- Hovering a setting tells the page preview which part to flash.
+W.onRowHover = function(row, on)
+    local page = current and pages[current]
+    local preview = page and page.spec.preview
+    if not (page and page.previewObj and preview and preview.hover) then return end
+    preview.hover(page.previewObj, on and row.opt or nil, page.ActiveSection and page:ActiveSection() or nil)
 end
 
 function ui.ToggleOptions(target)

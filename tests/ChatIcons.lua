@@ -5,6 +5,7 @@ function ChatFrame_AddMessageEventFilter(event, fn) filters[event] = fn end
 function GetChatWindowInfo() end
 function CreateFrame() return { SetScript = function() end, RegisterEvent = function() end } end
 NUM_CHAT_WINDOWS = 0
+SlashCmdList = {}
 function GetItemIcon(id) if id == 1 then return "Interface\\Icons\\A" end end
 function GetItemInfo(id) if id == 2 then return 1, 2, 3, 4, 5, 6, 7, 8, 9, "Interface\\Icons\\B" end end
 assert(loadfile("Chat.lua"))("ForeverUI", ui)

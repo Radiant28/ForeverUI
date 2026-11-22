@@ -382,32 +382,7 @@ end
 ---------------------------------------------------------------------------------------------------
 -- Chat
 ---------------------------------------------------------------------------------------------------
-Setup.channelsTab = L("Каналы", "Channels")
-
-local function chatWindow(title)
-    if not GetChatWindowInfo then return end
-    local free
-    for id = 2, NUM_CHAT_WINDOWS or 10 do
-        local name, _, _, _, _, _, shown = GetChatWindowInfo(id)
-        local frame = _G["ChatFrame" .. id]
-        if frame and (shown or frame.isDocked) then
-            if name == title then return frame end
-        else
-            free = true
-        end
-    end
-    if free and FCF_OpenNewWindow then return FCF_OpenNewWindow(title) end
-end
-
-local function serverChannels()
-    local list = {}
-    if EnumerateServerChannels then
-        for _, name in ipairs({ EnumerateServerChannels() }) do list[#list + 1] = name end
-    end
-    return list
-end
-
--- chat = { tabs, place, channels, fontSize (number or nil) }
+-- chat = { tabs, place, fontSize (number or nil) }. The server channels stay in the general window.
 function Setup.ApplyChat(chat, role, style)
     if type(chat) ~= "table" then return end
     local s = settings()
@@ -425,17 +400,6 @@ function Setup.ApplyChat(chat, role, style)
         frame:SetHeight(spot.h)
         if frame.SetUserPlaced and frame:IsMovable() then frame:SetUserPlaced(true) end
         if FCF_SavePositionAndDimensions then ui.SafeCall(FCF_SavePositionAndDimensions, frame) end
-    end
-    if chat.channels then
-        local tab = chatWindow(Setup.channelsTab)
-        if tab and tab ~= frame then
-            if ChatFrame_RemoveAllMessageGroups then ChatFrame_RemoveAllMessageGroups(tab) end
-            for _, name in ipairs(serverChannels()) do
-                if frame and ChatFrame_RemoveChannel then ChatFrame_RemoveChannel(frame, name) end
-                if ChatFrame_AddChannel then ChatFrame_AddChannel(tab, name) end
-            end
-            if FCF_SelectDockFrame and frame then FCF_SelectDockFrame(frame) end
-        end
     end
     if type(chat.fontSize) == "number" and FCF_SetChatWindowFontSize then
         for id = 1, NUM_CHAT_WINDOWS or 10 do

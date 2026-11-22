@@ -3,8 +3,8 @@ local L = ui.L
 
 ui.RegisterOptions("chat", {
     title = L("Окна чата", "Chat windows"),
-    description = L("Автоматические вкладки «Группа/Рейд», «Добыча» и «Гильдия».",
-        "Automatic Party/Raid, Loot and Guild tabs."),
+    description = L("Автоматические вкладки «Группа/Рейд», «Добыча» и «Гильдия». /fuichat — что показывает каждая вкладка.",
+        "Automatic Party/Raid, Loot and Guild tabs. /fuichat lists what every tab shows."),
     icon = "Interface\\Icons\\INV_Letter_15",
     group = "social", order = 10,
     enable = "chatManage",
@@ -15,11 +15,24 @@ ui.RegisterOptions("chat", {
                 tooltip = L("Уже созданные вкладки не удаляются при выключении.", "Existing tabs stay when turned off.") },
         } },
         { title = L("Вкладки", "Tabs"), options = {
+            { "toggle", "chatGeneralClean", L("«Общий» без группы, рейда и добычи", "General without party, raid and loot"),
+                default = true, tooltip = L("Эти сообщения остаются во вкладках «Группа/Рейд» и «Добыча».",
+                    "These messages stay in the Party/Raid and Loot tabs.") },
+            { "toggle", "chatKeepChannels", L("Не терять каналы в «Общем»", "Keep channels in General"),
+                default = true, tooltip = L("Канал, в котором вы состоите, но который не показывает ни одна вкладка, "
+                    .. "возвращается в «Общий» (после входа, /reload и загрузочного экрана). Канал, убранный вами "
+                    .. "в настройках вкладки «Общий», не возвращается.",
+                    "A channel you are in that no tab shows goes back to General (after login, /reload and loading "
+                    .. "screens). A channel you untick in the General tab settings stays out.") },
             { "toggle", "chatGroupWindow", L("Группа/Рейд", "Party/Raid"), default = true },
             { "toggle", "chatGuildWindow", L("Гильдия", "Guild"), default = true },
             { "toggle", "chatLootWindow", L("Добыча", "Loot"), default = true },
             { "toggle", "chatLootRollsOnly", L("Во вкладке «Добыча» только броски", "Loot tab shows rolls only"),
                 default = false, depends = "chatLootWindow" },
+            { "toggle", "chatLootMoney", L("Золото с добычи, если сервер о нём не пишет", "Looted money when the server is silent"),
+                default = true, depends = "chatLootWindow",
+                tooltip = L("Аддон сам пишет во вкладку «Добыча», сколько денег пришло при открытом окне добычи.",
+                    "The addon writes the money gained with the loot window open to the Loot tab.") },
         } },
     },
 })
