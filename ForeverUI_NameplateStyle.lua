@@ -67,13 +67,17 @@ function wfn.LayoutRim(parts, anchor, width, height, pixel)
     return haloWidth, haloHeight
 end
 
-function wfn.StyleRim(parts, target, friendly)
+function wfn.StyleRim(parts, target, friendly, hovered)
     local db = wfn.db
     local r, g, b, a = 1, 1, 1, nil
     if target then r, g, b = unpack(gold) end
     parts.rim:SetVertexColor(r, g, b, 1)
     if target and db.targetGlow then
         a = db.targetGlowStrength
+    elseif hovered and db.hoverGlow then
+        -- A soft light halo on the plate under the cursor, weaker than the target's.
+        r, g, b = unpack(db.hoverGlowColour)
+        a = db.hoverGlowStrength
     elseif friendly and db.sideGlow then
         r, g, b = unpack(db.sideGlowFriend)
         a = db.sideGlowStrength

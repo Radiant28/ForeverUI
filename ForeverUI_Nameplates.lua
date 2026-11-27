@@ -103,6 +103,9 @@ local defaults = {
     auraTimerText = true, auraTimerFont = "", auraTimerSize = 0, auraTimerOutline = "thin", auraTimerColour = {1, 1, 1},
     classColourEnemy = true, classColourFriend = true, friendlyNameOnly = false, friendlyNPCNameOnly = true, clickFollowsPlate = true,
     npcTitles = true, playerGuilds = true, subtitleSize = 10, nameReactionColour = true,
+    clickMatchBar = true, clickWidth = 100, clickHeight = 20, clickShowZone = false,
+    friendlyClickOffInCombat = true,
+    hoverGlow = true, hoverGlowStrength = 0.45, hoverGlowColour = {1, 1, 1}, hoverAlpha = 1, hoverScale = 1.08,
 }
 
 local function Clamp(value, low, high, fallback)
@@ -173,6 +176,11 @@ local function LoadConfig()
     end
     -- The clickbox that follows the drawn plate is built in.
     cfg.clickFollowsPlate = true
+    cfg.clickWidth = Clamp(cfg.clickWidth, 20, 250, defaults.clickWidth)
+    cfg.clickHeight = Clamp(cfg.clickHeight, 4, 80, defaults.clickHeight)
+    cfg.hoverGlowStrength = Clamp(cfg.hoverGlowStrength, 0, 1, defaults.hoverGlowStrength)
+    cfg.hoverAlpha = Clamp(cfg.hoverAlpha, 0.1, 1, defaults.hoverAlpha)
+    cfg.hoverScale = Clamp(cfg.hoverScale, 1, 1.5, defaults.hoverScale)
     cfg.maxDistance = Clamp(cfg.maxDistance, 30, 41, defaults.maxDistance)
     cfg.plateOffsetX = Clamp(cfg.plateOffsetX, -60, 60, defaults.plateOffsetX)
     cfg.plateOffsetY = Clamp(cfg.plateOffsetY, -60, 60, defaults.plateOffsetY)
@@ -643,9 +651,48 @@ local function PointOf(point, left, right, top, bottom)
     return x, y
 end
 
-local function ClickSize()
-    return max(cfg.widthEnemy, cfg.widthFriend),
-        max(cfg.heightEnemy, cfg.heightFriend) + cfg.nameLift + max(cfg.nameSizeEnemy, cfg.nameSizeFriend) + 4
+-- Clickbox size. The drawn plate sits on the bottom of the frame, so the box starts at the bottom of the
+-- bar and grows up and to both sides from its centre. It used to cover the bar plus the name above it
+-- (36 px tall by default), which overlapped the plate above in a crowd.
+--  * `clickMatchBar` (default): exactly the drawn bar of this plate, its size times the plate's own
+--    scale (target and distance scaling). Without a view (the in-combat resizer) the unscaled bar.
+--  * otherwise the fixed `clickWidth` x `clickHeight`.
+local function ClickSize(view)
+    if not cfg.clickMatchBar then return cfg.clickWidth, cfg.clickHeight end
+    local width = view and view.chromeWidth or max(cfg.widthEnemy, cfg.widthFriend)
+    local height = view and view.chromeHeight or max(cfg.heightEnemy, cfg.heightFriend)
+    local scale = view and view.drawScale or 1
+    return width * scale, height * scale
+end
+
+-- Out of combat the box follows the drawn bar as it scales; in combat the plates are protected and keep
+-- their last size.
+local function FitClickbox(view, plate)
+    if not cfg.clickFollowsPlate or not cfg.clickMatchBar or view.clickOff or InCombatLockdown() then return end
+    local width, height = ClickSize(view)
+    if abs(plate:GetWidth() - width) > 0.5 or abs(plate:GetHeight() - height) > 0.5 then
+        plate:SetSize(width, height)
+    end
+end
+
+-- Optional outline of the click area (`clickShowZone`), for tuning its size. It is a plain child of the
+-- native plate (not protected, no mouse), so showing it is fine in combat.
+local function ShowClickZone(view, plate)
+    local zone = view.clickZone
+    if not cfg.clickShowZone or not cfg.clickFollowsPlate then
+        if zone then zone:Hide() end
+        return
+    end
+    if not zone then
+        zone = CreateFrame("Frame", nil, plate)
+        zone:SetAllPoints(plate)
+        zone:SetFrameStrata("MEDIUM")
+        zone:SetBackdrop({ bgFile = [[Interface\Buttons\WHITE8X8]], edgeFile = [[Interface\Buttons\WHITE8X8]], edgeSize = 1 })
+        zone:SetBackdropColor(0.2, 0.8, 1, 0.18)
+        zone:SetBackdropBorderColor(0.2, 0.8, 1, 0.9)
+        view.clickZone = zone
+    end
+    zone:Show()
 end
 
 local function CreateResizer()
@@ -680,7 +727,7 @@ local function SizePlate(view, plate)
     view.plateWidth0 = view.plateWidth0 or plate:GetWidth()
     view.plateHeight0 = view.plateHeight0 or plate:GetHeight()
     local width, height = view.plateWidth0, view.plateHeight0
-    if cfg.clickFollowsPlate then width, height = ClickSize() end
+    if cfg.clickFollowsPlate then width, height = ClickSize(view) end
     plate:SetSize(width, height)
     if not cfg.clickFollowsPlate then
         plate:SetClampRectInsets(0, 0, 0, 0)
@@ -692,6 +739,7 @@ end
 -- Applies the clickbox size to every plate; deferred to the end of combat when plates are protected.
 local function ApplyClickSize()
     clickRevision = wfn.revision
+    for plate, view in pairs(known) do ShowClickZone(view, plate) end
     if InCombatLockdown() then
         clickPending = true
         if cfg.clickFollowsPlate then ResizeInCombat() end
@@ -772,6 +820,69 @@ local function HidePlate(plate)
         ResetHealth(view)
         UpdateAuras(view)
         visible[plate] = nil
+    end
+end
+
+---------------------------------------------------------------------------------------------------
+-- Allies are not clickable in combat (`friendlyClickOffInCombat`). Plates are protected in combat and
+-- secure code cannot tell an ally from an enemy, so:
+--  * PLAYER_REGEN_DISABLED fires just before the lockdown: the clickbox of every shown ally plate
+--    (green or blue native bar) shrinks to CLICK_OFF there (`view.clickOff`).
+--  * The client reuses plate frames. A shrunk frame shown again in combat may belong to an enemy, so
+--    a secure OnShow wrap (header `resizer`) gives every plate the plain clickbox when it shows.
+--    Ally plates that first show during combat therefore stay clickable.
+--  * After combat every shrunk plate gets its size back (`RestoreFriendlyClicks`).
+-- A plate is shrunk only when the wrap is in place, so an enemy can never inherit a dead clickbox.
+-- One table instead of locals: the main chunk is close to the 200-local limit of Lua 5.1.
+---------------------------------------------------------------------------------------------------
+local allyClicks = {
+    OFF = 0.1,
+    RESTORE_ON_SHOW = [[
+        if not owner then return end
+        local width, height = owner:GetAttribute("plateWidth"), owner:GetAttribute("plateHeight")
+        if width and height then
+            self:SetWidth(width)
+            self:SetHeight(height)
+        end
+    ]],
+}
+
+function allyClicks.Friendly(view)
+    local r, g, b = view.nativeHealth:GetStatusBarColor()
+    return r and r < 0.01 and ((g > 0.99 and b < 0.01) or (g < 0.01 and b > 0.99)) or false
+end
+
+-- Installs the secure OnShow restore on a plate (out of combat only).
+function allyClicks.Wrap(view, plate)
+    if view.showWrapped ~= nil or not resizer or InCombatLockdown() then return end
+    if not plate.IsProtected or not plate:IsProtected() then return end
+    view.showWrapped = pcall(SecureHandlerWrapScript, plate, "OnShow", resizer, allyClicks.RESTORE_ON_SHOW) and true or false
+    if view.showWrapped and view.hooked then
+        -- The wrap sets a new script, which may drop the HookScript hooks; both hooks are safe to run twice.
+        plate:HookScript("OnShow", ShowPlate)
+        plate:HookScript("OnHide", HidePlate)
+    end
+end
+
+function allyClicks.Drop()
+    if not cfg.clickFollowsPlate or not cfg.friendlyClickOffInCombat or InCombatLockdown() then return end
+    for plate, view in pairs(visible) do
+        if allyClicks.Friendly(view) then
+            allyClicks.Wrap(view, plate)
+            if view.showWrapped then
+                plate:SetSize(allyClicks.OFF, allyClicks.OFF)
+                view.clickOff = true
+            end
+        end
+    end
+end
+
+function allyClicks.Restore()
+    for plate, view in pairs(known) do
+        if view.clickOff then
+            view.clickOff = nil
+            SizePlate(view, plate)
+        end
     end
 end
 
@@ -892,8 +1003,11 @@ local function AddPlate(plate)
     if cfg.clickFollowsPlate then
         if InCombatLockdown() then ResizeInCombat() else SizePlate(view, plate) end
     end
+    if cfg.friendlyClickOffInCombat then allyClicks.Wrap(view, plate) end
+    ShowClickZone(view, plate)
     plate:HookScript("OnShow", ShowPlate)
     plate:HookScript("OnHide", HidePlate)
+    view.hooked = true
     if plate:IsVisible() then ShowPlate(plate) else SuppressNative(view) end
 end
 
@@ -1411,7 +1525,10 @@ local function EdgeFade(view)
     return 1 - t * t * (3 - 2 * t)
 end
 
-local function UpdatePerspective(view, plate, target, engaged, blend, combatFade)
+-- Draw order: the target on top, then the plate under the cursor, then the rest.
+local PRIORITY_STRATA = { target = "MEDIUM", hover = "LOW" }
+
+local function UpdatePerspective(view, plate, target, engaged, blend, combatFade, hovered)
     local depth = view:GetEffectiveDepth()
     local t = depth and depth > 0 and min(1, max(0, (depth - cfg.nearDepth) / (cfg.farDepth - cfg.nearDepth))) or 0
     t = t * t * (3 - 2 * t)
@@ -1422,6 +1539,12 @@ local function UpdatePerspective(view, plate, target, engaged, blend, combatFade
     if cfg.edgeFade and not target then alpha = alpha * EdgeFade(view) end
     -- Plates lifted over a nearer one in the column (see StackPlates) are drawn fainter.
     if view.stackBehind and not target then alpha = alpha * cfg.stackBehindAlpha end
+    -- The plate under the cursor (never the target) is drawn at its own opacity, whatever the fades above,
+    -- and slightly larger than its distance scale. Both ease in and out with the blend below.
+    if hovered then
+        alpha = cfg.hoverAlpha
+        scale = scale * cfg.hoverScale
+    end
     if not target and view.drawScale then
         scale = view.drawScale + (scale - view.drawScale) * blend
         alpha = view.drawAlpha + (alpha - view.drawAlpha) * blend
@@ -1433,9 +1556,10 @@ local function UpdatePerspective(view, plate, target, engaged, blend, combatFade
     local parentAlpha = plate:GetEffectiveAlpha()
     local localAlpha = parentAlpha > 0 and min(1, alpha / parentAlpha) or 0
     if view:GetAlpha() ~= localAlpha then view:SetAlpha(localAlpha) end
-    if view.priority ~= target then
-        view.priority = target
-        view:SetFrameStrata(target and "MEDIUM" or "BACKGROUND")
+    local priority = target and "target" or hovered and "hover" or nil
+    if view.priority ~= priority then
+        view.priority = priority
+        view:SetFrameStrata(PRIORITY_STRATA[priority] or "BACKGROUND")
     end
 end
 
@@ -1629,8 +1753,12 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
         return
     end
 
-    UpdatePerspective(view, plate, target, engaged, blend, combatFade)
+    -- The client highlights only the plate under the cursor, so the highlight alone marks it, even when
+    -- two plates share a name and `hover` stays unmatched. That plate is also the one a click reaches.
+    local hovered = not target and (unit == "mouseover" or not not view.nativeHover:IsShown())
+    UpdatePerspective(view, plate, target, engaged, blend, combatFade, hovered)
     SnapChrome(view, friendly)
+    FitClickbox(view, plate)
     view.infoActive, view.infoUnit, view.infoFriendly, view.infoTarget = true, unit, friendly, target
     -- Friendly players can show the name alone, coloured by class when class colours are on.
     local nameOnly = (cfg.friendlyNameOnly and team or cfg.friendlyNPCNameOnly and friendlyNPC) and not preview
@@ -1682,9 +1810,9 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
     local dragon = cfg.showEliteDragon and elite or false
     if view.eliteShown ~= dragon then view.eliteShown, view.boxAt = dragon, nil end
     DrawRaid(view)
-    if view.rimTarget ~= target or view.rimTeam ~= team or view.rimRevision ~= wfn.revision then
-        view.rimTarget, view.rimTeam, view.rimRevision = target, team, wfn.revision
-        wfn.StyleRim(view.chrome, target, team)
+    if view.rimTarget ~= target or view.rimTeam ~= team or view.rimHover ~= hovered or view.rimRevision ~= wfn.revision then
+        view.rimTarget, view.rimTeam, view.rimHover, view.rimRevision = target, team, hovered, wfn.revision
+        wfn.StyleRim(view.chrome, target, team, hovered)
     end
     wfn.DrawBoxes(view, plate, unit, target, team, now)
     if dragon then PlaceDragon(view) end
@@ -1789,6 +1917,61 @@ end
 
 local learnTokens = { "target", "mouseover", "focus", "targettarget", "focustarget", "mouseovertarget" }
 
+-- The cursor on a unit's model in the world (mouse focus on WorldFrame) gives a mouseover unit but no
+-- highlight on its plate, so the plate is found from what the unit and the plate both show: the name,
+-- then (when several plates share it) the plate GUID if the client gives one, the raid icon, the level and
+-- the health. Plates still alike go to the one nearest the cursor horizontally, only when it is clearly
+-- nearer than the next; otherwise no plate lights up. The target's own plate is never a candidate.
+-- On `wfn`, not a local: the main chunk is close to the 200-local limit of Lua 5.1.
+wfn.worldHoverList = {}
+function wfn.MatchWorldHover(name, guid, target)
+    if not GetMouseFocus or GetMouseFocus() ~= world then return end
+    local list, count = wfn.worldHoverList, 0
+    local icon = GetRaidTargetIndex and GetRaidTargetIndex("mouseover")
+    local level = UnitLevel("mouseover")
+    local health = UnitHealth and UnitHealth("mouseover")
+    local healthMax = UnitHealthMax and UnitHealthMax("mouseover")
+    for plate, view in pairs(visible) do
+        if view ~= target and view.infoActive and view.nativeName:GetText() == name then
+            local nativeGUID = NativePlateGUID(plate)
+            if nativeGUID then
+                if nativeGUID == guid then return view end
+            else
+                local fits = (not view.nativeRaid or not not icon == not not view.nativeRaid:IsShown())
+                local plateLevel = tonumber(view.nativeLevel:GetText())
+                if fits and plateLevel and level and level > 0 and plateLevel ~= level then fits = false end
+                if fits and health and healthMax and healthMax > 0 then
+                    local low, high = view.nativeHealth:GetMinMaxValues()
+                    local value = view.nativeHealth:GetValue()
+                    if high and value and high > (low or 0) then
+                        local share = (value - (low or 0)) / (high - (low or 0))
+                        if abs(share - health / healthMax) > 0.02 then fits = false end
+                    end
+                end
+                if fits then count = count + 1; list[count] = view end
+            end
+        end
+    end
+    local found = count == 1 and list[1] or nil
+    if count > 1 and GetCursorPosition then
+        local cursorX = GetCursorPosition()
+        local best, bestGap, nextGap
+        for i = 1, count do
+            local view = list[i]
+            local x = view.nativeHealth:GetCenter()
+            local gap = x and cursorX and abs(x * view.nativeHealth:GetEffectiveScale() - cursorX)
+            if gap and (not bestGap or gap < bestGap) then
+                best, nextGap, bestGap = view, bestGap, gap
+            elseif gap and (not nextGap or gap < nextGap) then
+                nextGap = gap
+            end
+        end
+        if best and (not nextGap or nextGap > bestGap * 1.5 + 10) then found = best end
+    end
+    for i = 1, count do list[i] = nil end
+    return found
+end
+
 local function ScanWorldFrame(_, delta)
     -- The client moves plates every frame, so the clamp that carries offsets runs every frame too.
     if clickRevision ~= wfn.revision and not clickPending then ApplyClickSize() end
@@ -1826,6 +2009,11 @@ local function ScanWorldFrame(_, delta)
         end
     end
     if targetCount ~= 1 then target = nil end
+    -- No highlighted plate: the cursor may be on the unit's model in the world.
+    if hoverCount == 0 and hoverName and hoverGUID ~= targetGUID then
+        hover = wfn.MatchWorldHover(hoverName, hoverGUID, target)
+        if hover then hoverCount = 1 end
+    end
     if hoverCount ~= 1 then hover = nil end
     if hover and targetGUID == hoverGUID then
         target, hover = hover, nil
@@ -1850,6 +2038,7 @@ local function ScanWorldFrame(_, delta)
         local guid = unit == "target" and targetGUID or unit == "mouseover" and hoverGUID or nil
         local quiet = crowded and not unit and view.infoActive and not view.infoUnit and now < (view.nextSync or 0)
             and (view.threatStatus or 0) == 0 and not view.nativeCast:IsShown()
+            and not view.priority and not view.nativeHover:IsShown()
         if not quiet then
             local last = view.syncedAt
             view.syncedAt = now
@@ -1877,6 +2066,7 @@ driver:SetScript("OnEvent", function(self, event, unit, ...)
         RefreshPixelSize()
         self:RegisterEvent("DISPLAY_SIZE_CHANGED")
         self:RegisterEvent("PLAYER_REGEN_ENABLED")
+        self:RegisterEvent("PLAYER_REGEN_DISABLED")
         self:RegisterEvent("UNIT_AURA")
         self:RegisterEvent("SPELLS_CHANGED")
         self:RegisterEvent("PLAYER_TALENT_UPDATE")
@@ -1913,6 +2103,9 @@ driver:SetScript("OnEvent", function(self, event, unit, ...)
         wipe(engagedGUID); wipe(engagedName)
         if pendingCVars then ApplyCVars() end
         if clickPending then ApplyClickSize() end
+        allyClicks.Restore()
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        allyClicks.Drop()
     elseif event == "SPELLS_CHANGED" or event == "PLAYER_TALENT_UPDATE" then
         wfn.ResetInterrupt()
     elseif event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE" then

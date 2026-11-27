@@ -25,7 +25,7 @@ local function region(frame, kind)
 end
 
 for _, key in ipairs({ "SetShadowColor", "SetShadowOffset", "SetJustifyH", "SetJustifyV", "SetWordWrap",
-    "RegisterForDrag", "SetBackdrop", "SetAutoFocus", "SetMaxLetters", "ClearFocus", "EnableMouseWheel" }) do
+    "RegisterForDrag", "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "SetAutoFocus", "SetMaxLetters", "ClearFocus", "EnableMouseWheel" }) do
     methods[key] = function() end
 end
 function methods:SetSize(w, h) self.width, self.height = w, h end
@@ -111,7 +111,24 @@ function methods:IsShown() return self.shown end
 function methods:IsVisible() return self.shown and (not self.parent or self.parent:IsVisible()) end
 function methods:Show()
     self.shown = true
+    -- A secure OnShow wrap runs its snippet with `self` (the frame) and `owner` (the header).
+    if self.wrap and self.wrap.script == "OnShow" then
+        local snippet = assert(loadstring(self.wrap.body))
+        setfenv(snippet, { self = self, owner = self.wrap.header })
+        snippet()
+    end
     if self.scripts.OnShow then self.scripts.OnShow(self) end
+end
+function methods:SetAttribute(key, value) self.attributes = self.attributes or {}; self.attributes[key] = value end
+function methods:GetAttribute(key) return self.attributes and self.attributes[key] end
+function methods:SetFrameRef(key, frame) self.refs = self.refs or {}; self.refs[key] = frame end
+function methods:IsProtected() return self.protected end
+UIPanelWindows = {}
+function ToggleFrame() end
+-- The resizer wraps itself; ToggleFrame is a no-op, so its own snippet never runs here.
+function SecureHandlerWrapScript(frame, script, header, body)
+    frame.wrap = { script = script, header = header, body = body }
+    frame.wraps = (frame.wraps or 0) + 1
 end
 function methods:Hide()
     self.shown = false
@@ -219,6 +236,11 @@ local spellCooldown = 0
 function GetSpellCooldown() return spellCooldown > 0 and now or 0, spellCooldown, 1 end
 local cursorX, cursorY = 0, 0
 function GetCursorPosition() return cursorX, cursorY end
+local mouseFocus
+function GetMouseFocus() return mouseFocus end
+function GetRaidTargetIndex(unit) return units[unit] and units[unit].icon end
+function UnitHealth(unit) return units[unit] and units[unit].health or 0 end
+function UnitHealthMax(unit) return units[unit] and units[unit].healthMax or 0 end
 local function aura(unit, key, index)
     local entry = units[unit][key] and units[unit][key][index]
     if entry then return entry[1], nil, entry[1], entry[2], nil, 30, entry[3], entry[4] end
@@ -594,10 +616,14 @@ tick()
 assert(not view[1]:IsShown() and not second[1]:IsShown())
 assert(not view[1].cooldown:IsShown() and view[1].cooldown.length == 0 and view[1].time:GetAlpha() == 1)
 ChooseAuraAnimation("No animation")
+-- Both native plates are opaque now, so neither counts as the target and both are drawn at the bottom.
+assert(view.strata == "BACKGROUND" and second.strata == "BACKGROUND", "no plate raised without target or hover")
 units.mouseover = { guid = "B", name = longName, level = 23, kind = "rare", buffs = { { "other", 1, 0 } } }
 b.regions[6]:Show()
 tick()
 assert(second[1].icon.texture == "other" and second[1]:IsShown() and second.dragon:IsShown())
+-- The hovered plate is drawn over the others.
+assert(view.strata == "BACKGROUND" and second.strata == "LOW", "hovered plate raised: " .. tostring(second.strata))
 units.mouseover.buffs[1][2] = 4
 now = now + 0.25
 tick()
@@ -791,6 +817,79 @@ for _ = 1, 40 do tick() end
 assert((second.stackOffset or 0) == 0 and (view.stackOffset or 0) > 0, "nearest plate stays, the one behind rises")
 assert(view.stackBehind and not second.stackBehind, "only the lifted plate is marked as behind")
 assert(cfg.stackNearestFirst == true and cfg.stackBehindAlpha == 0.7, "stack defaults")
+-- Hovering the plate behind (client highlight only, no mouseover unit) raises it and drops the behind fade.
+assert(view.strata == "MEDIUM" and view.priority == "target", "the target is drawn on top")
+local savedTarget = units.target
+units.target = nil
+for _ = 1, 40 do tick() end
+assert(view.strata == "BACKGROUND" and view.stackBehind)
+local fadedAlpha, plainScale = view.drawAlpha, view.drawScale
+assert(fadedAlpha < 0.9 and not view.chrome.halo:IsShown(), "faded behind, no halo before the hover")
+assert(cfg.hoverGlow and cfg.hoverGlowStrength == 0.45 and cfg.hoverAlpha == 1 and cfg.hoverScale == 1.08, "hover defaults")
+a.regions[6]:Show()
+for _ = 1, 40 do tick() end
+assert(view.strata == "LOW" and second.strata == "BACKGROUND", "highlight alone raises the plate")
+-- Hovered: full opacity whatever the fades, slightly larger, a soft white halo.
+assert(math.abs(view.drawAlpha - cfg.hoverAlpha) < 0.001, "hovered plate drawn at the hover opacity")
+assert(math.abs(view.drawScale - plainScale * cfg.hoverScale) < 0.001, "hovered plate enlarged")
+local halo = view.chrome.halo
+assert(halo:IsShown() and halo.vertex[1] == 1 and halo.vertex[3] == 1 and halo.vertex[4] == cfg.hoverGlowStrength, "hover halo")
+assert(not second.chrome.halo:IsShown(), "only the hovered plate glows")
+cfg.hoverAlpha, cfg.hoverScale, cfg.hoverGlow = 0.5, 1, false
+ui.wfn.Changed()
+for _ = 1, 40 do tick() end
+assert(math.abs(view.drawAlpha - 0.5) < 0.001 and math.abs(view.drawScale - plainScale) < 0.001 and not halo:IsShown(),
+    "hover opacity, size and halo follow the settings")
+cfg.hoverAlpha, cfg.hoverScale, cfg.hoverGlow = 1, 1.08, true
+ui.wfn.Changed()
+a.regions[6]:Hide()
+for _ = 1, 40 do tick() end
+assert(view.strata == "BACKGROUND" and math.abs(view.drawAlpha - fadedAlpha) < 0.001, "back down after the cursor leaves")
+assert(math.abs(view.drawScale - plainScale) < 0.001 and not halo:IsShown(), "size and halo back after the cursor leaves")
+
+-- The cursor on a unit's model in the world: no plate highlight, the plate is found from the mouseover unit.
+local health = a.children[1]
+local bName, bHealth = b.regions[7]:GetText(), b.children[1]
+units.mouseover = { guid = "W", name = longName, level = 23, icon = 8, buffs = {},
+    health = health.value - health.low, healthMax = health.high - health.low }
+mouseFocus = UIParent
+for _ = 1, 5 do tick() end
+assert(view.strata == "BACKGROUND", "a mouseover from a unit frame lights no plate")
+mouseFocus = WorldFrame
+for _ = 1, 40 do tick() end
+assert(view.strata == "LOW" and view.chrome.halo:IsShown() and math.abs(view.drawAlpha - 1) < 0.001, "model hover lights its plate")
+assert(second.strata == "BACKGROUND", "other plates stay down")
+-- Two plates with the same name: health, level and raid icon tell them apart, then the cursor.
+b.regions[7]:SetText(longName)
+local bValue, bLow, bHigh = bHealth.value, bHealth.low, bHealth.high
+bHealth:SetMinMaxValues(health.low, health.high)
+bHealth:SetValue(health.value)
+bHealth.centerX = 700
+cursorX = 510
+for _ = 1, 40 do tick() end
+assert(view.strata == "LOW" and second.strata == "BACKGROUND", "nearest to the cursor wins between twins")
+cursorX = 600
+for _ = 1, 5 do tick() end
+assert(view.strata == "BACKGROUND" and second.strata == "BACKGROUND", "no clear winner: nothing lights up")
+bHealth:SetValue(health.value + 10)
+for _ = 1, 40 do tick() end
+assert(view.strata == "LOW" and second.strata == "BACKGROUND", "health tells twins apart")
+bHealth:SetValue(health.value)
+b.regions[10]:Hide()
+for _ = 1, 40 do tick() end
+assert(view.strata == "LOW", "raid icon tells twins apart")
+b.regions[10]:Show()
+units.mouseover.level = 24
+for _ = 1, 5 do tick() end
+assert(view.strata == "BACKGROUND", "level mismatch: no plate")
+b.regions[7]:SetText(bName)
+bHealth:SetMinMaxValues(bLow, bHigh)
+bHealth:SetValue(bValue)
+bHealth.centerX, cursorX = 503.25, 0
+units.mouseover, mouseFocus = nil, nil
+for _ = 1, 40 do tick() end
+assert(view.strata == "BACKGROUND" and not view.chrome.halo:IsShown(), "back down when the cursor leaves the model")
+units.target = savedTarget
 cfg.stackNearestFirst = false
 for _ = 1, 40 do tick() end
 assert((view.stackOffset or 0) == 0 and (second.stackOffset or 0) > 0, "screen order when nearest-first is off")
@@ -806,9 +905,14 @@ a.points = { { "BOTTOM", WorldFrame, "BOTTOMLEFT", 505, 300 } }
 cfg.clickFollowsPlate = true
 ui.wfn.Changed()
 tick()
-local clickWidth = math.max(cfg.widthEnemy, cfg.widthFriend)
-local clickHeight = math.max(cfg.heightEnemy, cfg.heightFriend) + cfg.nameLift + math.max(cfg.nameSizeEnemy, cfg.nameSizeFriend) + 4
-assert(a.width == clickWidth and a.height == clickHeight, "plate frame sized to the drawn plate")
+-- By default the click area is exactly the drawn bar of each plate, at that plate's own scale.
+assert(cfg.clickMatchBar == true and cfg.clickWidth == 100 and cfg.clickHeight == 20, "click area defaults")
+local function barSize(v) return v.chromeWidth * v.drawScale, v.chromeHeight * v.drawScale end
+local clickWidth, clickHeight = barSize(view)
+assert(math.abs(a.width - clickWidth) <= 0.5 and math.abs(a.height - clickHeight) <= 0.5, "plate frame sized to the bar")
+assert(view.drawScale ~= 1 and a.height < 20, "follows the plate scale: " .. tostring(view.drawScale))
+clickWidth, clickHeight = a.width, a.height
+assert(not view.clickZone, "no outline unless asked")
 assert(view.points[1][1] == "BOTTOM" and view.points[1][2] == a and view.points[1][3] == "BOTTOM", "drawn plate on the frame")
 assert(a.clamped == true and a.clampInsets, "frame clamped")
 local insets = a.clampInsets
@@ -822,16 +926,69 @@ b.points = { { "BOTTOM", WorldFrame, "BOTTOMLEFT", 505, 300 } }
 for _ = 1, 40 do tick() end
 assert(second.stackRaise and second.stackRaise > 0 and second.stackOffset == nil)
 assert(math.abs(b.clampInsets[4] + 300 + cfg.plateOffsetY + second.stackRaise / b:GetEffectiveScale()) < 0.001)
--- In combat the frames are protected: nothing is resized until combat ends.
+local secondWidth, secondHeight = barSize(second)
+assert(math.abs(b.width - secondWidth) <= 0.5 and math.abs(b.height - secondHeight) <= 0.5, "each plate fits its own bar")
+-- In combat the frames are protected: nothing is resized until combat ends; the outline still follows.
+clickWidth, clickHeight = a.width, a.height
 locked = true
-cfg.nameLift = cfg.nameLift + 2
+cfg.clickMatchBar, cfg.clickWidth, cfg.clickHeight, cfg.clickShowZone = false, 80, 16, true
 ui.wfn.Changed()
 tick()
-assert(a.height == clickHeight, "no resize in combat")
+assert(a.width == clickWidth and a.height == clickHeight, "no resize in combat")
+assert(view.clickZone and view.clickZone:IsShown() and view.clickZone.allPoints == a, "outline on the plate frame")
+assert(view.clickZone.parent == a and not view.clickZone.mouse and a.children[3] == view, "outline takes no clicks")
 locked = false
 driver.scripts.OnEvent(driver, "PLAYER_REGEN_ENABLED")
-assert(a.height == clickHeight + 2, "resized after combat")
-cfg.nameLift = cfg.nameLift - 2
+assert(a.width == 80 and a.height == 16, "resized after combat")
+cfg.clickShowZone = false
+ui.wfn.Changed()
+tick()
+assert(not view.clickZone:IsShown(), "outline hidden again")
+cfg.clickMatchBar, cfg.clickWidth, cfg.clickHeight = true, 100, 20
+ui.wfn.Changed()
+tick()
+assert(math.abs(a.width - barSize(view)) <= 0.5, "back to the bar size")
+
+-- Allies lose their click area for the combat. Unprotected frames are never wrapped or shrunk.
+assert(cfg.friendlyClickOffInCombat == true)
+local barColour = { b.children[1]:GetStatusBarColor() }
+b.children[1]:SetStatusBarColor(0, 1, 0)
+tick()
+driver.scripts.OnEvent(driver, "PLAYER_REGEN_DISABLED")
+assert(not b.wrap and not second.clickOff and b.width > 1, "no secure wrap, no shrinking")
+a.protected, b.protected = true, true
+second.showWrapped = nil
+driver.scripts.OnEvent(driver, "PLAYER_REGEN_DISABLED")
+assert(b.width < 1 and b.height < 1 and second.clickOff, "ally clickbox dropped at combat start")
+assert(math.abs(a.width - barSize(view)) <= 0.5 and not view.clickOff and not a.wrap, "enemy keeps its clickbox")
+assert(b.wraps == 1 and b.wrap.script == "OnShow" and b.wrap.header, "ally plate wrapped once")
+locked = true
+for _ = 1, 5 do tick() end
+assert(b.width < 1, "stays dropped in combat")
+-- The client reuses the frame for an enemy: the secure OnShow gives it the plain clickbox back.
+b:Hide()
+b.children[1]:SetStatusBarColor(1, 0, 0)
+b:Show()
+local header = b.wrap.header
+assert(header:GetAttribute("plateWidth") == math.max(cfg.widthEnemy, cfg.widthFriend)
+    and header:GetAttribute("plateHeight") == math.max(cfg.heightEnemy, cfg.heightFriend), "resizer holds the bar size")
+assert(b.width == header:GetAttribute("plateWidth") and b.height == header:GetAttribute("plateHeight"), "reused frame clickable")
+for _ = 1, 5 do tick() end
+assert(b.width > 1, "nothing shrinks it again in combat")
+locked = false
+driver.scripts.OnEvent(driver, "PLAYER_REGEN_ENABLED")
+tick()
+assert(not second.clickOff and math.abs(b.width - barSize(second)) <= 0.5, "sizes back after combat")
+-- Switched off: allies keep their clickbox.
+b.children[1]:SetStatusBarColor(0, 1, 0)
+cfg.friendlyClickOffInCombat = false
+tick()
+driver.scripts.OnEvent(driver, "PLAYER_REGEN_DISABLED")
+assert(not second.clickOff and b.width > 1, "setting off keeps allies clickable")
+cfg.friendlyClickOffInCombat = true
+b.children[1]:SetStatusBarColor(unpack(barColour))
+a.protected, b.protected = nil, nil
+tick()
 cfg.clickFollowsPlate = false
 ui.wfn.Changed()
 tick()
@@ -1235,7 +1392,9 @@ end
 assert(customs == 2 and keys.plateOffsetY.default == cfg.plateOffsetY and keys.auraTimerAnimation.values[2][1] == "forever")
 for _, key in ipairs({ "auraDebuffs", "auraBuffs", "auraMine", "auraOthers", "auraOthersClass", "auraTimerText", "auraTimerFont",
     "auraTimerSize", "auraTimerOutline", "auraTimerColour", "classColourEnemy", "classColourFriend", "friendlyNameOnly", "friendlyNPCNameOnly", "crowdSaver", "crowdThreshold", "edgeFade", "edgeFadeInner", "edgeFadeOuter", "npcTitles", "playerGuilds", "subtitleSize",
-    "nameMaxLetters", "nameTextColour", "nameReactionColour", "stackNearestFirst", "stackBehindAlpha" }) do
+    "nameMaxLetters", "nameTextColour", "nameReactionColour", "stackNearestFirst", "stackBehindAlpha",
+    "clickMatchBar", "clickWidth", "clickHeight", "clickShowZone", "friendlyClickOffInCombat",
+    "hoverGlow", "hoverGlowStrength", "hoverGlowColour", "hoverAlpha", "hoverScale" }) do
     assert(keys[key], "schema option " .. key)
 end
 assert(keys.clickFollowsPlate == nil and keys.verticalSpacing.default == 0.9 and cfg.spacingDefault090)
