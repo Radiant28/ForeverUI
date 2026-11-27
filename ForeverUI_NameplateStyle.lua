@@ -22,12 +22,23 @@ end
 function wfn.MakeRim(top, bottom, kind, steel)
     local box = kind == "box"
     local mask = box and "PlateBoxMask" or "PlateMask"
+    -- Bars keep the halo, the outline and the dark foundation on a child frame one level below the bar, in three
+    -- layers. Their order then never depends on texture sublevels: the bar background on the bar's BACKGROUND layer
+    -- covered the target halo only by sublevel, and after a /reload the client could draw the halo over it.
+    local base, haloLayer, outlineLayer, fillLayer = bottom, "BACKGROUND", "BACKGROUND", "BACKGROUND"
+    if not box then
+        base = CreateFrame("Frame", nil, bottom)
+        base:SetFrameLevel(math.max(0, bottom:GetFrameLevel() - 1))
+        base:SetAllPoints(bottom)
+        outlineLayer, fillLayer = "BORDER", "ARTWORK"
+    end
     local parts = {
-        halo = wfn.Sprite(bottom, box and "PlateBoxGlow" or "PlateGlow", "BACKGROUND", -7),
-        outline = wfn.Sprite(bottom, mask, "BACKGROUND", -6),
-        fill = wfn.Sprite(bottom, mask, "BACKGROUND", -5),
+        halo = wfn.Sprite(base, box and "PlateBoxGlow" or "PlateGlow", haloLayer, -7),
+        outline = wfn.Sprite(base, mask, outlineLayer, -6),
+        fill = wfn.Sprite(base, mask, fillLayer, -5),
         rim = wfn.Sprite(top, steel and "PlateBoxSteel" or box and "PlateBox" or "PlateFrame", "BORDER"),
         box = box,
+        under = not box and base or nil,
     }
     parts.outline:SetVertexColor(0, 0, 0, 1)
     parts.fill:SetVertexColor(0.05, 0.05, 0.05, 1)

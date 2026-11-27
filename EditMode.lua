@@ -39,7 +39,7 @@ end
 editor:SetFrameStrata("DIALOG")
 editor:SetFrameLevel(5)
 editor:SetPoint("TOP", UIParent, "TOP", 0, -26)
-panel(editor, 408, 196)
+panel(editor, 408, 236)
 editor:Hide()
 tinsert(UISpecialFrames, editor:GetName())
 
@@ -234,6 +234,21 @@ local function move(entry, x, y)
     frame:ClearAllPoints()
     frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", x, y)
     placing = false
+end
+
+-- UIParent_ManageFramePositions re-anchors every frame of UIPARENT_MANAGED_FRAME_POSITIONS, also in combat, and
+-- schedule() can put a protected one back only after combat. A form change in combat moved MultiBarBottomLeft
+-- 8 px up, along with ShapeshiftBarFrame, MultiCastActionBarFrame, PossessBarFrame, MultiBarRight and the cast
+-- bar (/fuimoves, 2026-11-26). So a frame placed by Edit Mode leaves that table. Its key is only removed, never
+-- written back: a value written by the addon would be read in the client's loop and taint it. After a reset
+-- the client manages the frame again from the next /reload.
+local unmanaged = {}
+local function unmanage(entry)
+    local managed = UIPARENT_MANAGED_FRAME_POSITIONS
+    if type(managed) == "table" and managed[entry.name] ~= nil then
+        managed[entry.name] = nil
+        unmanaged[entry.name] = true
+    end
 end
 
 local function groupMembers(names, visit)
@@ -461,7 +476,10 @@ local function apply(entry)
         position = { left + width - UIParent:GetRight(), bottom + height - UIParent:GetTop() }
         entry.config.position = position
     end
-    if position then move(entry, position[1], position[2]) end
+    if position then
+        move(entry, position[1], position[2])
+        unmanage(entry)
+    end
 end
 
 local function refreshOverlay(entry)
@@ -754,7 +772,7 @@ local function stopDrag(commit)
 end
 
 local layoutLabel = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-layoutLabel:SetPoint("TOPLEFT", 16, -141)
+layoutLabel:SetPoint("TOPLEFT", 16, -174) -- under the "No bar background or gryphons" row
 layoutLabel:SetText(ru and "Раскладка панелей:" or "Bar layout:")
 local layoutClassic = button(editor, 112, ru and "Классика" or "Classic", function() ui.ApplyEditLayout("classic") end)
 layoutClassic:SetPoint("LEFT", layoutLabel, "RIGHT", 10, 0)
@@ -1117,26 +1135,28 @@ add("TargetFrameToT", "Цель цели", "Target of target")
 add("FocusFrame", "Фокус", "Focus")
 add("FocusFrameToT", "Цель фокуса", "Focus target")
 add("PetFrame", "Питомец", "Pet")
-local castEntry = add("CastingBarFrame", "Полоса заклинаний", "Cast bar")
--- UIParent_ManageFramePositions adds its own BOTTOM point to the cast bar without ClearAllPoints. Next to the
--- saved TOPRIGHT point that stretches the bar to a huge height, and schedule() does not run in combat, so the
--- bar stayed stretched until combat ended. The bar is not protected: pin it back at once, in combat too.
-if castEntry then
-    hooksecurefunc(castEntry.frame, "SetPoint", function(frame)
-        if placing or dragging == castEntry or not castEntry.config or castEntry.removed or held(castEntry) then return end
+-- Unprotected frames that UIParent_ManageFramePositions moves by its own code (not only through the managed
+-- table): pinned back to the saved spot at once, in combat too, since schedule() does not run in combat.
+-- The cast bar got its own BOTTOM point without ClearAllPoints, which stretched it next to the saved TOPRIGHT
+-- point; DurabilityFrame and WatchFrame were moved in combat (/fuimoves, 2026-11-26).
+local function pinBack(entry)
+    if not entry then return end
+    hooksecurefunc(entry.frame, "SetPoint", function(frame)
+        if placing or dragging == entry or not entry.config or entry.removed or entry.docked or held(entry) then return end
         if frame:IsProtected() and InCombatLockdown() then return end
-        local position = getPosition(castEntry)
-        if position then move(castEntry, position[1], position[2]) end
+        local position = getPosition(entry)
+        if position then move(entry, position[1], position[2]) end
     end)
 end
+pinBack(add("CastingBarFrame", "Полоса заклинаний", "Cast bar"))
 add("MinimapCluster", "Миникарта", "Minimap")
 local buffs = add("ConsolidatedBuffs", "Бафы", "Buffs", { "TemporaryEnchantFrame", "BuffFrame" })
 if buffs then
     buffs.bounds = { "TempEnchant1", "TempEnchant2", "TempEnchant3" }
     for i = 1, BUFF_MAX_DISPLAY or 32 do buffs.bounds[#buffs.bounds + 1] = "BuffButton" .. i end
 end
-add("WatchFrame", "Отслеживание заданий", "Quest tracker")
-add("DurabilityFrame", "Прочность", "Durability")
+pinBack(add("WatchFrame", "Отслеживание заданий", "Quest tracker"))
+pinBack(add("DurabilityFrame", "Прочность", "Durability"))
 
 for name, spec in pairs(barSpecs) do
     if byName[name] then byName[name].bar = spec end
@@ -1403,6 +1423,9 @@ driver:SetScript("OnEvent", function(self, event)
             { 8, 64, 4, 24 }, redrawGrid)
         ui.Checkbox(editor, "showGryphons", ru and "Показывать грифонов" or "Show gryphons", -105,
             true, ui.ApplyGryphons, nil, 188)
+        -- Only the buttons: no stock bar backgrounds and no gryphons (`barArtHidden`, StockPanels.lua).
+        ui.Checkbox(editor, "barArtHidden", ru and "Без фона панелей и грифонов" or "No bar background or gryphons",
+            -133, false, function() if ui.ActionBars then ui.ActionBars.Apply() end end, nil, 250)
         -- Gryphon look: each click moves to the next style (by faction, gryphon, wyvern, the earlier lions).
         local styleNames = {
             faction = ru and "по фракции" or "by faction", gryphon = ru and "грифон" or "gryphon",
@@ -1423,7 +1446,7 @@ driver:SetScript("OnEvent", function(self, event)
             styleText()
             if ui.ApplyGryphons then ui.ApplyGryphons() end
         end)
-        styleButton:SetPoint("TOPLEFT", editor, "TOPLEFT", 214, -101)
+        styleButton:SetPoint("TOPLEFT", editor, "TOPLEFT", 214, -108) -- level with the gryphon checkbox
         styleText()
     elseif event == "PLAYER_REGEN_DISABLED" then
         stopDrag(false)
@@ -1452,4 +1475,68 @@ if UnitFrameMove_Do then
         local entry = byName[name]
         if command == "reset" and entry then releaseToClient(entry, "UnitFrameMove_Do reset") end
     end)
+end
+
+-- /fuimoves: which Edit Mode frames the client moves in combat (schedule() puts them back only after combat).
+-- In combat every SetPoint on a registered frame is counted by frame and caller (debugstack), and the screen spot
+-- of each frame at the start of combat is compared with the one at its end, before schedule() moves it back.
+local moveCounts, moveOrder, shifts, spotsAtStart, moveHooked = {}, {}, {}, {}, {}
+local function shortStack()
+    if not debugstack then return "?" end
+    local parts = {}
+    for line in debugstack(3, 3, 0):gmatch("[^\n]+") do
+        line = line:gsub("^Interface.FrameXML.", ""):gsub("^Interface.AddOns.", ""):gsub(": in function ", " ")
+        parts[#parts + 1] = line:sub(1, 70)
+    end
+    return table.concat(parts, " < ")
+end
+local function hookMoves()
+    for _, entry in ipairs(entries) do
+        local frame = entry.frame
+        if frame and not moveHooked[frame] then
+            moveHooked[frame] = true
+            hooksecurefunc(frame, "SetPoint", function()
+                if not InCombatLockdown() then return end
+                local key = entry.name .. " | " .. shortStack()
+                if not moveCounts[key] and #moveOrder < 40 then moveOrder[#moveOrder + 1] = key end
+                moveCounts[key] = (moveCounts[key] or 0) + 1
+            end)
+        end
+    end
+end
+local moveWatch = CreateFrame("Frame")
+moveWatch:RegisterEvent("PLAYER_REGEN_DISABLED")
+moveWatch:RegisterEvent("PLAYER_REGEN_ENABLED")
+moveWatch:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_DISABLED" then
+        hookMoves()
+        wipe(spotsAtStart)
+        for _, entry in ipairs(entries) do
+            local x, y = entry.frame:GetLeft(), entry.frame:GetBottom()
+            if x and y then spotsAtStart[entry.name] = { x, y } end
+        end
+        return
+    end
+    wipe(shifts)
+    for _, entry in ipairs(entries) do
+        local start, x, y = spotsAtStart[entry.name], entry.frame:GetLeft(), entry.frame:GetBottom()
+        if start and x and y and (math.abs(x - start[1]) > 0.5 or math.abs(y - start[2]) > 0.5) then
+            shifts[#shifts + 1] = string.format("%s %+.1f %+.1f", entry.name, x - start[1], y - start[2])
+        end
+    end
+end)
+SLASH_FOREVERUIMOVES1 = "/fuimoves"
+SlashCmdList.FOREVERUIMOVES = function(arg)
+    if arg == "reset" then
+        wipe(moveCounts); wipe(moveOrder); wipe(shifts)
+        print("FUI moves: cleared")
+        return
+    end
+    print("FUI moves: shifted in the last combat:", #shifts > 0 and table.concat(shifts, "; ") or "none")
+    for _, key in ipairs(moveOrder) do print("FUI moves:", moveCounts[key] .. "x", key) end
+    if #moveOrder == 0 then print("FUI moves: no SetPoint in combat yet") end
+    local names = {}
+    for name in pairs(unmanaged) do names[#names + 1] = name end
+    table.sort(names)
+    print("FUI moves: out of the client layout:", #names > 0 and table.concat(names, ", ") or "none")
 end

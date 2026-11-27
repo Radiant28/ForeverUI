@@ -28,56 +28,30 @@ local shared = { indicator = nil }
 -- mask = nil draws everything. Each frame: { variant, override, caption }.
 ---------------------------------------------------------------------------------------------------
 local everything = {
-    frames = { { "tank", nil, L("Щит без свечения, рамка угрозы", "Glow-free shield, threat border") },
-        { "healer", nil, L("Входящее лечение, цель, пьёт", "Incoming heals, target, drinking") },
-        { "dps", nil, L("Мало здоровья, щит и лечение, под курсором", "Low health, shield and heals, hovered") } },
-    hint = L("Показано всё сразу: ваши индикаторы, отслеживаемые баффы и проклятие, которое «вы» рассеиваете. "
-        .. "Выберите пункт слева, и здесь останется только то, что он меняет.", "Everything at once: your "
-        .. "indicators, tracked buffs and a curse “you” dispel. Pick an item on the left and only what it changes "
-        .. "stays here."),
+    frames = { { "tank", nil, L("Почти полное здоровье", "Nearly full health") },
+        { "healer", nil, L("Пьёт", "Drinking") },
+        { "dps", nil, L("Мало здоровья, под курсором", "Low health, hovered") } },
+    hint = L("Показано всё сразу: ваши индикаторы, отслеживаемые баффы и дебаффы. Выберите пункт слева, и здесь "
+        .. "останется только то, что он меняет.", "Everything at once: your indicators, tracked buffs and debuffs. "
+        .. "Pick an item on the left and only what it changes stays here."),
 }
 
 local focus = {
-    roles = { mask = { name = true }, frames = { { "tank", nil, L("Танк", "Tank") },
-        { "healer", nil, L("Лекарь", "Healer") }, { "dps", nil, L("Боец", "Damage dealer") } } },
-    bars = { mask = { name = true, text = true }, frames = {
-        { "tank", { health = 0.92, deficit = "-1.2k" }, L("Почти полное здоровье", "Nearly full health") },
-        { "healer", { health = 0.55, deficit = "-11.3k" }, L("Половина здоровья", "Half health") },
-        { "dps", { health = 0.16, deficit = "-21.0k" }, L("Мало здоровья", "Low health") } } },
-    heal = { mask = { heal = true }, frames = {
-        { "healer", { health = 0.55, heal = 0.2 }, L("Входящее лечение", "Incoming heals") },
-        { "dps", { health = 0.82, heal = 0.4 }, L("Лечения больше, чем не хватает", "More healing than missing") } } },
-    shield = { mask = { shield = true }, frames = {
-        { "healer", { health = 0.6, heal = 0, absorb = 0.12 }, L("Небольшой щит", "Small shield") },
-        { "tank", { health = 0.7, absorb = 0.45 }, L("Большой щит", "Big shield") },
-        { "dps", { health = 0.95, heal = 0, absorb = 0.3 }, L("Щит при полном здоровье", "Shield at full health") } } },
-    threat = { mask = { threat = true, name = true }, frames = {
-        { "tank", { threat = 3 }, L("Есть угроза", "Has threat") },
-        { "dps", { threat = false }, L("Нет угрозы", "No threat") } } },
-    range = { mask = { name = true }, frames = {
-        { "healer", nil, L("В радиусе", "In range") },
-        { "dps", { outOfRange = true }, L("Вне радиуса", "Out of range") } } },
-    name = { mask = { name = true }, frames = {
-        { "healer", nil, L("Короткое имя", "Short name") },
-        { "dps", { name = L("Длинноеимяигрока", "Averylongplayername") }, L("Длинное имя", "Long name") },
-        { "tank", nil, L("Воин: цвет класса, если выбран", "Warrior: class colour if chosen") } } },
-    hover = { mask = { name = true, hover = true, target = true }, frames = {
-        { "healer", { target = true, hover = false }, L("Ваша цель", "Your target") },
-        { "dps", { target = false, hover = true }, L("Под курсором", "Under the cursor") } } },
-    drink = { mask = { drink = true, name = true }, frames = {
+    bars = { mask = {}, frames = {
+        { "tank", { health = 0.92 }, L("Почти полное здоровье", "Nearly full health") },
+        { "healer", { health = 0.55 }, L("Половина здоровья", "Half health") },
+        { "dps", { health = 0.16 }, L("Мало здоровья", "Low health") } } },
+    power = { mask = {}, frames = {
+        { "healer", nil, L("Мана", "Mana") }, { "tank", nil, L("Ярость", "Rage") },
+        { "dps", { power = "ENERGY", class = "ROGUE", name = L("Разбойник", "Rogue") }, L("Энергия", "Energy") } } },
+    hover = { mask = { hover = true }, frames = {
+        { "dps", { hover = true }, L("Под курсором", "Under the cursor") } } },
+    drink = { mask = { drink = true }, frames = {
         { "healer", { drink = true }, L("Пьёт (42% маны)", "Drinking (42% mana)") } } },
     buffs = { mask = { buffs = true }, frames = { { "healer", nil, L("Отслеживаемые баффы", "Tracked buffs") } } },
     tracked = { mask = { buffs = true }, frames = { { "healer", nil, L("Первые баффы из списка", "The first listed buffs") } } },
     debuffs = { mask = { debuffs = true }, frames = { { "healer", nil, L("Проклятие (вы его рассеиваете), яд и "
         .. "кровотечение", "A curse (you dispel it), a poison and a bleed") } } },
-    exclusions = { mask = { debuffs = true }, frames = { { "healer", nil, L("Скрытые дебаффы не рисуются",
-        "Hidden debuffs are not drawn") } } },
-    dispel = { mask = { dispel = true, debuffs = true }, frames = {
-        { "healer", { dispelType = "Magic" }, L("Магия", "Magic") },
-        { "tank", { dispelType = "Curse" }, L("Проклятие", "Curse") },
-        { "dps", { dispelType = "Disease" }, L("Болезнь", "Disease") },
-        { "healer", { dispelType = "Poison", name = L("Жрец", "Priest") }, L("Яд", "Poison") } },
-        hint = L("В предпросмотре «вы» рассеиваете все четыре типа.", "In the preview “you” dispel all four types.") },
     indicators = { mask = { indicators = true }, drag = true, frames = {
         { "healer", nil, L("Наложены вами", "Cast by you") },
         { "tank", { others = true }, L("Наложены другими", "Cast by others") } },
@@ -86,14 +60,12 @@ local focus = {
             .. "corner and offset follow. The bottom frame shows the same auras cast by other players.") },
 }
 
--- Which part a setting belongs to, by key prefix (checked in order: rfHealth before rfHeal).
+-- Which part a setting belongs to, by key prefix.
 local keyParts = {
-    { "rfHealth", "health" }, { "rfPower", "health" }, { "rfBackground", "frame" }, { "rfDeficitText", "text" },
-    { "rfTextSize", "text" }, { "rfHeal", "heal" }, { "rfShield", "shield" }, { "rfHideAbsorbGlow", "shield" },
-    { "rfThreat", "threat" }, { "rfBorderSize", "threat" }, { "rfRange", "frame" }, { "rfName", "name" },
-    { "rfHover", "hover" }, { "rfTarget", "target" }, { "rfDrink", "drink" },
+    { "rfHealth", "health" }, { "rfPower", "power" }, { "rfBackground", "frame" },
+    { "rfHover", "hover" }, { "rfDrink", "drink" },
     { "rfBuff", "buffs" }, { "rfAuraTimer", "buffs" }, { "rfDispelScale", "debuffs" }, { "rfDebuff", "debuffs" },
-    { "rfDispel", "dispel" }, { "rfIndicator", "indicators" },
+    { "rfIndicator", "indicators" },
 }
 local function partOf(opt, section)
     local key = opt and opt.key
@@ -112,8 +84,7 @@ end
 ---------------------------------------------------------------------------------------------------
 local SCALE, FRAME_W, FRAME_H, MAX_FRAMES = 1.7, 120, 48, 4
 local states = {
-    { "normal", L("Обычное", "Normal") }, { "range", L("Вне радиуса", "Out of range") },
-    { "dead", L("Мёртв", "Dead") }, { "combat", L("В бою (не пьёт)", "In combat (no drinking)") },
+    { "normal", L("Обычное", "Normal") }, { "dead", L("Мёртв", "Dead") }, { "combat", L("В бою (не пьёт)", "In combat (no drinking)") },
 }
 
 local function buildPreviewPanel(page, spec)
@@ -137,12 +108,7 @@ local function buildPreviewPanel(page, spec)
     shown:SetPoint("TOPLEFT", 16, -34)
     shown:SetWidth(panelWidth - 32)
     shown:SetJustifyH("LEFT")
-    local kind = W.Text(side, W.fonts.small)
-    kind:SetPoint("TOPLEFT", 16, -50)
-    kind:SetWidth(panelWidth - 32)
-    kind:SetJustifyH("LEFT")
-    kind:SetTextColor(W.rgba(S.muted))
-    obj.shownText, obj.kindText = shown, kind
+    obj.shownText = shown
 
     local stateRow = W.Select(side, { type = "select", label = L("Состояние участника", "Member state"), values = states },
         { get = function() return obj.state end, set = function(value)
@@ -223,8 +189,6 @@ local function buildPreviewPanel(page, spec)
         local section = obj.section
         shown:SetText((obj.defaults and L("По умолчанию: ", "Defaults: ") or L("Показано: ", "Shown: "))
             .. (section and not section.overview and section.title or L("всё", "everything")))
-        local kinds = rfNow.kindLabels or {}
-        kind:SetText(L("Настраивается: ", "Editing: ") .. (kinds[rfNow.ViewKind()] or rfNow.ViewKind()))
         for _, frame in ipairs(obj.frames) do
             if frame:IsShown() then
                 frame:SetState(obj.state ~= "normal" and obj.state or nil)
@@ -324,7 +288,6 @@ local function buildPreviewPanel(page, spec)
         if obj.defaults then obj.ShowDefaults(false) end
     end)
     if page:IsVisible() then side:Show() end
-    ui.RegisterCallback("RaidFramesKindChanged", function() obj.Refresh() end, "RaidPreviewKind")
     shared.preview = obj
     obj.Select(nil)
     return obj
@@ -530,16 +493,12 @@ local function buildIndicators(parent, width)
         select(nil)
         refresh()
     end, "RaidIndicatorOptions")
-    ui.RegisterCallback("RaidFramesKindChanged", function()
-        select(nil)
-        refresh()
-    end, "RaidIndicatorKind")
     refresh()
     return -y + grid:Height()
 end
 
--- Spell list editor: tracked buffs (rfBuffTrack, the only buffs drawn as icons) or hidden debuffs
--- (rfDebuffHide). The list stays a comma separated string in the profile, so import and export keep working.
+-- Spell list editor of the tracked buffs (rfBuffTrack, the only buffs drawn as icons). The list stays a comma
+-- separated string in the profile, so import and export keep working.
 local function exclusionEditor(key, hintText)
     return function(parent, width)
         local rf, su = RF(), ui.SuiteUI
@@ -650,95 +609,9 @@ local function exclusionEditor(key, hintText)
             state.index = nil
             refresh()
         end, "RaidExclusions" .. key)
-        ui.RegisterCallback("RaidFramesKindChanged", function()
-            state.index = nil
-            refresh()
-        end, "RaidExclusionsKind" .. key)
         refresh()
         return 7 * 22 + 8
     end
-end
-
--- Which group type the page edits: party (5), raid (10) or raid (25), each tuned apart. Picking a type
--- other than the live one shows its sample frames in place of the group; "Copy from" fills the edited
--- type with the settings of another one. Leaving the page goes back to the live type.
-local function buildKinds(parent, width, _, page)
-    local rf, su = RF(), ui.SuiteUI
-    if not rf or not ui.Suite or not rf.layoutKinds then return su and su.Unavailable(parent, width) or 20 end
-    local refresh
-    local gap = 8
-    local copyWidth = 150
-    -- One dropdown of the group types (the live one marked with *), "Copy from" beside it; a narrow
-    -- page puts the button on its own row.
-    local oneRow = width >= 420
-    local selectWidth = oneRow and math.min(320, width - copyWidth - gap) or math.min(320, width)
-    local picker = W.Select(parent, { type = "select", label = L("Профиль фреймов", "Frame profile"),
-        tooltip = L("Группа (5) — вне группы и в группе, Рейд (10) — рейд до 10 игроков, Рейд (25) — рейд от 11 "
-            .. "до 40. * — тип группы, который действует сейчас.", "Party (5): solo and in a party, Raid (10): a raid "
-            .. "of up to 10, Raid (25): a raid of 11 to 40. * marks the type in force now."),
-        values = function()
-            local live, items = rf.LiveKind(), {}
-            for _, kind in ipairs(rf.layoutKinds) do
-                items[#items + 1] = { kind, rf.kindLabels[kind] .. (kind == live and " *" or "") }
-            end
-            return items
-        end }, {
-        get = function() return rf.ViewKind() end,
-        set = function(kind)
-            if kind == rf.LiveKind() then kind = nil end
-            rf.SetEditKind(kind)
-            refresh()
-        end,
-    }, selectWidth)
-    picker:SetPoint("TOPLEFT", 0, 0)
-    local copy = W.Button(parent, L("Скопировать с…", "Copy from…"), copyWidth, function(self)
-        local target = rf.ViewKind()
-        local items = {}
-        for _, kind in ipairs(rf.layoutKinds) do
-            if kind ~= target then items[#items + 1] = { kind, rf.kindLabels[kind] } end
-        end
-        W.OpenList(self, items, nil, function(source)
-            local text = (L("Заменить настройки «%s» настройками «%s»?", "Replace the “%s” settings with the “%s” ones?"))
-                :format(rf.kindLabels[target], rf.kindLabels[source])
-            local function run()
-                rf.CopyKind(source, target)
-                refresh()
-            end
-            if su and su.Confirm then su.Confirm(text, run) else run() end
-        end, copyWidth)
-    end, 24)
-    local top = -54
-    if oneRow then
-        copy:SetPoint("TOPLEFT", selectWidth + gap, -22)
-    else
-        copy:SetPoint("TOPLEFT", 0, -54)
-        top = -86
-    end
-    local note = W.Description(parent, "", width)
-    note:SetPoint("TOPLEFT", 0, top)
-    refresh = function()
-        local view, live = rf.ViewKind(), rf.LiveKind()
-        picker:Refresh()
-        local text = (L("Настраивается: %s. Сейчас действует: %s (* — текущий тип группы). Выбранный профиль "
-            .. "действует для всех пунктов слева.", "Editing: %s. In force now: %s (* marks the current group "
-            .. "type). The chosen profile applies to every item on the left."))
-            :format(rf.kindLabels[view], rf.kindLabels[live])
-        if view ~= live then
-            text = text .. " " .. L("Пока открыта эта страница, на месте группы показаны шаблоны этого профиля.",
-                "While this page is open, sample frames of this profile stand in place of the group.")
-        end
-        -- W.Description is a row frame; its text is the font string in .label
-        note.label:SetText(text)
-        note:SetHeight(math.max(14, note.label:GetStringHeight() + 2))
-    end
-    -- The page, not this block, decides: the block hides whenever another item is open.
-    local owner = page or parent
-    owner:HookScript("OnShow", function() refresh() end)
-    owner:HookScript("OnHide", function() rf.SetEditKind(nil) end)
-    parent.refreshKinds = refresh
-    ui.RegisterCallback("RaidFramesKindChanged", function() refresh() end, "RaidKindOptions")
-    refresh()
-    return -top + 44
 end
 
 local function buildOverviewNote(parent, width)
@@ -787,9 +660,6 @@ ui.RegisterOptions("raidframes", {
         { id = "overview", overview = true, title = L("Общий вид", "Overview"), group = G_MAIN, options = {
             { "toggle", "rfEnabled", L("Включить доработку фреймов", "Enable the frame extension"), default = true,
                 width = "full" },
-            { "custom", build = buildKinds, refresh = function(holder)
-                if holder.refreshKinds then holder.refreshKinds() end
-            end },
             { "custom", build = buildOverviewNote },
         } },
         { id = "visibility", title = L("Видимость", "Visibility"), group = G_MAIN,
@@ -824,18 +694,20 @@ ui.RegisterOptions("raidframes", {
                     .. "spread left and right, vertically the groups (columns) do, and players inside a group grow "
                     .. "downwards. The top stays. Works once the group position is saved in Edit Mode; in combat, "
                     .. "after combat.") },
-            { "select", "rfPetMode", L("Питомцы", "Pets"), default = "block", width = "full", protected = true,
-                apply = function() if RF() then RF().Apply() end end, values = {
-                    { "block", L("Отдельным блоком «Питомцы»", "A “Pets” block of their own") },
-                    { "client", L("Как в клиенте", "Where the client puts them") } },
-                tooltip = L("Блок: питомцы в половину высоты встают колонкой справа от групп (при колонках групп) или "
-                    .. "рядами по пять под ними (при рядах групп), под заголовком «Питомцы». Переставляется только вне боя.",
-                    "Block: half-height pets stand in a column right of the groups (with columns of groups) or in rows "
-                    .. "of five under them (with rows of groups), under a “Pets” title. Moves only out of combat.") },
-            { "toggle", "rfPetAuras", L("Ауры и индикаторы на питомцах", "Auras and indicators on pets"), default = false,
-                width = "full", tooltip = L("Выключено: на кнопке питомца только полосы, имя цветом класса хозяина и "
-                    .. "подсветка дебаффа, который вы можете рассеять.", "Off: a pet button shows only its bars, its name "
-                    .. "in the owner's class colour and the highlight of a debuff you can dispel.") },
+            { "select", "rfGroupsPerLine", L("Групп в строке", "Groups per line"), default = 5, width = "full",
+                protected = true, apply = function() if RF() then RF().ApplyLines() end end, values = {
+                    { 0, L("Как в клиенте", "Client") }, { 1, "1" }, { 2, "2" }, { 3, "3" }, { 4, "4" },
+                    { 5, "5" }, { 6, "6" }, { 7, "7" }, { 8, "8" } },
+                tooltip = L("Сколько групп рейда стоит рядом, следующие переносятся на новую строку. При колонках "
+                    .. "групп строки идут сверху вниз; при рядах групп (горизонтальные группы в профиле рейда "
+                    .. "клиента) группы заполняют колонки сверху вниз. Работает, когда в профиле рейда клиента "
+                    .. "включено «Держать группы вместе»; на группу из пяти игроков не влияет. Меняется размер "
+                    .. "контейнера клиента, раскладку делает сам клиент. В бою — после боя.",
+                    "How many raid groups stand side by side; the next ones wrap to a new line. With columns of "
+                    .. "groups the lines go top to bottom; with rows of groups (horizontal groups in the client's raid "
+                    .. "profile) the groups fill columns top to bottom. Works when “Keep groups together” is on in the "
+                    .. "client's raid profile; a party of five is not affected. Only the size of the client's "
+                    .. "container changes, the client lays the frames out itself. In combat, after combat.") },
             { "button", L("Показать / скрыть шаблоны на экране", "Show / hide sample frames on screen"), func = function()
                 if RF() then RF().ToggleTemplate() end
             end, tooltip = L("Шаблоны встают на место группы с размером и раскладкой из профиля рейда клиента "
@@ -853,129 +725,65 @@ ui.RegisterOptions("raidframes", {
                 tooltip = L("Метка «Группа» появляется при наведении на фреймы; перетащите её, чтобы сдвинуть группу без Edit Mode. В бою отключено.",
                     "The \"Group\" label appears when you hover the frames; drag it to move the group without Edit Mode. Disabled in combat.") },
         } },
-        { id = "roles", title = L("Сортировка по ролям", "Sorting by role"), group = G_MAIN,
-            description = L("Значки ролей рисуют сами фреймы клиента, аддон роли не определяет. Сортировка берёт "
-                .. "те же роли клиента (поиск группы, главный танк); игроки без роли идут последними.",
-                "Role icons are drawn by the client's own frames; the addon does not work out roles. The sort uses "
-                .. "the same client roles (dungeon finder, main tank); players without a role go last."), options = {
-            { "toggle", "rfRoleSort", L("Сортировать ряд по ролям", "Sort the row by role"), default = false, protected = true,
-                tooltip = L("Работает, когда фреймы идут одним списком (без «держать группы вместе»). Применяется вне боя.",
-                    "Works when the frames form one list (not “keep groups together”). Applies out of combat.") },
-            { "select", "rfRoleOrder", L("Порядок ролей", "Role order"), default = "THD", depends = "rfRoleSort", protected = true,
-                values = { { "THD", L("Танки, хилы, ДД", "Tanks, healers, damage") },
-                    { "HTD", L("Хилы, танки, ДД", "Healers, tanks, damage") },
-                    { "TDH", L("Танки, ДД, хилы", "Tanks, damage, healers") } } },
+        { id = "roleicon", title = L("Значок роли", "Role icon"), group = G_MAIN,
+            description = L("Значок роли рисует клиент; аддон роли не определяет и смотрит только на картинку значка "
+                .. "клиента. В предпросмотре значка нет: смотрите на настоящие фреймы.", "The client draws the role "
+                .. "icon; the addon works out no roles and only looks at the client's icon picture. The preview has no "
+                .. "role icon: look at the real frames."), options = {
+            { "toggle", "rfHideDamagerIcon", L("Скрывать значок бойца (ДД)", "Hide the damage dealer icon"), default = true,
+                width = "full", tooltip = L("Значки танка и лекаря остаются. Если значок бойца не скрывается, пришлите "
+                    .. "строку «Role icon» из /fuiraid.", "Tank and healer icons stay. If the damage dealer icon still "
+                    .. "shows, send the “Role icon” line of /fuiraid.") },
         } },
         { id = "bars", title = L("Здоровье и ресурс", "Health and power"), group = G_BAR, options = {
             { "media", "rfHealthTexture", L("Текстура здоровья", "Health texture"), kind = "statusbar", ignoreGlobal = true,
                 default = "WoW Forever Raid" },
-            { "media", "rfPowerTexture", L("Текстура ресурса", "Power texture"), kind = "statusbar", ignoreGlobal = true,
-                default = "WoW Forever Raid" },
-            { "select", "rfHealthColorMode", L("Цвет здоровья", "Health colour"), default = "client", values = {
-                { "client", L("Как в клиенте", "Client") }, { "class", L("Цвет класса", "Class colour") },
-                { "custom", L("Свой цвет", "Custom") }, { "gradient", L("Градиент по здоровью", "Health gradient") } } },
-            { "color", "rfHealthColor", L("Свой цвет здоровья", "Custom health colour"), default = { 0.22, 0.78, 0.32 },
-                depends = function(get) return get("rfHealthColorMode") == "custom" end },
             { "color", "rfBackgroundColor", L("Фон фрейма", "Frame background"), alpha = true, default = { 0.07, 0.07, 0.08, 0.9 } },
             { "toggle", "rfBackgroundForever", L("Фон WoW Forever", "WoW Forever background"), default = true },
-            { "select", "rfDeficitText", L("Текст здоровья", "Health text"), default = "none", values = {
-                { "none", L("Нет", "None") }, { "deficit", L("Дефицит (-12.3k)", "Deficit (-12.3k)") },
-                { "percent", L("Проценты", "Percent") }, { "current", L("Текущее", "Current") } } },
-            { "range", "rfTextSize", L("Размер текста", "Text size"), min = 7, max = 18, step = 1, default = 10 },
         } },
-        { id = "heal", title = L("Входящее лечение", "Incoming heals"), group = G_BAR, options = {
-            { "toggle", "rfHealPrediction", L("Входящее исцеление", "Incoming heals"), default = true,
-                tooltip = L("Источник: API клиента или LibHealComm-4.0 (если её загрузил другой аддон).",
-                    "Source: the client API or LibHealComm-4.0 when another addon loads it.") },
-            { "color", "rfHealColor", L("Цвет входящего исцеления", "Incoming heal colour"), alpha = true,
-                default = { 0.25, 0.95, 0.45, 0.55 }, depends = "rfHealPrediction" },
+        { id = "power", title = L("Полоса ресурса", "Power bar"), group = G_BAR,
+            description = L("Работает, когда полосы ресурсов включены в профиле рейда клиента. Высота и зазор "
+                .. "меняются только вне боя.", "Works when power bars are on in the client's raid profile. Height "
+                .. "and gap change out of combat only."), options = {
+            { "media", "rfPowerTexture", L("Текстура ресурса", "Power texture"), kind = "statusbar", ignoreGlobal = true,
+                default = "WoW Forever Raid" },
+            { "select", "rfPowerColorMode", L("Цвет ресурса", "Power colour"), default = "light", values = {
+                { "light", L("Светлее, чем в клиенте", "Lighter than the client") },
+                { "client", L("Как в клиенте", "Client") }, { "custom", L("Свой по типу", "Custom per type") } } },
+            { "range", "rfPowerLighten", L("Осветление", "Lighten"), min = 0, max = 60, step = 5, default = 25,
+                suffix = "%", depends = function(get) return get("rfPowerColorMode") == "light" end,
+                tooltip = L("Насколько цвет клиента смешивается с белым.", "How much of white goes into the client's colour.") },
+            { "color", "rfPowerColorMana", L("Мана", "Mana"), default = { 0.25, 0.5, 1 },
+                depends = function(get) return get("rfPowerColorMode") == "custom" end },
+            { "color", "rfPowerColorRage", L("Ярость", "Rage"), default = { 0.9, 0.22, 0.22 },
+                depends = function(get) return get("rfPowerColorMode") == "custom" end },
+            { "color", "rfPowerColorEnergy", L("Энергия", "Energy"), default = { 1, 0.88, 0.3 },
+                depends = function(get) return get("rfPowerColorMode") == "custom" end },
+            { "color", "rfPowerColorRunic", L("Сила рун", "Runic power"), default = { 0.25, 0.8, 1 },
+                depends = function(get) return get("rfPowerColorMode") == "custom" end },
+            { "range", "rfPowerHeight", L("Высота полосы", "Bar height"), min = 0, max = 16, step = 1, default = 0,
+                protected = true, tooltip = L("0 — как в клиенте. Полоса здоровья занимает остальное место.",
+                    "0 is the client's height. The health bar takes the rest.") },
+            { "range", "rfPowerGap", L("Зазор над полосой", "Gap above the bar"), min = 0, max = 3, step = 1, default = 0,
+                protected = true },
+            { "toggle", "rfPowerDivider", L("Разделитель над полосой", "Divider above the bar"), default = false,
+                tooltip = L("Тонкая линия между здоровьем и ресурсом; при зазоре заполняет его.",
+                    "A thin line between health and power; with a gap it fills the gap.") },
+            { "color", "rfPowerDividerColor", L("Цвет разделителя", "Divider colour"), alpha = true,
+                default = { 0, 0, 0, 0.9 }, depends = "rfPowerDivider" },
+            { "toggle", "rfPowerBack", L("Свой фон под ресурсом", "Own background under the power"), default = false },
+            { "color", "rfPowerBackColor", L("Цвет фона", "Background colour"), alpha = true,
+                default = { 0.03, 0.06, 0.14, 0.85 }, depends = "rfPowerBack" },
         } },
-        { id = "shield", title = L("Линия щита", "Shield line"), group = G_BAR,
-            description = L("Свечение (glow) у щита клиента убрано полностью. Своя линия рисуется по данным API клиента "
-                .. "или по ширине его штатной полосы.", "The client shield glow is removed entirely. The line is drawn "
-                .. "from the client API or from the width of its own bar."), options = {
-            { "toggle", "rfShield", L("Показывать линию щита", "Show the shield line"), default = true },
-            { "toggle", "rfHideAbsorbGlow", L("Убрать свечение щита", "Remove the shield glow"), default = true },
-            { "media", "rfShieldTexture", L("Текстура", "Texture"), kind = "statusbar", ignoreGlobal = true,
-                default = "WoW Forever Raid", depends = "rfShield" },
-            { "color", "rfShieldColor", L("Цвет", "Colour"), alpha = true, default = { 0.85, 0.95, 1, 1 }, depends = "rfShield" },
-            { "range", "rfShieldAlpha", L("Прозрачность", "Opacity"), min = 0.05, max = 1, step = 0.05, default = 0.7,
-                depends = "rfShield" },
-            { "range", "rfShieldHeight", L("Толщина, px (0 — во всю высоту)", "Thickness, px (0 = full height)"),
-                min = 0, max = 40, step = 1, default = 0, depends = "rfShield" },
-            { "select", "rfShieldMode", L("Привязка к здоровью", "Attach to health"), default = "attached", depends = "rfShield",
-                values = { { "attached", L("После здоровья (обрезать)", "After health (clipped)") },
-                    { "overlay", L("После здоровья, сверх — поверх", "After health, overflow on top") },
-                    { "reverse", L("От правого края", "From the right edge") },
-                    { "line", L("От левого края", "From the left edge") } } },
-            { "select", "rfShieldAlign", L("Вертикально", "Vertical position"), default = "BOTTOM", depends = "rfShield",
-                values = { { "BOTTOM", L("Снизу", "Bottom") }, { "CENTER", L("По центру", "Centre") }, { "TOP", L("Сверху", "Top") } } },
-        } },
-        { id = "threat", title = L("Угроза", "Threat"), group = G_BAR, options = {
-            { "toggle", "rfThreat", L("Рамка угрозы", "Threat border"), default = true },
-            { "range", "rfBorderSize", L("Толщина рамки угрозы", "Threat border size"), min = 1, max = 4, step = 1, default = 2,
-                depends = "rfThreat" },
-        } },
-        { id = "range", title = L("Вне радиуса", "Out of range"), group = G_BAR, options = {
-            { "select", "rfRangeMode", L("Вне радиуса", "Out of range"), default = "custom", values = {
-                { "client", L("Как в клиенте", "Client") }, { "custom", L("Своя прозрачность", "Own opacity") } } },
-            { "range", "rfRangeAlpha", L("Прозрачность вне радиуса", "Out of range opacity"), min = 0.1, max = 1, step = 0.05,
-                default = 0.4, depends = function(get) return get("rfRangeMode") == "custom" end },
-            { "toggle", "rfRangeFade", L("Плавное затухание", "Smooth fade"), default = true,
-                depends = function(get) return get("rfRangeMode") == "custom" end },
-        } },
-        { id = "name", title = L("Имя", "Name"), group = G_TEXT,
-            description = L("Собственный текст имени вместо текста клиента: шрифт, размер, обводка, обрезка и место "
-                .. "на фрейме.", "Own name text instead of the client's: font, size, outline, truncation and place on "
-                .. "the frame."), options = {
-            { "toggle", "rfNameCustom", L("Свой текст имени", "Own name text"), default = true, width = "full",
-                tooltip = L("Выключено — имя рисует клиент, настройки ниже не действуют.",
-                    "Off: the client draws the name and the settings below do nothing.") },
-            { "media", "rfNameFont", L("Шрифт", "Font"), kind = "font", ignoreGlobal = true, default = 1,
-                depends = "rfNameCustom" },
-            { "range", "rfNameSize", L("Размер шрифта", "Font size"), min = 8, max = 24, step = 1, default = 11,
-                depends = "rfNameCustom" },
-            { "select", "rfNameOutline", L("Обводка", "Outline"), default = "OUTLINE", depends = "rfNameCustom", values = {
-                { "", L("Без обводки", "None") }, { "OUTLINE", L("Тонкая", "Thin") },
-                { "THICKOUTLINE", L("Толстая", "Thick") }, { "MONOCHROME", L("Без сглаживания", "Monochrome") },
-                { "OUTLINE, MONOCHROME", L("Тонкая, без сглаживания", "Thin, monochrome") } } },
-            { "toggle", "rfNameShadow", L("Тень", "Shadow"), default = false, depends = "rfNameCustom" },
-            { "range", "rfNameMaxLetters", L("Максимум букв (0 — все)", "Maximum letters (0 = all)"), min = 0, max = 20,
-                step = 1, default = 0, depends = "rfNameCustom" },
-            { "toggle", "rfNameFit", L("Обрезать по ширине фрейма", "Cut to the frame width"), default = true,
-                depends = "rfNameCustom", tooltip = L("Длинное имя укорачивается, пока не поместится во фрейм.",
-                    "A long name is shortened until it fits the frame.") },
-            { "select", "rfNameColorMode", L("Цвет имени", "Name colour"), default = "custom", depends = "rfNameCustom",
-                values = { { "class", L("Цвет класса", "Class colour") }, { "custom", L("Свой цвет", "Custom") } } },
-            { "color", "rfNameColor", L("Свой цвет имени", "Custom name colour"), default = { 1, 1, 1 },
-                depends = function(get) return get("rfNameCustom") and get("rfNameColorMode") == "custom" end },
-            { "select", "rfNameAnchor", L("Позиция", "Position"), values = anchors, default = "CENTER",
-                depends = "rfNameCustom" },
-            { "range", "rfNameX", L("Смещение X", "Offset X"), min = -40, max = 40, step = 1, default = 0,
-                depends = "rfNameCustom" },
-            { "range", "rfNameY", L("Смещение Y", "Offset Y"), min = -40, max = 40, step = 1, default = 1,
-                depends = "rfNameCustom" },
-        } },
-        { id = "hover", title = L("Наведение и цель", "Hover and target"), group = G_TEXT,
-            description = L("Подсветка фрейма под курсором и рамка вокруг вашей текущей цели.", "Highlight of the "
-                .. "frame under the cursor and a border around your current target."), options = {
+        { id = "hover", title = L("Наведение", "Hover"), group = G_TEXT,
+            description = L("Подсветка фрейма под курсором. Текущую цель выделяет клиент.", "Highlight of the "
+                .. "frame under the cursor. The client marks your current target."), options = {
             { "toggle", "rfHover", L("Подсветка наведения", "Hover highlight"), default = true },
             { "select", "rfHoverStyle", L("Вид подсветки", "Highlight style"), default = "both", depends = "rfHover",
                 values = { { "both", L("Рамка и осветление", "Border and wash") }, { "border", L("Только рамка", "Border only") },
                     { "fill", L("Только осветление", "Wash only") } } },
             { "color", "rfHoverColor", L("Цвет и прозрачность наведения", "Hover colour and opacity"), alpha = true,
                 default = { 1, 1, 1, 0.85 }, depends = "rfHover" },
-            { "toggle", "rfTarget", L("Рамка текущей цели", "Target border"), default = true },
-            { "toggle", "rfTargetClass", L("Рамка цели цветом класса", "Class-coloured target border"), default = false,
-                depends = "rfTarget" },
-            { "color", "rfTargetColor", L("Цвет и прозрачность рамки цели", "Target border colour and opacity"),
-                alpha = true, default = { 1, 0.82, 0.3, 1 }, depends = "rfTarget",
-                tooltip = L("При рамке цветом класса отсюда берётся только прозрачность.",
-                    "With the class colour on, only the opacity is taken from here.") },
-            { "range", "rfTargetSize", L("Толщина рамки цели", "Target border size"), min = 1, max = 4, step = 1,
-                default = 2, depends = "rfTarget" },
-            { "toggle", "rfTargetHideClient", L("Скрыть выделение цели клиента", "Hide the client's target highlight"),
-                default = true, depends = "rfTarget" },
         } },
         { id = "drink", title = L("Питьё", "Drinking"), group = G_TEXT,
             description = L("Надпись «Пьёт - - -» внизу слева, пока игрок пьёт (бафф «Питье» или «Потребление пищи "
@@ -1043,38 +851,6 @@ ui.RegisterOptions("raidframes", {
             { "range", "rfDebuffY", L("Смещение Y", "Offset Y"), min = -40, max = 40, step = 1, default = 2, depends = "rfDebuffs" },
             { "range", "rfDispelScale", L("Увеличение рассеиваемых", "Dispellable scale"), min = 1, max = 2, step = 0.05,
                 default = 1.25, depends = "rfDebuffs" },
-        } },
-        { id = "dispel", title = L("Рассеивание", "Dispel"), group = G_AURA,
-            description = L("Подсветка фрейма цветом типа дебаффа: магия, проклятие, болезнь, яд.", "The frame lights up "
-                .. "in the colour of the debuff type: magic, curse, disease, poison."), options = {
-            { "toggle", "rfDispelHighlight", L("Подсветка по типу дебаффа", "Highlight by debuff type"), default = true },
-            { "toggle", "rfDispelOnlyMine", L("Только то, что я могу рассеять", "Only what I can dispel"), default = true,
-                depends = "rfDispelHighlight", tooltip = L("Учитываются класс, изученные заклинания, таланты и охотник Скверны.",
-                    "Class, learned spells, talents and the felhunter are taken into account.") },
-            { "select", "rfDispelStyle", L("Вид подсветки", "Highlight style"), default = "both", depends = "rfDispelHighlight",
-                values = { { "border", L("Рамка WoW Forever", "WoW Forever outline") }, { "overlay", L("Градиент", "Gradient") },
-                    { "both", L("Рамка и градиент", "Outline and gradient") } } },
-            { "range", "rfDispelAlpha", L("Яркость градиента", "Gradient strength"), min = 0.1, max = 1, step = 0.05,
-                default = 0.45, depends = "rfDispelHighlight" },
-            { "toggle", "rfDispelIcon", L("Значок типа (магия, яд…)", "Type icon (magic, poison…)"), default = true,
-                depends = "rfDispelHighlight" },
-            { "range", "rfDispelIconSize", L("Размер значка", "Icon size"), min = 8, max = 28, step = 1, default = 13,
-                depends = "rfDispelIcon" },
-            { "select", "rfDispelIconAnchor", L("Позиция значка", "Icon position"), values = anchors, default = "TOPRIGHT",
-                depends = "rfDispelIcon" },
-        } },
-        { id = "exclusions", title = L("Исключения дебаффов", "Debuff exclusions"), group = G_AURA,
-            description = L("Эти дебаффы не показываются на фреймах. Рекомендуемые (список Cell, дополненный): "
-                .. "Призрак, Истощение, Пресыщение, Слабость после воскрешения, Дезертир, Недавняя перевязка, "
-                .. "Гипотермия, Ревностный защитник, Холод Трона и другие.",
-                "These debuffs are never shown on the frames. Recommended (Cell's list, extended): Ghost, Exhaustion, "
-                .. "Sated, Resurrection Sickness, Deserter, Recently Bandaged, Hypothermia, Ardent Defender, Chill of "
-                .. "the Throne and more."), options = {
-            { "custom", build = exclusionEditor("rfDebuffHide", L("Скрытые дебаффы не рисуются иконкой и не дают подсветку "
-                .. "рассеивания. Индикаторы их видят.", "Hidden debuffs get no icon and no dispel highlight. Indicators still see them.")),
-                refresh = function(holder)
-                if holder.refreshrfDebuffHide then holder.refreshrfDebuffHide() end
-            end },
         } },
         { id = "indicators", title = L("Индикаторы", "Indicators"), group = G_AURA,
             hint = L("HoT, щиты и баффы класса в углах фрейма.", "HoTs, shields and class buffs in the frame corners."),

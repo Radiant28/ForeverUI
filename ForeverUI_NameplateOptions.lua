@@ -21,8 +21,8 @@ local numbers = {
     {"castY", "Смещение каста Y", "Cast offset Y", 0, 80, 1, 4},
     {"castIconSize", "Размер иконки заклинания", "Cast icon size", 8, 36, 1, 15},
     {"castTextSize", "Размер текста заклинания", "Cast text size", 6, 24, 1, 8},
-    {"nameSizeEnemy", "Размер имени врага", "Enemy name size", 8, 26, 1, 14},
-    {"nameSizeFriend", "Размер имени союзника", "Friendly name size", 8, 26, 1, 14},
+    {"nameSizeEnemy", "Размер имени врага", "Enemy name size", 8, 26, 1, 12},
+    {"nameSizeFriend", "Размер имени союзника", "Friendly name size", 8, 26, 1, 12},
     {"nameLift", "Отступ имени", "Name spacing", 0, 24, 1, 6},
     {"nameX", "Смещение имени X", "Name offset X", -80, 80, 1, 0},
     {"nameMaxLetters", "Букв в имени (0 = все)", "Name letters (0 = all)", 0, 40, 1, 0},
@@ -743,6 +743,7 @@ function wfn.RegisterSlash()
         elseif (cmd == "perf" or cmd == "cost") and arg == "dump" then wfn.Print(report)
         elseif cmd == "perf" or cmd == "cost" then TogglePerf()
         elseif cmd == "class" and wfn.DebugClasses then wfn.DebugClasses()
+        elseif cmd == "elite" and wfn.DebugElite then wfn.DebugElite()
         elseif cmd == "check" then
             local hostVersion = GetAddOnMetadata and GetAddOnMetadata(addonName, "Version")
             wfn.Print(L("Сканер WorldFrame активен", "WorldFrame scanner active") .. " — " .. API.Version
@@ -752,6 +753,6 @@ function wfn.RegisterSlash()
                 .. ", nameplateOverlapV=" .. (GetCVar("nameplateOverlapV") or unavailable)
                 .. ", nameplateMaxDistance=" .. (GetCVar("nameplateMaxDistance") or GetCVar("nameplateDistance") or unavailable))
         elseif cmd == "" then wfn.OpenOptions()
-        else wfn.Print("/wfn: preview [friend|enemy], boxes, check, class, perf [dump]") end
+        else wfn.Print("/wfn: preview [friend|enemy], boxes, check, class, elite, perf [dump]") end
     end
 end

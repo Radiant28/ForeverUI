@@ -4,18 +4,42 @@ local timeArt = art .. "Map\\Map-calendar"
 local headerTexture = art .. "Map\\Map-top"
 local headerIcons = art .. "Map\\Map-HeaderIcons"
 
--- The Retail layout swaps the bronze rim for DragonUI's silver ring with gold compass marks (same 200 px canvas and
--- ring radius, so every button position stays valid).
+local function isRetail()
+    return ui.Settings and ui.Settings().barLayout == "retail"
+end
+
+-- The Retail layout swaps the bronze rim for DragonUI's silver ring with gold compass marks. In its 256 px file the
+-- ring is not centred (centre 128.9, 130.4) and its band spans 107.5..115.7 px, so it is drawn at 194 px and nudged
+-- back: the band then starts at 81.4 px and covers the map edge (82.5 px) the way Map-Rim does.
+local RETAIL_RIM = { size = 194, x = -0.7, y = 1.8 }
+-- Gold compass marks of the Retail ring, {x, y, halfWidth, halfHeight} from the minimap centre.
+local retailMarks = {
+    { 0, 87.8, 16.5, 8 },      -- top double chevron
+    { 0, -86.5, 9, 4.5 },      -- bottom
+    { -86.4, -0.8, 4.6, 8.8 }, -- left
+    { 86.1, -0.5, 4.3, 9.1 },  -- right
+}
+local coordinates
 local function applyRim()
-    local retail = ui.Settings and ui.Settings().barLayout == "retail"
+    local retail = isRetail()
     -- Classic: the WoW Forever ring (uiminimapc60, band middle scaled to the same 85.5 px radius as Map-Rim).
     MinimapBorder:SetTexture(art .. (retail and "Map\\Retail-Border" or "Forever\\Minimap-Ring"))
+    MinimapBorder:SetTexCoord(0, 1, 0, 1)
+    MinimapBorder:ClearAllPoints()
+    if retail then
+        MinimapBorder:SetSize(RETAIL_RIM.size, RETAIL_RIM.size)
+        MinimapBorder:SetPoint("CENTER", Minimap, "CENTER", RETAIL_RIM.x, RETAIL_RIM.y)
+    else
+        MinimapBorder:SetSize(200, 200)
+        MinimapBorder:SetPoint("CENTER", Minimap, "CENTER")
+    end
+    -- The bottom mark of the Retail ring reaches 91 px; keep the coordinates clear of it.
+    if coordinates then
+        coordinates:ClearAllPoints()
+        coordinates:SetPoint("TOP", Minimap, "BOTTOM", 0, retail and -13 or -10)
+    end
 end
 applyRim()
-MinimapBorder:SetTexCoord(0, 1, 0, 1)
-MinimapBorder:SetSize(200, 200)
-MinimapBorder:ClearAllPoints()
-MinimapBorder:SetPoint("CENTER", Minimap, "CENTER")
 MinimapBorderTop:SetAlpha(0)
 
 local function anchor(region, point, relative, relativePoint, x, y)
@@ -233,9 +257,9 @@ Minimap:SetScript("OnMouseWheel", function(_, delta)
     if delta < 0 then MinimapZoomOut:Click() end
 end)
 
-local coordinates = Minimap:CreateFontString(nil, "OVERLAY")
+coordinates = Minimap:CreateFontString(nil, "OVERLAY")
 coordinates:SetFont(STANDARD_TEXT_FONT, 9, "OUTLINE")
-coordinates:SetPoint("TOP", Minimap, "BOTTOM", 0, -10)
+applyRim()
 local clock = header:CreateFontString(nil, "OVERLAY")
 clock:SetFont(STANDARD_TEXT_FONT, 9, "OUTLINE")
 clock:SetPoint("RIGHT", header, "RIGHT", -23, 0)
@@ -340,15 +364,24 @@ end
 local function stockBlocks()
     local half = Minimap:GetWidth() / 2
     local top = half + headerGap
+    local retail = isRetail()
     local blocks = {
         { 0, top + 10, 83, 10 },             -- header: tracking, zone, clock, calendar
         { 73.6, top - 10, 8, 8 },            -- date badge
         { -65.8, top - 10.7, 10.7, 10.7 },   -- mail at 0.65 scale
-        { moonX, moonY, 12, 12 },
         { battlefieldX, battlefieldY, 18, 18 },
-        { 0, -half - 14.5, 24, 5 },          -- coordinates
+        { 0, -half - (retail and 17.5 or 14.5), 24, 5 }, -- coordinates
     }
     if queue then blocks[#blocks + 1] = { eyeX, eyeY, 17.5, 17.5 } end
+    if retail then
+        -- No day/night badge in Retail, but the gold compass marks must stay visible.
+        local k = half / 82.5
+        for _, mark in ipairs(retailMarks) do
+            blocks[#blocks + 1] = { mark[1] * k, mark[2] * k, mark[3] * k, mark[4] * k }
+        end
+    else
+        blocks[#blocks + 1] = { moonX, moonY, 12, 12 }
+    end
     return blocks
 end
 
@@ -672,6 +705,8 @@ events:SetScript("OnEvent", function(_, event, name)
         ui.RegisterEditFrame(MinimapCluster, nil, "minimap", ui.OptionBinding("minimap", "mapScale"))
     end
     if event == "PLAYER_LOGIN" then
+        -- The file runs before SavedVariables load, so the Retail ring and header are only known from here on.
+        applyRim()
         applyHeader()
         -- WoW Forever arrows for the quest/guide and corpse pointers. Each setter is used only if the client has
         -- it; the player's own arrow is a model in 3.3.5 and stays as it is.
@@ -690,4 +725,6 @@ end)
 ui.Minimap = { Layout = function() scheduleLayout() end, ApplyLayout = function()
     applyRim()
     applyHeader()
+    -- Ring buttons move off the compass marks of the Retail ring (and back onto them in Classic).
+    scheduleLayout()
 end }

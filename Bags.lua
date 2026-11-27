@@ -239,9 +239,9 @@ local function toolbarButton(window, name, relative, label, texture, onClick)
     return button
 end
 
--- Currency spoiler: a small arrow at the left of the backpack footer opens a list of every currency the character
--- has (the Currency tab of the character window), without gold, silver and copper.
-local CURRENCY_ROW, CURRENCY_MAX_ROWS = 16, 20
+-- Currency spoiler: hovering the small arrow at the left of the backpack footer opens a list of every currency the
+-- character has (the Currency tab of the character window), without gold, silver and copper.
+local CURRENCY_ROW, CURRENCY_MAX_ROWS, CURRENCY_HOVER_GAP = 16, 20, 4
 
 local function currencyIcon(icon, extraType)
     if extraType == 1 then return "Interface\\PVPFrame\\PVP-ArenaPoints-Icon" end
@@ -394,15 +394,17 @@ local function createCurrencies(window, footer, name)
     panel:SetScript("OnEvent", update)
     window:HookScript("OnHide", function() panel:Hide() end)
 
-    button:SetScript("OnClick", function()
-        if panel:IsShown() then panel:Hide() else panel:Show() end
+    -- The list opens on hover over the arrow and closes on the first frame the cursor is over neither the arrow nor
+    -- the list. The list's hover area reaches CURRENCY_HOVER_GAP px below its bottom edge, over the gap to the arrow,
+    -- so crossing from the arrow to the list does not close it.
+    local function hovered(frame, bottom)
+        if frame.IsMouseOver then return frame:IsMouseOver(0, bottom or 0, 0, 0) end
+        return MouseIsOver and MouseIsOver(frame, 0, bottom or 0, 0, 0)
+    end
+    panel:SetScript("OnUpdate", function(self)
+        if not (hovered(button) or hovered(self, -CURRENCY_HOVER_GAP)) then self:Hide() end
     end)
-    button:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText(CURRENCY or (ru and "Валюта" or "Currency"))
-        GameTooltip:Show()
-    end)
-    button:SetScript("OnLeave", GameTooltip_Hide)
+    button:SetScript("OnEnter", function() panel:Show() end)
     setArrow()
     return button, panel
 end

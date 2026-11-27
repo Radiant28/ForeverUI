@@ -12,6 +12,9 @@ ui.RegisterOptions("actionbars", {
     sections = {
         { title = L("Оформление", "Styling"), options = {
             { "toggle", "showGryphons", L("Грифоны по краям", "Gryphons at the ends"), default = true },
+            { "toggle", "barArtHidden", L("Без фона панелей и грифонов", "No bar background or gryphons"), default = false,
+                tooltip = L("Остаются только кнопки: без фона основной панели, панелей стоек, питомца и подчинения и без грифонов. То же — в режиме редактирования.",
+                    "Only the buttons stay: no background of the main, stance, pet and possess bars, no gryphons. Also in Edit Mode.") },
             { "color", "barArtColor", L("Оттенок панели и грифонов", "Bar and gryphon tint"), default = { 1, 0.84, 0.65 } },
             { "toggle", "barStockTint", L("Оттенок на фоне штатной панели", "Tint the stock bar background"), default = false,
                 tooltip = L("Прежний вид: фон панели перекрашивается оттенком панели. Выключено — штатные цвета Blizzard.",

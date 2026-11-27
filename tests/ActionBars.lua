@@ -63,7 +63,22 @@ function P:RegisterEvent(e) self.events = rawget(self, "events") or {}; self.eve
 function P:UnregisterEvent(e) if rawget(self, "events") then self.events[e] = nil end end
 function P:GetNormalTexture() return self.normal end
 
-function CreateFrame(_, name, parent) return new(name, parent) end
+function CreateFrame(_, name, parent, template)
+    local f = new(name, parent)
+    f.template = template
+    return f
+end
+-- Secure handler (bonus bar header): attributes, frame refs, wrapped scripts, state drivers.
+function P:SetAttribute(k, v) self.attrs = rawget(self, "attrs") or {}; self.attrs[k] = v end
+function P:GetAttribute(k) return rawget(self, "attrs") and self.attrs[k] end
+function P:SetFrameRef(k, f) self:SetAttribute("frameref-" .. k, f) end
+function P:GetFrameRef(k) return self:GetAttribute("frameref-" .. k) end
+function P:WrapScript(frame, script, body) frame.wraps = frame.wraps or {}; frame.wraps[script] = { self, body } end
+function P:HookScript(n, fn) self.hooks = rawget(self, "hooks") or {}; self.hooks[n] = fn end
+local bonusOffset = 0
+function GetBonusBarOffset() return bonusOffset end
+local drivers = {}
+function RegisterStateDriver(frame, state, cond) drivers[#drivers + 1] = { frame, state, cond } end
 function hooksecurefunc(a, b, c)
     if type(a) == "table" then return end
     local old = _G[a] or noop
@@ -74,7 +89,13 @@ function InCombatLockdown() return false end
 SlashCmdList = {}
 
 local settings = { barLayout = "classic", barWingsBack = true }
+local combatQueue = {}
 local ui = { Settings = function() return settings end }
+ui.RunOutOfCombat = function(token, fn)
+    if InCombatLockdown() then combatQueue[token] = fn return false end
+    fn()
+    return true
+end
 
 UIParent = new("UIParent")
 MainMenuBar = new("MainMenuBar", UIParent)
@@ -297,10 +318,123 @@ settings.barLayout = "classic"
 AB.Apply()
 assert(MainMenuBarLeftEndCap.alpha == 1, "cap shown again")
 
+-- No bar background or gryphons (editor switch): only the buttons stay, in both layouts.
+local sideArt = {}
+for _, name in ipairs({ "ShapeshiftBarLeft", "ShapeshiftBarMiddle", "ShapeshiftBarRight",
+    "SlidingActionBarTexture0", "SlidingActionBarTexture1", "PossessBackground1", "PossessBackground2" }) do
+    sideArt[#sideArt + 1] = new(name, UIParent, "Texture")
+end
+local function bareCheck(hidden, label)
+    local want = hidden and 0 or 1
+    for i = 0, 3 do
+        assert(_G["MainMenuBarTexture" .. i].alpha == want, label .. ": strip " .. i)
+        assert(_G["MainMenuMaxLevelBar" .. i].alpha == want, label .. ": max-level bar " .. i)
+    end
+    assert(BonusActionBarTexture0.alpha == want and BonusActionBarTexture1.alpha == want, label .. ": bonus strip")
+    for _, texture in ipairs(sideArt) do assert(texture.alpha == want, label .. ": " .. texture.name) end
+    assert(MainMenuBarLeftEndCap.alpha == want and MainMenuBarRightEndCap.alpha == want, label .. ": gryphons")
+    for i = 1, 12 do assert(AB.wings[i].shown, label .. ": slot backdrops keep their own switch " .. i) end
+end
+settings.barArtHidden = true
+AB.Apply()
+bareCheck(true, "Classic bare")
+settings.barLayout = "retail"
+AB.Apply()
+for i = 0, 3 do assert(_G["MainMenuBarTexture" .. i].alpha == 0, "Retail bare strip " .. i) end
+assert(MainMenuBarLeftEndCap.alpha == 0 and sideArt[1].alpha == 0, "Retail bare: gryphons and side art")
+settings.barLayout, settings.barArtHidden = "classic", false
+AB.Apply()
+bareCheck(false, "Classic with art")
+
 -- Pure function.
 local l, r, b, t = AB.WingOutsets({ l = 10, r = 46, b = 4, t = 40 }, {}, nil, 2, 1)
 assert(l == 2 and r == 2 and b == 2 and t == 2, "no fences")
 l, r, b, t = AB.WingOutsets({ l = 10, r = 46, b = 4, t = 40 }, { { l = 0, r = 100, b = 41, t = 50 } }, nil, 2, 2)
 assert(t == 0.5, "fence room in button units")
+
+-- Bonus bar: hidden in forms and stances (also in combat, through the secure header), shown for possess.
+local header = AB.bonusHeader
+assert(header and header.template == "SecureHandlerStateTemplate", "secure state header")
+assert(not AB.bonusStats.error, "no setup error")
+assert(header:GetFrameRef("bonus") == BonusActionBarFrame, "frame ref to the bonus bar")
+local driver = drivers[#drivers]
+assert(driver[1] == header and driver[2] == "bonus" and driver[3] == "[bonusbar:5] possess; none", "state driver")
+local wrap = BonusActionBarFrame.wraps and BonusActionBarFrame.wraps.OnShow
+assert(wrap and wrap[1] == header, "OnShow wrapped by the header")
+assert(not wrap[2]:find("owner"), "the wrap needs only self")
+local backup = BonusActionBarFrame.hooks and BonusActionBarFrame.hooks.OnShow
+assert(backup, "backup OnShow hook")
+-- Snippets run as bodies of restricted functions: (self, stateid, newstate) for the state, (self) for wraps.
+-- No `owner` in the wrap environment, as it may be on the client.
+local function run(body, head, ...)
+    local fn = assert(loadstring(head .. "\n" .. body))
+    setfenv(fn, setmetatable({ owner = false }, { __index = _G }))
+    fn(...)
+end
+local function setState(state)
+    header:SetAttribute("state-bonus", state)
+    run(header:GetAttribute("_onstate-bonus"), "local self, stateid, newstate = ...", header, "bonus", state)
+end
+local secureWrap = true
+local function clientShow() -- ShowBonusActionBar: Show fires the wrapped OnShow, then the hook
+    BonusActionBarFrame:Show()
+    if secureWrap then run(wrap[2], "local self = ...", BonusActionBarFrame) end
+    backup(BonusActionBarFrame)
+end
+local function boundButton(id) -- the stock ActionButtonDown pick
+    return BonusActionBarFrame:IsShown() and _G["BonusActionButton" .. id] or _G["ActionButton" .. id]
+end
+setState("none")
+assert(not BonusActionBarFrame:IsShown(), "hidden at start")
+bonusOffset = 1
+clientShow() -- cat form / battle stance / stealth / shadowform
+assert(not BonusActionBarFrame:IsShown(), "form does not show the bonus bar")
+assert(AB.bonusStats.missed == 0, "the secure hide did it")
+for i = 1, 12 do
+    assert(_G["ActionButton" .. i].shown and _G["ActionButton" .. i].alpha == 1, "main button kept " .. i)
+    assert(boundButton(i) == _G["ActionButton" .. i], "key goes to the main button " .. i)
+end
+bonusOffset = 5
+setState("possess")
+assert(BonusActionBarFrame:IsShown(), "possess shows the bar")
+clientShow()
+assert(BonusActionBarFrame:IsShown() and boundButton(1) == BonusActionButton1, "possess keeps its keys")
+bonusOffset = 0
+setState("none")
+assert(not BonusActionBarFrame:IsShown(), "hidden after possess")
+
+-- The secure hide does nothing on the client: the backup hides it out of combat, in combat once it ends.
+secureWrap, bonusOffset = false, 3
+clientShow()
+assert(not BonusActionBarFrame:IsShown() and AB.bonusStats.missed == 1, "backup hides it")
+InCombatLockdown = function() return true end
+clientShow()
+assert(BonusActionBarFrame:IsShown() and combatQueue["bonusbar-hide"], "in combat: queued")
+InCombatLockdown = function() return false end
+combatQueue["bonusbar-hide"]()
+assert(not BonusActionBarFrame:IsShown(), "hidden after combat")
+bonusOffset = 5
+clientShow()
+assert(BonusActionBarFrame:IsShown(), "backup keeps possess")
+BonusActionBarFrame:Hide()
+
+-- Without secure handlers: hidden after ShowBonusActionBar, out of combat.
+bonusOffset = 1
+function ShowBonusActionBar() BonusActionBarFrame:Show() end
+RegisterStateDriver = nil
+local ui2 = { Settings = ui.Settings, RunOutOfCombat = ui.RunOutOfCombat }
+assert(loadfile("StockPanels.lua"))("ForeverUI", ui2)
+assert(not ui2.ActionBars.bonusHeader and ui2.ActionBars.bonusStats.error, "fallback without a header")
+ShowBonusActionBar()
+assert(not BonusActionBarFrame:IsShown(), "fallback hides it")
+assert(SlashCmdList.FOREVERUIBONUS, "/fuibonus")
+ui2.ActionBars.bonusHeader = header
+local probes = {}
+function header:Execute(body) probes[#probes + 1] = body end
+local realPrint = print
+print = function() end
+SlashCmdList.FOREVERUIBONUS("")
+print = realPrint
+assert(#probes == 1 and probes[1]:find("bar:Hide"), "/fuibonus probes the secure hide")
 
 print("ActionBars tests passed")

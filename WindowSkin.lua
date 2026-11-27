@@ -215,7 +215,9 @@ local WINDOWS = {
         -- Maximize / minimize swap places next to the close button: they join the header.
         headerButtons = { "WorldMapFrameSizeUpButton", "WorldMapFrameSizeDownButton" }, headerShare = true,
         -- Their WoW Forever faces (columns of Window-Buttons.tga): maximize, minimize.
-        headerArt = { WorldMapFrameSizeUpButton = 2, WorldMapFrameSizeDownButton = 0 } },
+        headerArt = { WorldMapFrameSizeUpButton = 2, WorldMapFrameSizeDownButton = 0 },
+        -- Maximized, the navigation bar starts at x 8, under the ring: its left end moves past the ring.
+        clearRing = { "WorldMapFrameNavBar" } },
     { "NozdorCollectionsFrame", "Коллекции", "Collections" },
     { "EncounterJournal", "Путеводитель приключений", "Adventure Guide",
         tabs = { "EncounterJournalInstanceSelectDungeonTab", "EncounterJournalInstanceSelectRaidTab",
@@ -295,7 +297,7 @@ for _, w in ipairs(WINDOWS) do
         unit = w.unit, portraits = w.portraits, refresh = w.refresh, refreshFrames = w.refreshFrames,
         portrait = w.portrait, portraitScale = w.portraitScale, portraitWhole = w.portraitWhole, tabs = w.tabs,
         icons = w.icons, tabsOver = w.tabsOver, tabOverlap = w.tabOverlap, raise = w.raise, under = w.under, leftOut = w.leftOut, guildCells = w.guildCells, merchantCells = w.merchantCells,
-        icon = w.icon, hide = w.hide }
+        icon = w.icon, hide = w.hide, clearRing = w.clearRing }
     if w.slots then
         recipe.slots = {}
         for _, suffix in ipairs(SLOT_SUFFIXES) do recipe.slots[#recipe.slots + 1] = w.slots .. suffix end
@@ -351,6 +353,112 @@ local function keepHidden(st, region)
     end)
 end
 
+-- Frames that must not lie under the ring (recipe.clearRing; the map's navigation bar): when one reaches under the
+-- ring, its left edge moves right to RING_CLEAR px past the ring's rim. The maximized map puts its bar at x 8 and
+-- the ring covered the "home" button; the windowed map has it at x 64, 7.5 px past the rim, as RING_CLEAR keeps.
+-- The client's own points are found again on every lay (it re-anchors the bar when the map changes size): points
+-- that are still the ones the skin set are the client's plus the shift.
+local RING_RIM = 59          -- outer radius of the ring's metal rim (texture px)
+local RING_CLEAR = 7.5
+local function samePoints(a, b)
+    if #a ~= #b then return false end
+    for i = 1, #a do
+        for k = 1, 5 do
+            local x, y = a[i][k], b[i][k]
+            if type(x) == "number" and type(y) == "number" then
+                if math.abs(x - y) > 0.01 then return false end
+            elseif x ~= y then
+                return false
+            end
+        end
+    end
+    return true
+end
+local function pointsOf(frame)
+    local points = {}
+    for i = 1, frame:GetNumPoints() do
+        local p = { frame:GetPoint(i) }
+        points[i] = { p[1], p[2], p[3], p[4] or 0, p[5] or 0 }
+    end
+    return points
+end
+local function setPoints(frame, points)
+    frame:ClearAllPoints()
+    for _, p in ipairs(points) do frame:SetPoint(p[1], p[2], p[3], p[4], p[5]) end
+end
+-- The client's points back (skin off, or before a new lay), unless the client has re-anchored the frame since.
+local function unclearRing(st)
+    for frame, saved in pairs(st.ringClear or {}) do
+        if samePoints(pointsOf(frame), saved.ours) then
+            setPoints(frame, saved.client)
+            if saved.width then frame:SetWidth(saved.width) end
+        end
+    end
+    st.ringClear = {}
+end
+-- The left edge a frame needs (screen units of the window), or nil when it does not reach under the ring.
+local function ringLimit(st, frame)
+    local chrome = st.chrome
+    local cl, ct = chrome:GetLeft(), chrome:GetTop()
+    local fl, ft = frame:GetLeft(), frame:GetTop()
+    if not (cl and ct and fl and ft) then return nil end
+    local s = (tonumber(option("foreverWindowScale", 50)) or 50) / 100
+    local c = CORNERS.TopLeftRing
+    local right = cl + (RING_X + RING_RIM - c[5]) * s
+    local bottom = ct - (RING_Y + RING_RIM - c[6]) * s
+    if ft <= bottom then return nil end          -- the frame starts below the ring
+    return right + RING_CLEAR
+end
+local function clearRing(st, names)
+    st.ringClear = st.ringClear or {}
+    if not st.ring then return end
+    for _, n in ipairs(names or {}) do
+        local frame = _G[n]
+        local limit = frame and frame.GetLeft and frame:IsShown() and ringLimit(st, frame)
+        local dx = limit and (limit - frame:GetLeft())
+        if dx and dx > 0.5 then
+            local client = pointsOf(frame)
+            local hasLeft, hasRight = false, false
+            for _, p in ipairs(client) do
+                local point = tostring(p[1])
+                if point:find("LEFT", 1, true) then hasLeft = true end
+                if point:find("RIGHT", 1, true) then hasRight = true end
+            end
+            -- The right end stays where the client put it, only the left edge moves: with a left and a right anchor
+            -- the left ones move; otherwise the frame is made narrower by the shift and its anchors follow (left
+            -- ones the whole shift, centre ones half, right ones none).
+            local narrow = not (hasLeft and hasRight)
+            local ours = {}
+            for i, p in ipairs(client) do
+                local point = tostring(p[1])
+                local move = 0
+                if point:find("LEFT", 1, true) then
+                    move = dx
+                elseif narrow and not point:find("RIGHT", 1, true) then
+                    move = dx / 2
+                end
+                ours[i] = { p[1], p[2], p[3], p[4] + move, p[5] }
+            end
+            local saved = { client = client, ours = ours }
+            setPoints(frame, ours)
+            if narrow and frame.GetWidth then
+                saved.width = frame:GetWidth()
+                frame:SetWidth(math.max(saved.width - dx, 1))
+            end
+            st.ringClear[frame] = saved
+        end
+    end
+end
+local function ringCovers(st)
+    if not st.ring then return false end
+    for _, n in ipairs(st.recipe.clearRing or {}) do
+        local frame = _G[n]
+        local limit = frame and frame.GetLeft and frame:IsShown() and ringLimit(st, frame)
+        if limit and limit - frame:GetLeft() > 0.5 then return true end
+    end
+    return false
+end
+
 local function restore(st)
     st.active = false                        -- first, so the model's and portrait's Show hooks let them show again
     st.keepHidden = {}
@@ -384,10 +492,13 @@ local function restore(st)
     st.swaps = {}
     for region, justify in pairs(st.justify or {}) do region:SetJustifyH(justify) end
     st.justify = {}
+    for region, justify in pairs(st.justifyV or {}) do region:SetJustifyV(justify) end
+    st.justifyV = {}
     for region, coords in pairs(st.coords or {}) do
         if #coords >= 4 then region:SetTexCoord(unpack(coords)) end
     end
     st.coords = {}
+    unclearRing(st)
     for frame, points in pairs(st.moved) do
         frame:ClearAllPoints()
         for _, p in ipairs(points) do frame:SetPoint(p[1], p[2], p[3], p[4], p[5]) end
@@ -1102,11 +1213,23 @@ local function metalHolder(window)
 end
 
 -- Title of the metal chrome: its TitleText, or the holder's first text.
+-- A TitleText without text loses to a text of the holder that has one: the map's holder (WorldMapFrameBorder)
+-- carries an empty TitleText, its title is WorldMapFrameTitle; the empty one was centred and the real title
+-- stayed 8 px low, on the band's lower line (tree of 2026-11-27).
+local function hasLetters(region)
+    local text = region and region.GetText and region:GetText()
+    return type(text) == "string" and text ~= ""
+end
 local function metalTitle(border)
-    if border.TitleText then return border.TitleText end
+    if hasLetters(border.TitleText) then return border.TitleText end
+    local first
     for _, region in ipairs({ border:GetRegions() }) do
-        if region.GetObjectType and region:GetObjectType() == "FontString" then return region end
+        if region.GetObjectType and region:GetObjectType() == "FontString" then
+            if hasLetters(region) then return region end
+            first = first or region
+        end
     end
+    return border.TitleText or first
 end
 
 -- The texture that shows a portrait: the region itself, or the first texture of a portrait frame.
@@ -1536,6 +1659,13 @@ local function applyWindow(window, recipe)
                 if not st.justify[title] then st.justify[title] = title:GetJustifyH() end
                 title:SetJustifyH("CENTER")
             end
+            -- A title box taller than its text, justified to the bottom, would draw the letters low: the text goes
+            -- to the middle of its box.
+            if title.GetJustifyV and title.SetJustifyV then
+                st.justifyV = st.justifyV or {}
+                if not st.justifyV[title] then st.justifyV[title] = title:GetJustifyV() end
+                title:SetJustifyV("MIDDLE")
+            end
         else
             placeTitle(st, top, s)
         end
@@ -1546,6 +1676,7 @@ local function applyWindow(window, recipe)
 
     for _, n in ipairs(recipe.hide or {}) do hide(st, _G[n]) end
     hidePortraits(st)
+    clearRing(st, recipe.clearRing)
     if option("foreverWindowGround", true) ~= false then
         for _, n in ipairs(recipe.ground or {}) do fade(st, _G[n]) end
         if metal and name then
@@ -1704,6 +1835,8 @@ local function needsRepair(st)
     if size and (math.abs((window:GetWidth() or 0) - size[1]) > 0.5 or math.abs((window:GetHeight() or 0) - size[2]) > 0.5) then
         return "move"
     end
+    -- The client put a frame back under the ring (the map's navigation bar after a mode switch): laid again.
+    if ringCovers(st) then return "move" end
     -- A client portrait hidden, faded or blanked on a tab switch, or our own ring portrait hidden: lay again.
     if st.clientPortrait and not showsPicture(st.clientPortrait) then return "move" end
     if st.ring and not st.clientPortrait and not st.portrait:IsShown() then return "move" end
@@ -1822,8 +1955,11 @@ local function buildTree(window, maxLines)
             elseif kind == "FontString" then
                 local text = region:GetText()
                 if text and text ~= "" then
-                    lines[#lines + 1] = string.format("%s  text %s \"%s\"", pad, tostring(region:GetName() or "-"),
-                        tostring(text):gsub("[\r\n\"\\]", " "))
+                    -- The centre of the text, from the window's top-left (a title placed wrong shows here).
+                    local cx, cy = region:GetCenter()
+                    local at = (cx and cy) and string.format(" centre %.0f,%.0f", cx - wl, wt - cy) or ""
+                    lines[#lines + 1] = string.format("%s  text %s \"%s\"%s %s", pad, tostring(region:GetName() or "-"),
+                        (tostring(text):gsub("[\r\n\"\\]", " ")), at, region:IsShown() and "shown" or "hidden")
                 end
             end
         end
@@ -1842,14 +1978,37 @@ end
 
 -- /fuiframe tree writes ForeverStockUIDB.frameDump; the automatic dump of each listed window goes to
 -- ForeverStockUIDB.frameDumps[<window name>] (at most 1500 lines per window).
-local function saveTree(window, perWindow)
+-- A dump at another size of the window (the maximized map) goes to frameDumps["<window>@<w>x<h>"].
+local function saveTree(window, perWindow, sizeKey)
     local ok, result = pcall(buildTree, window, perWindow and 1500 or 4000)
     local lines = ok and result or { "error " .. tostring(result) }
+    -- What the skin chose: the client's metal holder, the title it centres and where the new chrome lies.
+    local st = skins[window]
+    if ok and st and st.active then
+        local wl, wt = window:GetLeft() or 0, window:GetTop() or 0
+        local title = st.metalTitle
+        local holder = st.border
+        local cl, ct = st.chrome:GetLeft(), st.chrome:GetTop()
+        -- The title's box against its text (a box taller than the text, justified to the bottom, draws it low).
+        local box = ""
+        if title then
+            local _, size = title.GetFont and title:GetFont()
+            box = string.format(" (box h %s, text h %s, justify %s/%s, font %s)",
+                tostring(title.GetHeight and title:GetHeight()), tostring(title.GetStringHeight and title:GetStringHeight()),
+                tostring(title.GetJustifyH and title:GetJustifyH()), tostring(title.GetJustifyV and title:GetJustifyV()),
+                tostring(size))
+        end
+        table.insert(lines, 1, string.format("skin: holder %s, title %s%s, chrome %s at %s,%s",
+            tostring(holder and holder.GetName and holder:GetName() or (holder and "?" or "none")),
+            title and ("\"" .. tostring(title.GetText and title:GetText() or ""):gsub("[\r\n\"\\]", " ") .. "\"") or "none",
+            box, string.format("%.0fx%.0f", st.chrome:GetWidth() or 0, st.chrome:GetHeight() or 0),
+            cl and string.format("%.0f", cl - wl) or "?", ct and string.format("%.0f", wt - ct) or "?"))
+    end
     local db = settings()
     if perWindow then
         local name = window.GetName and window:GetName() or "?"
         db.frameDumps = type(db.frameDumps) == "table" and db.frameDumps or {}
-        db.frameDumps[name] = lines
+        db.frameDumps[sizeKey and (name .. "@" .. sizeKey) or name] = lines
     else
         db.frameDump = lines
     end
@@ -1939,7 +2098,10 @@ end
 
 -- The first opening of each window in a session saves its tree (1 s after showing, when the client has built
 -- it), so the next /reload or logout writes it to SavedVariables without any command.
-local treeWait, treeDone = {}, {}
+-- A window that opens at another size later in the session (the map maximized: the client lays it out anew) saves
+-- its tree once more per new size, to frameDumps["<window>@<w>x<h>"] (at most TREE_SIZES sizes per window).
+local TREE_SIZES = 3
+local treeWait, treeDone, treeSizes, treeKey = {}, {}, {}, {}
 local treeTimer = CreateFrame("Frame")
 treeTimer:Hide()
 treeTimer:SetScript("OnUpdate", function(self, elapsed)
@@ -1948,7 +2110,8 @@ treeTimer:SetScript("OnUpdate", function(self, elapsed)
         wait = wait - elapsed
         if wait <= 0 then
             treeWait[window] = nil
-            saveTree(window, true)
+            saveTree(window, true, treeKey[window])
+            treeKey[window] = nil
         else
             treeWait[window] = wait
             left = true
@@ -1956,9 +2119,24 @@ treeTimer:SetScript("OnUpdate", function(self, elapsed)
     end
     if not left then self:Hide() end
 end)
+local function sizeKey(window)
+    return string.format("%.0fx%.0f", window:GetWidth() or 0, window:GetHeight() or 0)
+end
 local function treeOnShow(window)
     if treeDone[window] then return end
     treeDone[window] = true
+    treeSizes[window] = { [sizeKey(window)] = true, count = 1 }
+    treeWait[window] = 1
+    treeTimer:Show()
+end
+local function treeOnSize(window)
+    local sizes = treeSizes[window]
+    if not sizes or not window:IsShown() or treeWait[window] then return end
+    local key = sizeKey(window)
+    if sizes[key] or sizes.count >= TREE_SIZES then return end
+    sizes[key] = true
+    sizes.count = sizes.count + 1
+    treeKey[window] = key
     treeWait[window] = 1
     treeTimer:Show()
 end
@@ -1999,6 +2177,7 @@ local function hookWindows()
             hookedWindows[window] = true
             window:HookScript("OnShow", onShow)
             window:HookScript("OnShow", treeOnShow)
+            window:HookScript("OnSizeChanged", treeOnSize)
             if window:IsShown() then
                 onShow(window)
                 treeOnShow(window)

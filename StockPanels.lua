@@ -52,6 +52,9 @@ local applyBonusArt -- the bonus bar's own strip (shadowform, stances, forms), d
 -- frames) keeps the plain Blizzard look: its texture, its coordinates, no tint. Coordinates are those of the
 -- client's MainMenuBar.xml; the ones read at load win when the client still has the stock file there.
 local STOCK_STRIP = "Interface\\MainMenuBar\\UI-MainMenuBar-Dwarf"
+-- Backgrounds of the stance, pet and possess bars, hidden by the editor switch `barArtHidden` (see applyArt).
+local SIDE_BAR_ART = { "ShapeshiftBarLeft", "ShapeshiftBarMiddle", "ShapeshiftBarRight",
+    "SlidingActionBarTexture0", "SlidingActionBarTexture1", "PossessBackground1", "PossessBackground2" }
 local stockStrip = {
     [0] = { 0, 1, 0.83203125, 1 }, { 0, 1, 0.58203125, 0.75 }, { 0, 1, 0.33203125, 0.5 }, { 0, 1, 0.08203125, 0.25 },
 }
@@ -95,7 +98,10 @@ local function capConfig(index)
 end
 local function capAlpha(index)
     local config = capConfig(index)
-    if ui.Settings().showGryphons == false or (config and config.hidden == true) then return 0 end
+    local settings = ui.Settings()
+    if settings.showGryphons == false or settings.barArtHidden == true or (config and config.hidden == true) then
+        return 0
+    end
     return 1
 end
 local function refreshCapAlpha()
@@ -490,9 +496,17 @@ local function applyArt()
     if ui.MicroMenu and ui.MicroMenu.ApplyLayout then ui.MicroMenu.ApplyLayout() end
     fitTexts()
     -- Classic always shows the stock strip; Retail moves the buttons, bags and micro menu off it, so there it is
-    -- always hidden. The tint is opt-in (`barStockTint`).
+    -- always hidden. The tint is opt-in (`barStockTint`). The editor switch `barArtHidden` ("No bar background or
+    -- gryphons") leaves only the buttons in both layouts: no strip, no max-level bar, no backgrounds of the
+    -- stance, pet and possess bars (the client shows and hides those, so they go through alpha), no gryphons
+    -- (capAlpha). The winged slot backdrops keep their own switch.
     local retail = retailLayout()
-    local stockArt = retail and 0 or 1
+    local noArt = settings.barArtHidden == true
+    local stockArt = (retail or noArt) and 0 or 1
+    for _, name in ipairs(SIDE_BAR_ART) do
+        local texture = _G[name]
+        if texture then texture:SetAlpha(noArt and 0 or 1) end
+    end
     for i = 0, 3 do
         local texture = _G["MainMenuBarTexture" .. i]
         if texture then
@@ -509,7 +523,7 @@ local function applyArt()
         end
         -- Retail has no strip at all: the max-level bar (shown instead of the XP bar at the level cap) goes too.
         local maxLevel = _G["MainMenuMaxLevelBar" .. i]
-        if maxLevel then maxLevel:SetAlpha(retail and 0 or 1) end
+        if maxLevel then maxLevel:SetAlpha(stockArt) end
     end
     applyBonusArt(stockArt, settings.barStockTint == true)
     local edges = settings.barSlotEdges ~= false and 1 or 0
@@ -719,3 +733,86 @@ local function skinProgress(bar)
     progressBorders[border] = true
 end
 skinProgress(ReputationWatchStatusBar)
+
+-- No stance, form or stealth pages (like Bartender4 without stance paging). In a form the client shows
+-- BonusActionBarFrame (ShowBonusActionBar from UPDATE_BONUS_ACTIONBAR or after a vehicle): its
+-- BonusActionButton1..12 cover ActionButton1..12, and the stock ACTIONBUTTON1..12 bindings (ActionButtonDown/Up)
+-- press the bonus buttons while the frame IsShown. So the frame stays hidden, also in combat: a secure state
+-- header hides it, and a wrapped OnShow puts it away whenever client code shows it. Possess (mind control, Eye of
+-- Acherus: [bonusbar:5]) keeps the bar, else those abilities are lost; the client's slide-in still runs then.
+-- The main buttons and the vehicle bar (VehicleMenuBar, its own keys path) are not touched.
+-- The state snippet keeps the possess flag on the bonus frame (attribute `fuiPossess`), so the wrap needs only
+-- `self`: in the first version it read `owner`, and on Nozdor the bar stayed shown (2026-11-26).
+local BONUS_STATE = "[bonusbar:5] possess; none"
+local BONUS_ON_STATE = [[
+    local bar = self:GetFrameRef("bonus")
+    local possess = newstate == "possess"
+    bar:SetAttribute("fuiPossess", possess)
+    if possess then bar:Show() else bar:Hide() end
+]]
+local BONUS_ON_SHOW = [[
+    if not self:GetAttribute("fuiPossess") then self:Hide() end
+]]
+local bonusStats = { shows = 0, missed = 0, hidden = 0 }
+local function possessing() return GetBonusBarOffset and GetBonusBarOffset() == 5 end
+local function hideBonus()
+    local frame = BonusActionBarFrame
+    if frame:IsShown() and not possessing() then
+        frame:Hide()
+        bonusStats.hidden = bonusStats.hidden + 1
+    end
+end
+local function setupBonusBar()
+    local frame = BonusActionBarFrame
+    if not frame or bonusStats.setup then return end
+    bonusStats.setup = true
+    local ok, err = pcall(function()
+        local header = CreateFrame("Frame", "ForeverStockUIBonusBarHeader", UIParent, "SecureHandlerStateTemplate")
+        header:SetFrameRef("bonus", frame)
+        header:SetAttribute("_onstate-bonus", BONUS_ON_STATE)
+        header:WrapScript(frame, "OnShow", BONUS_ON_SHOW)
+        RegisterStateDriver(header, "bonus", BONUS_STATE)
+        ui.ActionBars.bonusHeader = header
+    end)
+    if not ok then bonusStats.error = tostring(err) end
+    -- Backup, after the wrapped OnShow: still shown outside possess means the secure hide did not work. Then it is
+    -- hidden here out of combat, or once combat ends.
+    frame:HookScript("OnShow", function(self)
+        bonusStats.shows = bonusStats.shows + 1
+        if not self:IsShown() or possessing() then return end
+        bonusStats.missed = bonusStats.missed + 1
+        ui.RunOutOfCombat("bonusbar-hide", hideBonus)
+    end)
+    if ShowBonusActionBar then
+        hooksecurefunc("ShowBonusActionBar", function() ui.RunOutOfCombat("bonusbar-hide", hideBonus) end)
+    end
+    hideBonus()
+end
+ui.ActionBars.BONUS_STATE = BONUS_STATE
+ui.ActionBars.bonusStats = bonusStats
+ui.RunOutOfCombat("bonusbar", setupBonusBar)
+
+-- /fuibonus: what the bonus bar and its header say; out of combat it also tries the secure hide.
+SLASH_FOREVERUIBONUS1 = "/fuibonus"
+SlashCmdList.FOREVERUIBONUS = function()
+    local frame, header = BonusActionBarFrame, ui.ActionBars.bonusHeader
+    if not frame then print("FUI bonus: no BonusActionBarFrame") return end
+    local function yes(value) return value and "yes" or "no" end
+    local protected, explicit = frame:IsProtected()
+    print("FUI bonus: shown", yes(frame:IsShown()), "visible", yes(frame:IsVisible()),
+        "protected", yes(protected), "explicit", yes(explicit), "offset", tostring(GetBonusBarOffset()),
+        "combat", yes(InCombatLockdown()))
+    print("FUI bonus: header", yes(header), "state", tostring(header and header:GetAttribute("state-bonus")),
+        "fuiPossess", tostring(frame:GetAttribute("fuiPossess")), "error", tostring(bonusStats.error))
+    print("FUI bonus: OnShow", bonusStats.shows, "missed by the secure hide", bonusStats.missed,
+        "hidden by the backup", bonusStats.hidden)
+    if not header or InCombatLockdown() then return end
+    local ok, err = pcall(header.Execute, header, [[
+        local bar = self:GetFrameRef("bonus")
+        if not bar then self:SetAttribute("fuiProbe", "no frame ref") return end
+        bar:Hide()
+        self:SetAttribute("fuiProbe", bar:IsShown() and "still shown" or "hidden")
+    ]])
+    print("FUI bonus: secure hide", ok and tostring(header:GetAttribute("fuiProbe")) or tostring(err),
+        "-> shown", yes(frame:IsShown()))
+end

@@ -660,8 +660,9 @@ function Suite.ZoneType()
 end
 
 -- Group role of a unit: "TANK", "HEALER", "DAMAGER" or nil. 3.3.5 UnitGroupRolesAssigned returns three
--- booleans (later clients return a string); the raid main tank assignment counts as a tank.
-function Suite.UnitRole(unit)
+-- booleans (later clients return a string); the raid main tank assignment counts as a tank unless
+-- noMainTank is set. Used by the healer mana alert (the raid frames draw no roles of their own).
+function Suite.UnitRole(unit, noMainTank)
     -- Pets have no role; the client answers "raidpet1 is not in your group" in chat when asked.
     if not unit or unit:find("pet%d*$") or not UnitExists(unit) then return nil end
     if UnitGroupRolesAssigned then
@@ -676,7 +677,7 @@ function Suite.UnitRole(unit)
             return "DAMAGER"
         end
     end
-    if GetPartyAssignment and GetPartyAssignment("MAINTANK", unit) then return "TANK" end
+    if not noMainTank and GetPartyAssignment and GetPartyAssignment("MAINTANK", unit) then return "TANK" end
     return nil
 end
 
@@ -706,6 +707,12 @@ local function drinkTables()
     return drinkByName, drinkById
 end
 Suite.ResetDrinkCache = function() drinkByName, drinkById = nil, nil end
+
+-- Is this buff (name, spell id) a drink? For callers that already walked the unit's buffs.
+function Suite.IsDrinkAura(name, spellId)
+    local names, ids = drinkTables()
+    return (name and names[name]) or (spellId and ids[spellId]) or false
+end
 
 -- Returns name, icon, expiration, duration of the drink buff on the unit, or nil.
 function Suite.DrinkAura(unit)

@@ -178,8 +178,12 @@ local levelWant = { colour = { 1, 1, 1 } }
 API:RegisterBox("wfn-level", {
     owner = "WoW Forever Nameplates", label = ru and "Уровень" or "Level", side = "right", order = 10,
     update = function(box)
-        local level = box.view.displayLevel
+        local view = box.view
+        local level = view.displayLevel
         if not wfn.db.level or not level then return end
+        -- The player's own level tells nothing: only other levels and "??" are shown (the preview shows it).
+        -- An elite keeps it, because the elite dragon is drawn around this box, as in the client.
+        if level == view.playerLevel and not view.previewing and not view.eliteShown then return end
         local color = level > 0 and GetQuestDifficultyColor(level)
         levelWant.text = level > 0 and level or "??"
         levelWant.colour[1], levelWant.colour[2], levelWant.colour[3] =

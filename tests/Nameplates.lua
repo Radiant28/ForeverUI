@@ -11,7 +11,7 @@ function CreateFrame(kind, name, parent, template)
     local frame = object(kind, parent)
     frame.name = name
     if template == "GameTooltipTemplate" then
-        for i = 1, 2 do _G[name .. "TextLeft" .. i] = object("FontString", frame) end
+        for i = 1, 3 do _G[name .. "TextLeft" .. i] = object("FontString", frame) end
     end
     if parent then table.insert(parent.children, frame) end
     if name then _G[name] = frame end
@@ -76,7 +76,7 @@ function methods:SetHitRectInsets(...) self.hitInsets = { ... } end
 local tooltipLines, tooltipUnits = {}, {}
 local function fillTooltip(self, lines)
     self.lines = lines or {}
-    for i = 1, 2 do
+    for i = 1, 3 do
         local line = _G[self.name .. "TextLeft" .. i]
         if line then line:SetText(self.lines[i]) end
     end
@@ -283,7 +283,12 @@ for _, suffix in ipairs({"NameplateBoxes", "NameplateStyle", "NameplateOptions",
 end
 assert(WoWForeverNameplates:RegisterBox("early", { update = function() end }))
 assert(WoWForeverNameplates:SetBoxEnabled("early", false))
+-- Level lines were once cached as NPC titles: the login drops them and keeps real titles.
+ForeverUI_NameplatesDB = { npcTitleCache = { ["Волк"] = "<Животное 80-го уровня (элита)>",
+    ["Страж"] = "<Нежить ??-го уровня (босс)>", ["Брам"] = "<Банкир>" } }
 driver.scripts.OnEvent(driver, "PLAYER_LOGIN")
+assert(ForeverUI_NameplatesDB.npcTitleCache["Волк"] == nil and ForeverUI_NameplatesDB.npcTitleCache["Страж"] == nil)
+assert(ForeverUI_NameplatesDB.npcTitleCache["Брам"] == "<Банкир>" and ForeverUI_NameplatesDB.nameSizeEnemy == 12)
 -- The layout checks below use the native anchoring; the clickbox mode is tested on its own further down.
 ForeverUI_NameplatesDB.clickFollowsPlate = false
 ForeverUI_NameplatesDB.combatOnlyEngaged = false
@@ -313,6 +318,12 @@ assert(a.scale == nil and a.points == nil and a.width == nil)
 assert(view:GetFrameStrata() == "MEDIUM" and a:GetFrameStrata() == "UNKNOWN")
 assert(view.scale == 1.15 and view:GetEffectiveAlpha() == 1 and second:GetEffectiveAlpha() == 0.5)
 assert(a.children[1].alpha == 0 and a.children[2].alpha == 1 and a.regions[10].alpha == 0)
+-- The target halo, the threat glow and the dark foundation sit on a frame one level below the bar, so the bar
+-- background covers them by frame level, not by texture sublevel (the client can reorder one layer on /reload).
+local under = view.chrome.under
+assert(under and under.parent == view.health and under:GetFrameLevel() < view.health:GetFrameLevel())
+assert(view.chrome.halo.parent == under and view.chrome.fill.parent == under and view.threatGlow.parent == under)
+assert(view.cast.art.under and view.cast.art.under:GetFrameLevel() < view.cast.status:GetFrameLevel())
 assert(view.raid:IsShown() and view.raid:GetTexture() == "raid-marker")
 assert(a.regions[2]:GetTexture() == nil and not a.regions[2]:IsShown())
 assert(a.regions[5]:GetTexture() == "cast-icon" and a.regions[10]:GetTexture() == "raid-marker")
@@ -334,8 +345,9 @@ local function assertAnchor(region, index, point, relative, relativePoint, x, y)
     assert(anchor[1] == point and anchor[2] == relative and anchor[3] == relativePoint
         and anchor[4] == x and anchor[5] == y)
 end
-assertAnchor(view.name, 1, "BOTTOMLEFT", view.health, "TOPLEFT", 2, 6)
-assertAnchor(view.name, 2, "BOTTOMRIGHT", view.health, "TOPRIGHT", -2, 6)
+-- Centred names run 30% of the bar width (36 px of 120) past the bar, half on each side.
+assertAnchor(view.name, 1, "BOTTOMLEFT", view.health, "TOPLEFT", 2 - 18, 6)
+assertAnchor(view.name, 2, "BOTTOMRIGHT", view.health, "TOPRIGHT", -2 + 18, 6)
 local auraRow = view[1].parent
 assertAnchor(auraRow, 1, "BOTTOMLEFT", view.name, "TOPLEFT", 0, 4)
 assertAnchor(view[2], 1, "BOTTOMLEFT", auraRow, "BOTTOMLEFT", 18, 0)
@@ -1056,16 +1068,61 @@ end
 local quietView = snakes[1].children[3]
 snakes[1].children[1]:SetValue(20)
 tick()
-assert(quietView.health.value == 50, "a quiet plate in a crowd waits for its slower refresh")
+-- The refresh is checked on the read value (`view.value`); the drawn bar then drains to it (tested below).
+assert(quietView.value == 50 and quietView.health.value == 50, "a quiet plate in a crowd waits for its slower refresh")
 now = now + 0.3
 tick()
-assert(quietView.health.value == 20, "and refreshes after it")
+assert(quietView.value == 20, "and refreshes after it")
 cfg.crowdSaver = false
 snakes[1].children[1]:SetValue(30)
 tick()
-assert(quietView.health.value == 30, "without the saver every scan refreshes")
+assert(quietView.value == 30, "without the saver every scan refreshes")
 cfg.crowdSaver = true
 for i = 1, 20 do snakes[i]:Hide() end
+tick()
+
+-- Health drain: a loss eases down every frame and stops at the read value; a gain, a new range and a recycled
+-- plate are drawn at once; only draining plates are touched per frame.
+local wolf = plate("Волк")
+local wolfBar = wolf.children[1]
+wolfBar:SetValue(80)
+tick()
+local wolfView = wolf.children[3]
+assert(wolfView.health.value == 80, "a new plate draws its health at once")
+wolfBar:SetValue(40)
+tick()
+assert(wolfView.health.value == 80 and wolfView.value == 40, "the loss is read; it drains from the next frame")
+tick()
+local drained = wolfView.health.value
+assert(drained < 80 and drained > 40, "a loss starts to drain: " .. tostring(drained))
+driver.scripts.OnUpdate(driver, 0.01)
+assert(wolfView.health.value < drained and wolfView.health.value > 40, "and keeps draining between scans")
+for _ = 1, 30 do tick() end
+assert(wolfView.health.value == 40, "and stops exactly at the read value")
+local touched = 0
+local setValue = wolfView.health.SetValue
+wolfView.health.SetValue = function(self, value) touched = touched + 1; return setValue(self, value) end
+driver.scripts.OnUpdate(driver, 0.01)
+assert(touched == 0, "a settled plate is not touched per frame")
+wolfBar:SetValue(70)
+tick()
+assert(wolfView.health.value == 70 and touched == 1, "a gain is drawn at once")
+wolfBar:SetValue(10)
+tick(); tick()
+assert(wolfView.health.value > 10 and wolfView.health.value < 70, "draining again")
+wolfBar:SetMinMaxValues(0, 200)
+wolfBar:SetValue(150)
+tick()
+assert(wolfView.health.value == 150, "a new range is drawn at once")
+wolfBar:SetValue(20)
+tick(); tick()
+assert(wolfView.health.value > 20 and wolfView.health.value < 150)
+wolf.regions[7]:SetText("Медведь")
+wolfBar:SetValue(5)
+tick()
+assert(wolfView.health.value == 5, "a recycled plate does not drain from the last unit")
+wolfView.health.SetValue = nil
+wolf:Hide()
 tick()
 
 -- Name text colour (players fall back to it when class colours are not used for names).
@@ -1107,6 +1164,57 @@ units.target.player, units.target.friendly, units.target.class = true, true, "MA
 tick()
 assert(view.subtitle:IsShown() and view.subtitle.text == "<Гильдия Тестов>", tostring(view.subtitle.text))
 units.target.player, units.target.friendly, units.target.class = nil, nil, nil
+
+-- A level line is no title, but its mark in brackets shows the elite dragon on plates without a unit;
+-- a title above the level line stays. The player's own level shows no level box, unless the mob is elite.
+local beast, keeper, chick = plate("Блестящая вечерница"), plate("Аркил"), plate("Ветроперый птенец")
+chick.regions[8]:SetText(units.player.level)
+local targetUnit = units.target
+beast.regions[8]:SetText(units.player.level)
+tooltipLines["unit:0xF130000000000088"] = { "Блестящая вечерница", "Животное 80-го уровня (элита)" }
+tooltipLines["unit:0xF130000000000099"] = { "Аркил", "Страж Даларана", "Нежить ??-го уровня (босс)" }
+tooltipLines["unit:0xF1300000000000AA"] = { "Ветроперый птенец", "Животное 80-го уровня" }
+function NozdorActionNative(command, frame)
+    if command ~= "plateguid" then return end
+    return frame == merchant and "0xF130000000000077" or frame == beast and "0xF130000000000088"
+        or frame == keeper and "0xF130000000000099" or frame == chick and "0xF1300000000000AA" or ""
+end
+-- Two tooltip scans per plate scan: three new NPCs need two scans, the dragon one more (the mark is read after
+-- the dragon is drawn).
+tick(); tick(); tick()
+local beastView, keeperView = beast.children[3], keeper.children[3]
+assert(beastView:IsShown() and not beastView.subtitle:IsShown(), "a level line is not a title")
+assert(cfg.npcTitleCache["Блестящая вечерница"] == "" and cfg.npcEliteCache["Блестящая вечерница"] == true)
+assert(beastView.dragon:IsShown(), "the elite mark of the level line shows the dragon")
+-- An elite keeps its level box at the player's level: the dragon wraps it like the client's ring (46x34 at 14).
+local beastLevel = beastView.boxes["wfn-level"]
+assert(beastLevel:IsShown() and beastLevel.text.text == tostring(units.player.level), "an elite keeps its level box")
+local ring = beastView.dragon
+assert(ring.points[1][1] == "CENTER" and ring.points[1][2] == beastLevel and ring.points[1][3] == "CENTER")
+assert(math.abs(ring.width / ring.height - 46 / 34) < 0.001 and ring.uv[1] == 0 and ring.uv[2] == 0.578125,
+    "the ring keeps the client's cell, not mirrored")
+assert(keeperView.subtitle.text == "<Страж Даларана>" and keeperView.dragon:IsShown())
+assert(keeperView.boxes["wfn-level"]:IsShown() and keeperView.boxes["wfn-level"].text.text == "23")
+local chickView = chick.children[3]
+assert(cfg.npcEliteCache["Ветроперый птенец"] == false and not chickView.dragon:IsShown()
+    and not chickView.boxes["wfn-level"]:IsShown(), "a normal mob at the player's level shows no level box")
+assert(not merchantView.dragon:IsShown() and cfg.npcEliteCache["Brom"] == nil)
+-- /wfn elite reports the target plate (the client icon and the dragon) and keeps the report for /reload.
+for _, frame in ipairs({ a, b, beast, keeper }) do frame.regions[11]:SetSize(64, 32) end
+SlashCmdList.WOWFOREVERNAMEPLATES("elite")
+local eliteDump = cfg.eliteDump.plates
+assert(#eliteDump == 1 and eliteDump[1].target and eliteDump[1].dragon.texture:find("elitenameplateicon", 1, true)
+    and eliteDump[1].native.shown == false, "the elite report covers the target plate")
+units.target = nil
+tick()
+SlashCmdList.WOWFOREVERNAMEPLATES("elite")
+units.target = targetUnit
+tick()
+local names = {}
+for _, entry in ipairs(cfg.eliteDump.plates) do names[entry.name] = entry.dragon.shown end
+assert(names["Блестящая вечерница"] == true and names["Аркил"] == true, "without a target it reports elite plates")
+beast:Hide(); keeper:Hide(); merchant:Hide(); chick:Hide()
+tick()
 NozdorActionNative = nativeQuery
 
 -- With the ForeverUI options core present the module registers a declarative schema instead of a page.

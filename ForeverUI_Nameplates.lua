@@ -17,6 +17,8 @@ local eliteIcon = [[Interface\Tooltips\elitenameplateicon]]
 local radialHalf, radialEdge = art .. [[Nameplates\Aura-Half]], art .. [[Nameplates\Aura-Edge]]
 local WIDTH, HEIGHT, INSET = 120, 14, 2
 local NAME_INSET, NAME_HEIGHT = 2, 16
+-- Names may run past the bar by this share of its width, so long names are not cut to the bar.
+local NAME_SPILL = 0.3
 local AURA_COUNT = 4
 local INTERVAL = 0.05
 local CROWD_INTERVAL = 0.2
@@ -34,6 +36,42 @@ wfn.releasePreviewMouse = function()
         end
     end
 end
+-- Health drain: a loss eases the drawn bar down every frame (exponential, independent of the frame rate) and stops
+-- within DRAIN_SNAP of the range; gains, a new unit or a new range are drawn at once. Only draining plates are
+-- touched per frame. The drawn bar is our own StatusBar, the client's bar is only read.
+local DRAIN_RATE, DRAIN_SNAP = 8, 0.002
+local draining = {}
+
+local function SetHealth(view, value)
+    view.value = value
+    local shown = view.shownValue
+    if not shown or value >= shown then
+        draining[view] = nil
+        view.shownValue = value
+        view.health:SetValue(value)
+    else
+        draining[view] = true
+    end
+end
+
+-- Forgets the drawn value, so the next one is drawn at once (new unit, new range, plate gone).
+local function ResetHealth(view)
+    view.shownValue, draining[view] = nil, nil
+end
+
+local function DrainHealth(delta)
+    local keep = exp(-DRAIN_RATE * delta)
+    for view in pairs(draining) do
+        local target = view.value
+        local shown = target + (view.shownValue - target) * keep
+        if shown - target <= ((view.high or 1) - (view.low or 0)) * DRAIN_SNAP then
+            shown, draining[view] = target, nil
+        end
+        view.shownValue = shown
+        view.health:SetValue(shown)
+    end
+end
+
 local auraRevision = { target = 0, mouseover = 0 }
 local plateCount = 0
 local elapsed, childCount = 0, -1
@@ -59,7 +97,7 @@ local defaults = {
     castIcon = true, castIconSize = 15, castColour = true, previewCast = true,
     castColourOpen = {0.29, 0.85, 0.38}, castColourBusy = {0.98, 0.58, 0.16}, castColourShut = {0.56, 0.56, 0.62},
     nameTextColour = {1, 1, 1},
-    nameFont = "", castFont = "", nameSizeEnemy = 14, nameSizeFriend = 14,
+    nameFont = "", castFont = "", nameSizeEnemy = 12, nameSizeFriend = 12,
     nameColour = "white", nameOutline = "soft", namePlace = "above", nameAlign = "center", nameLift = 6, nameX = 0,
     auraDebuffs = true, auraBuffs = true, auraMine = true, auraOthers = true, auraOthersClass = false,
     auraTimerText = true, auraTimerFont = "", auraTimerSize = 0, auraTimerOutline = "thin", auraTimerColour = {1, 1, 1},
@@ -109,6 +147,7 @@ local function LoadConfig()
     cfg.combatKeepFriends = nil
     if type(cfg.classCache) ~= "table" then cfg.classCache = {} end
     if type(cfg.npcTitleCache) ~= "table" then cfg.npcTitleCache = {} end
+    if type(cfg.npcEliteCache) ~= "table" then cfg.npcEliteCache = {} end
     if type(cfg.guildCache) ~= "table" then cfg.guildCache = {} end
     cfg.crowdThreshold = Clamp(cfg.crowdThreshold, 5, 60, defaults.crowdThreshold)
     cfg.subtitleSize = Clamp(cfg.subtitleSize, 6, 18, defaults.subtitleSize)
@@ -125,6 +164,12 @@ local function LoadConfig()
     if not cfg.spacingDefault090 then
         if abs(cfg.verticalSpacing - 1.10) < 0.001 then cfg.verticalSpacing = defaults.verticalSpacing end
         cfg.spacingDefault090 = true
+    end
+    -- The default name size moved from 14 to 12; profiles still on the old default follow it once.
+    if not cfg.nameSizeDefault12 then
+        if cfg.nameSizeEnemy == 14 then cfg.nameSizeEnemy = defaults.nameSizeEnemy end
+        if cfg.nameSizeFriend == 14 then cfg.nameSizeFriend = defaults.nameSizeFriend end
+        cfg.nameSizeDefault12 = true
     end
     -- The clickbox that follows the drawn plate is built in.
     cfg.clickFollowsPlate = true
@@ -240,7 +285,10 @@ local function SnapChrome(view, friendly)
         local haloWidth, haloHeight = wfn.LayoutRim(view.chrome, view, width, height, pixel)
         view.threatGlow:SetSize(haloWidth, haloHeight)
         view.threatGlow:SetBlendMode(cfg.glowBlend == "colour" and "BLEND" or "ADD")
-        view.nameWidth = width - 2 * (INSET + NAME_INSET)
+        local spill = floor(width * NAME_SPILL + 0.5)
+        -- A new spill re-anchors the name (StyleName); pixel changes alone keep the anchors.
+        if spill ~= view.nameSpill then view.nameSpill, view.nameUnder = spill, nil end
+        view.nameWidth = width - 2 * (INSET + NAME_INSET) + spill
         view.fullName = nil
     end
 
@@ -720,6 +768,8 @@ local function HidePlate(plate)
         view.identityName, view.identityGUID, view.kind, view.classification = nil, nil, nil, nil
         view.drawScale, view.drawAlpha = nil, nil
         view.stackOffset, view.stackY, view.stackRaise = nil, nil, nil
+        view.value = nil
+        ResetHealth(view)
         UpdateAuras(view)
         visible[plate] = nil
     end
@@ -745,7 +795,8 @@ local function AddPlate(plate)
     view:SetFrameStrata("BACKGROUND")
     view:SetFrameLevel(plate:GetFrameLevel() + 1)
     view:SetSize(WIDTH, HEIGHT)
-    view.nameWidth = WIDTH - 2 * (INSET + NAME_INSET)
+    view.nameSpill = floor(WIDTH * NAME_SPILL + 0.5)
+    view.nameWidth = WIDTH - 2 * (INSET + NAME_INSET) + view.nameSpill
     view:SetPoint("BOTTOM", nativeHealth, "TOP")
     view:EnableMouse(false)
     view.nativeHealth, view.nativeName, view.nativeLevel = nativeHealth, name, level
@@ -772,8 +823,9 @@ local function AddPlate(plate)
     top:SetAllPoints(view)
     top:SetFrameLevel(health:GetFrameLevel() + 1)
     view.chrome = wfn.MakeRim(top, health, "bar")
-    -- The opaque chamfered foundation masks the centre of the donor halo.
-    local glow = wfn.Sprite(health, "PlateGlow", "BACKGROUND", -8)
+    -- The opaque chamfered foundation masks the centre of the donor halo. The threat glow sits with the target
+    -- halo on the frame under the bar (MakeRim), so the bar background always covers it.
+    local glow = wfn.Sprite(view.chrome.under, "PlateGlow", "BACKGROUND", -8)
     glow:SetPoint("CENTER", view.chrome.rim, "CENTER")
     glow:SetBlendMode("ADD")
     glow:Hide()
@@ -783,11 +835,11 @@ local function AddPlate(plate)
     view.boxes = {}
     view.cast = wfn.MakeCast(view)
 
+    -- On `top`, below the box row: the level box and its number stay above the ring (PlaceDragon).
     local dragon = top:CreateTexture(nil, "OVERLAY")
     dragon:SetTexture(eliteIcon)
-    dragon:SetTexCoord(0.578125, 0, 0, 0.84375)
-    dragon:SetSize(18, 15)
-    dragon:SetPoint("RIGHT", top, "LEFT", 5, 0)
+    dragon:SetTexCoord(0, 0.578125, 0, 0.84375)
+    dragon:Hide()
     view.dragon = dragon
 
     local raidIcon = top:CreateTexture(nil, "OVERLAY")
@@ -1090,12 +1142,37 @@ end
 local titleByGUID = {}
 local scanner
 local levelWord = LEVEL or "Level"
+-- The tooltip line with the creature type and level: "Level 80 Beast (Elite)", "Животное 80-го уровня (элита)",
+-- "Нежить ??-го уровня (босс)". The ruRU line writes "уровня" in lower case, so LEVEL alone misses it.
+local levelPatterns = { "[%d%?]+%-го уровня" }
+if type(TOOLTIP_UNIT_LEVEL) == "string" and TOOLTIP_UNIT_LEVEL:find("%s", 1, true) then
+    levelPatterns[2] = TOOLTIP_UNIT_LEVEL:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"):gsub("%%%%s", "[%%d%%?]+")
+end
 
-local function ScanLine()
-    local line = _G.ForeverUINameplateScanTextLeft2
-    local text = line and scanner:NumLines() >= 2 and line:GetText()
-    if not text or text == "" or text:find(levelWord, 1, true) then return "" end
-    return text
+local function IsLevelLine(text)
+    if text:find(levelWord, 1, true) then return true end
+    for i = 1, #levelPatterns do
+        if text:find(levelPatterns[i]) then return true end
+    end
+    return false
+end
+
+-- Line 2 is the NPC title unless it is already the level line. The level line ends in a mark in brackets
+-- ("(элита)", "(босс)", "(редкий)") for elites, bosses and rares, so it also tells the plate to show the dragon.
+local function ScanLines()
+    local title, elite = "", nil
+    for i = 2, min(scanner:NumLines(), 3) do
+        local line = _G["ForeverUINameplateScanTextLeft" .. i]
+        local text = line and line:GetText()
+        if text and text ~= "" then
+            if IsLevelLine(text) then
+                elite = text:find("(", 1, true) ~= nil
+                break
+            end
+            if i == 2 then title = text end
+        end
+    end
+    return title, elite
 end
 
 local function ScanTooltip(unit, guid)
@@ -1113,13 +1190,17 @@ local function ScanTooltip(unit, guid)
     end
     local first = _G.ForeverUINameplateScanTextLeft1
     -- An empty first line means the client has not cached this creature yet: try again later.
-    local result = ok and first and (first:GetText() or "") ~= "" and ScanLine() or nil
+    local title, elite
+    if ok and first and (first:GetText() or "") ~= "" then title, elite = ScanLines() end
     scanner:Hide()
-    return result
+    return title, elite
 end
 
 -- NPC titles by name, saved between sessions (cfg.npcTitleCache); "" means "no title".
 local npcTitleByName = {}
+-- Elite, boss or rare by NPC name (cfg.npcEliteCache): plates without a unit token show the dragon from it.
+local eliteByName, eliteTried = {}, {}
+local eliteClasses = { elite = true, worldboss = true, rare = true, rareelite = true }
 
 -- Tooltip scans are expensive: at most `SCAN_BUDGET` per plate scan, retries back off, and a GUID that
 -- never resolves (no creature cache entry, or a client without "unit:" links) is given up on.
@@ -1128,9 +1209,12 @@ local scanBudget, scanTries, learnRetry = SCAN_BUDGET, {}, {}
 
 -- Reads the title of an NPC unit (mouseover in the world, target, focus) once per name.
 local function LearnTitle(unit, now)
-    if not cfg.npcTitles or scanBudget <= 0 or not UnitExists(unit) or UnitIsPlayer(unit) then return end
+    if not UnitExists(unit) or UnitIsPlayer(unit) then return end
     local name = UnitName(unit)
-    if not name or npcTitleByName[name] or now < (learnRetry[name] or 0) then return end
+    if not name then return end
+    local classification = UnitClassification(unit)
+    if classification then eliteByName[name] = eliteClasses[classification] or false end
+    if not cfg.npcTitles or scanBudget <= 0 or npcTitleByName[name] or now < (learnRetry[name] or 0) then return end
     scanBudget = scanBudget - 1
     local line = ScanTooltip(unit)
     if line then
@@ -1152,21 +1236,28 @@ local function Subtitle(view, unit, kind, now)
         return name and guildByName[name]
     end
     local cached = guid and titleByGUID[guid] or name and npcTitleByName[name]
-    if cached then return cached end
-    local line
+    -- Titles cached before the elite mark was read get one more scan for it.
+    if cached and (unit or not name or eliteByName[name] ~= nil or eliteTried[name]) then return cached end
+    local line, elite
     if unit then
         if now < (view.titleRetry or 0) or scanBudget <= 0 then return end
         scanBudget = scanBudget - 1
-        line = ScanTooltip(unit)
+        line, elite = ScanTooltip(unit)
         if not line then view.titleRetry = now + 0.5 end
     elseif guid and now >= (view.titleRetry or 0) and scanBudget > 0 then
         scanBudget = scanBudget - 1
         local tries = (scanTries[guid] or 0) + 1
         scanTries[guid] = tries
         view.titleRetry = now + min(tries, 10)
-        line = ScanTooltip(nil, guid)
-        if not line and tries >= SCAN_TRIES then titleByGUID[guid] = "" end
+        line, elite = ScanTooltip(nil, guid)
+        if not line and tries >= SCAN_TRIES then
+            if name then eliteTried[name] = true end
+            if not cached then titleByGUID[guid] = "" end
+        end
     end
+    if name and elite ~= nil then eliteByName[name] = elite end
+    if name and line then eliteTried[name] = true end
+    if cached then return cached end
     local title = line and (line ~= "" and ("<" .. line .. ">") or "") or nil
     if title then
         if guid then titleByGUID[guid] = title end
@@ -1214,6 +1305,55 @@ function wfn.DebugClasses()
     if not found then wfn.Print(ui.russian and "Нет видимых плашек союзных игроков" or "No friendly player plates visible") end
 end
 
+-- /wfn elite: the client's own elite icon on the plate and the drawn dragon, for the target or, without one,
+-- the plates the addon takes for elite. Printed and kept in ForeverUI_NameplatesDB.eliteDump (read after /reload).
+local function DescribeRegion(region)
+    if not region then return { missing = true } end
+    local info = { shown = not not region:IsShown(), visible = region.IsVisible and not not region:IsVisible() or nil,
+        alpha = region:GetAlpha(), texture = tostring(region:GetTexture()),
+        width = region:GetWidth(), height = region:GetHeight() }
+    if region.GetTexCoord then info.coords = table.concat({ region:GetTexCoord() }, ", ") end
+    if region.GetDrawLayer then info.layer = tostring((region:GetDrawLayer())) end
+    if region.GetPoint then
+        local point, relative, relativePoint, x, y = region:GetPoint(1)
+        info.point = ("%s %s %s %s %s"):format(tostring(point), tostring(relative and (relative.GetName and relative:GetName()
+            or relative:GetObjectType())), tostring(relativePoint), tostring(x), tostring(y))
+    end
+    return info
+end
+
+local function RegionLine(label, info)
+    if info.missing then return label .. ": -" end
+    return ("%s: shown %s, visible %s, alpha %.2f, %s [%s], %.0fx%.0f, %s, %s"):format(label, tostring(info.shown),
+        tostring(info.visible), info.alpha or -1, info.texture, info.coords or "", info.width or 0, info.height or 0,
+        info.layer or "?", info.point or "?")
+end
+
+function wfn.DebugElite()
+    local plates = {}
+    for _, view in pairs(visible) do
+        local name = view.identityName
+        if view.infoActive and (view.infoTarget or (not plates.target and name
+            and (eliteByName[name] or view.nativeElite:IsShown()))) and #plates < 5 then
+            if view.infoTarget then plates = { target = true } end
+            local entry = { name = name, target = view.infoTarget or nil, unit = view.infoUnit,
+                classification = tostring(view.classification), cached = tostring(name and eliteByName[name]),
+                option = cfg.showEliteDragon, boss = not not view.nativeBoss:IsShown(),
+                native = DescribeRegion(view.nativeElite), dragon = DescribeRegion(view.dragon) }
+            plates[#plates + 1] = entry
+            wfn.Print(("%s%s — classification %s, cache %s, option %s, boss icon %s"):format(tostring(name),
+                entry.target and " [target]" or "", entry.classification, entry.cached, tostring(entry.option), tostring(entry.boss)))
+            wfn.Print(RegionLine(ui.russian and "  значок клиента" or "  client icon", entry.native))
+            wfn.Print(RegionLine(ui.russian and "  дракон" or "  dragon", entry.dragon))
+        end
+    end
+    plates.target = nil
+    cfg.eliteDump = { time = date and date("%Y-%m-%d %H:%M:%S") or nil, plates = plates }
+    if #plates == 0 then
+        wfn.Print(ui.russian and "Нет плашки цели и элитных плашек на экране" or "No target plate and no elite plates visible")
+    end
+end
+
 local function UpdateIdentity(view, plate, name, unit, guid)
     if view.identityName ~= name or (guid and guid ~= view.identityGUID) then
         view.identityName, view.identityGUID = name, guid
@@ -1221,6 +1361,9 @@ local function UpdateIdentity(view, plate, name, unit, guid)
         view.kind, view.classification, view.playerClass = nil, nil, nil
         view.boxAt = nil
         view.threatUntil = nil
+        -- A recycled plate shows another unit: its health is drawn at once, not drained from the last one.
+        view.value = nil
+        ResetHealth(view)
     end
     if unit then
         local creature = UnitCreatureType(unit)
@@ -1310,6 +1453,29 @@ local function SetBarMode(view, full)
     if not full then view.dragon:Hide(); view.raid:Hide(); view.cast:Hide(); view.boxAt = nil end
 end
 
+-- The client's elite dragon (EliteNameplateIcon, a 37x27 texel cell) is a ring around the level number: the client
+-- draws it 46x34 with its centre 4.7 right and 1.6 below the level text (/wfn elite). It wraps the level box the
+-- same way, scaled to the box height (the client's level sits on a bar about as tall as ours, 14).
+local DRAGON_WIDTH, DRAGON_HEIGHT, DRAGON_DX, DRAGON_DY, DRAGON_BASE = 46, 34, 4.7, -1.6, 14
+
+local function PlaceDragon(view)
+    local box = view.boxes["wfn-level"]
+    local anchor = box and box:IsShown() and box or nil
+    local height = anchor and anchor:GetHeight() or view.chromeHeight or HEIGHT
+    if view.dragonAnchor == anchor and view.dragonBase == height then return end
+    view.dragonAnchor, view.dragonBase = anchor, height
+    local k = height / DRAGON_BASE
+    local dragon = view.dragon
+    dragon:SetSize(DRAGON_WIDTH * k, DRAGON_HEIGHT * k)
+    dragon:ClearAllPoints()
+    -- Without a level box the ring sits where the box would be, at the right end of the bar.
+    if anchor then
+        dragon:SetPoint("CENTER", anchor, "CENTER", DRAGON_DX * k, DRAGON_DY * k)
+    else
+        dragon:SetPoint("CENTER", view, "RIGHT", (height * 0.65 + 1) + DRAGON_DX * k, DRAGON_DY * k)
+    end
+end
+
 -- Name colours of non-hostile NPCs, as the stock client paints them by reaction.
 local REACTION_FRIENDLY, REACTION_NEUTRAL = { 0, 1, 0 }, { 1, 1, 0 }
 
@@ -1348,12 +1514,16 @@ local function StyleName(view, friendly, castShown, class, reaction)
     if view.nameUnder ~= under then
         view.nameUnder = under
         name:ClearAllPoints()
+        -- The spill past the bar goes to the side the text grows to: both sides when centred.
+        local spill, align = view.nameSpill or 0, cfg.nameAlign
+        local leftOut = align == "left" and 0 or align == "right" and spill or floor(spill / 2)
+        local left, right = NAME_INSET + cfg.nameX - leftOut, -NAME_INSET + cfg.nameX + spill - leftOut
         if under then
-            name:SetPoint("TOPLEFT", view, "BOTTOMLEFT", NAME_INSET + cfg.nameX, -cfg.castY - view.cast.height - cfg.nameLift)
-            name:SetPoint("TOPRIGHT", view, "BOTTOMRIGHT", -NAME_INSET + cfg.nameX, -cfg.castY - view.cast.height - cfg.nameLift)
+            name:SetPoint("TOPLEFT", view, "BOTTOMLEFT", left, -cfg.castY - view.cast.height - cfg.nameLift)
+            name:SetPoint("TOPRIGHT", view, "BOTTOMRIGHT", right, -cfg.castY - view.cast.height - cfg.nameLift)
         else
-            name:SetPoint("BOTTOMLEFT", view.health, "TOPLEFT", NAME_INSET + cfg.nameX, cfg.nameLift)
-            name:SetPoint("BOTTOMRIGHT", view.health, "TOPRIGHT", -NAME_INSET + cfg.nameX, cfg.nameLift)
+            name:SetPoint("BOTTOMLEFT", view.health, "TOPLEFT", left, cfg.nameLift)
+            name:SetPoint("BOTTOMRIGHT", view.health, "TOPRIGHT", right, cfg.nameLift)
         end
     end
     local color = class and RAID_CLASS_COLORS[class]
@@ -1435,6 +1605,7 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
     local secondary = kind == "totem" or kind == "minion" or classification == "minus"
     local elite = view.nativeBoss:IsShown() or view.nativeElite:IsShown() or classification == "elite"
         or classification == "worldboss" or classification == "rare" or classification == "rareelite"
+        or (not classification and kind ~= "player" and eliteByName[name])
     local preview = wfn.previewing == "all" or (wfn.previewing == "friend" and friendly)
         or (wfn.previewing == "enemy" and not friendly)
     view.previewing = not not preview
@@ -1485,11 +1656,9 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
     if low ~= view.low or high ~= view.high then
         view.low, view.high, view.value = low, high, nil
         view.health:SetMinMaxValues(low, high)
+        ResetHealth(view)
     end
-    if value ~= view.value then
-        view.value = value
-        view.health:SetValue(value)
-    end
+    if value ~= view.value then SetHealth(view, value) end
 
     if view.barTexture ~= cfg.barTexture then
         view.health:SetStatusBarTexture(cfg.barTexture)
@@ -1509,13 +1678,17 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
         view.levelNumber, view.playerLevel, view.boxAt = level, playerLevel, nil
     end
     view.displayLevel = level or (preview and playerLevel)
-    SetVisible(view.dragon, cfg.showEliteDragon and elite)
+    -- The level box shows the player's own level too when the dragon wraps it (see the wfn-level box).
+    local dragon = cfg.showEliteDragon and elite or false
+    if view.eliteShown ~= dragon then view.eliteShown, view.boxAt = dragon, nil end
     DrawRaid(view)
     if view.rimTarget ~= target or view.rimTeam ~= team or view.rimRevision ~= wfn.revision then
         view.rimTarget, view.rimTeam, view.rimRevision = target, team, wfn.revision
         wfn.StyleRim(view.chrome, target, team)
     end
     wfn.DrawBoxes(view, plate, unit, target, team, now)
+    if dragon then PlaceDragon(view) end
+    SetVisible(view.dragon, dragon)
     UpdateBorderGlow(view, threat)
 
     local revision = unit and auraRevision[unit]
@@ -1622,6 +1795,7 @@ local function ScanWorldFrame(_, delta)
     if cfg.clickFollowsPlate then
         for plate, view in pairs(visible) do PlacePlate(view, plate) end
     end
+    if next(draining) ~= nil then DrainHealth(delta) end
     elapsed = elapsed + delta
     if elapsed < INTERVAL then return end
     local profileStart = wfn.profile and wfn.Clock()
@@ -1711,10 +1885,15 @@ driver:SetScript("OnEvent", function(self, event, unit, ...)
         -- Learnt classes persist between sessions; the cache table becomes the live lookup.
         for name, class in pairs(cfg.classCache) do if RAID_CLASS_COLORS[class] then classByName[name] = class end end
         cfg.classCache = classByName
+        -- Level lines ("<Животное 80-го уровня (элита)>") were once cached as titles; they are dropped here.
         for name, title in pairs(cfg.npcTitleCache) do
-            if type(title) == "string" then npcTitleByName[name] = title end
+            if type(title) == "string" and not IsLevelLine(title) then npcTitleByName[name] = title end
         end
         cfg.npcTitleCache = npcTitleByName
+        for name, elite in pairs(cfg.npcEliteCache) do
+            if type(elite) == "boolean" then eliteByName[name] = elite end
+        end
+        cfg.npcEliteCache = eliteByName
         for name, guild in pairs(cfg.guildCache) do
             if type(guild) == "string" then guildByName[name] = guild end
         end

@@ -172,7 +172,8 @@ local function check(label)
                 local d = math.sqrt((x - s[1]) ^ 2 + (y - s[2]) ^ 2)
                 assert(d >= s[3] - 0.01, label .. ": covers stock element " .. b.name .. " d=" .. d)
             end
-            local cdx, cdy = math.max(math.abs(x) - 24, 0), math.max(math.abs(y + 97) - 5, 0)
+            local coordY = settings.barLayout == "retail" and 100 or 97
+            local cdx, cdy = math.max(math.abs(x) - 24, 0), math.max(math.abs(y + coordY) - 5, 0)
             assert(cdx * cdx + cdy * cdy >= 13.5 ^ 2 - 0.01, label .. ": covers coordinates " .. b.name)
             placed[#placed + 1] = { x, y, b.name }
         end
@@ -232,6 +233,41 @@ check("dropped on button")
 settings.mapRingOffset = 10
 ui.Minimap.Layout(); frame()
 check("offset")
+
+-- Retail ring: drawn at 194 px and nudged to its off-centre circle; buttons keep off the gold compass marks
+-- and the coordinates drop below the bottom mark.
+settings.mapRingOffset = 2
+settings.mapButtonAngles = { LibDBIcon10_Addon1 = 0, LibDBIcon10_Addon3 = 180, LibDBIcon10_Addon4 = 90 }
+settings.barLayout = "retail"
+ui.Minimap.ApplyLayout(); frame()
+assert(MinimapBorder.tex:find("Retail%-Border"), "retail ring texture")
+assert(MinimapBorder.w == 194, "retail ring size " .. MinimapBorder.w)
+local rp = MinimapBorder.points[1]
+assert(rp[2] == Minimap and rp[4] < 0 and rp[5] > 0, "retail ring not nudged up-left")
+check("retail")
+local marks = { { 0, 87.8, 16.5, 8 }, { 0, -86.5, 9, 4.5 }, { -86.4, -0.8, 4.6, 8.8 }, { 86.1, -0.5, 4.3, 9.1 } }
+for _, b in ipairs({ Minimap:GetChildren() }) do
+    if b.name and b.scripts.OnDragStart and b.shown then
+        local x, y = ringPos(b)
+        for _, m in ipairs(marks) do
+            local dx, dy = math.max(math.abs(x - m[1]) - m[3], 0), math.max(math.abs(y - m[2]) - m[4], 0)
+            assert(dx * dx + dy * dy >= 13.5 ^ 2 - 0.01, "retail: " .. b.name .. " covers a compass mark")
+        end
+    end
+end
+local coordText
+for _, r in ipairs(Minimap.regions) do if r.kind == "FontString" then coordText = r end end
+assert(coordText.points[#coordText.points][5] == -13, "retail coordinates not lowered")
+-- After /reload the file runs before SavedVariables load (Classic ring); PLAYER_LOGIN must bring Retail back.
+MinimapBorder:SetTexture("Forever-Ring"); MinimapBorder:SetSize(200, 200)
+events.scripts.OnEvent(events, "PLAYER_LOGIN"); frame()
+assert(MinimapBorder.tex:find("Retail%-Border") and MinimapBorder.w == 194, "retail ring lost after reload")
+assert(coordText.points[#coordText.points][5] == -13, "retail coordinates lost after reload")
+settings.barLayout = nil
+ui.Minimap.ApplyLayout(); frame()
+assert(MinimapBorder.w == 200 and MinimapBorder.points[1][4] == nil, "classic ring")
+assert(coordText.points[#coordText.points][5] == -10, "classic coordinates")
+check("classic again")
 
 -- Bar mode.
 settings.mapButtonsCircle = false

@@ -534,6 +534,10 @@ local mapBorder = CreateFrame("Frame", "WorldMapFrameBorder", map)
 local mapCorner = region("Texture", mapBorder); mapCorner.texture = "Interface\\FrameGeneral\\UIFrameMetal2x"
 local mapTitle = region("FontString", mapBorder); mapTitle.text = "Карта и журнал заданий"
 mapTitle.points = { { "TOP", mapBorder, "TOP", 0, -5 } }
+-- Nozdor's map title box puts its text at the bottom (it sat on the band's lower line).
+mapTitle.justifyV = "BOTTOM"
+function mapTitle:GetJustifyV() return self.justifyV end
+function mapTitle:SetJustifyV(j) self.justifyV = j end
 local mapPortrait = CreateFrame("Frame", "WorldMapFramePortrait", map)
 local mapPortraitTex = region("Texture", mapPortrait); mapPortraitTex.texture = "Portrait2"
 local mapBack = region("Texture", map); _G.WorldMapFrameBackground = mapBack
@@ -583,6 +587,58 @@ assert(mapClose.level > ms.chrome.level and mapClose.points == closePoints, "clo
 -- The map's title sits in the very centre of the header band.
 assert(mapTitle.points[1][1] == "CENTER" and mapTitle.points[1][2] == ms.chrome and mapTitle.points[1][3] == "TOP",
     "map title centred in the band")
+assert(mapTitle.justifyV == "MIDDLE", "map title text in the middle of its box")
+-- The saved tree starts with what the skin chose (holder, title, chrome) and gives each text's centre.
+mapTitle.centerY = 10
+SlashCmdList.FUIFRAME("tree WorldMapFrame")
+assert(db.frameDump[1]:find("^skin: holder WorldMapFrameBorder, title \"Карта и журнал заданий\""), "skin line in the tree")
+local titleLine = false
+for _, line in ipairs(db.frameDump) do
+    if line:find("Карта и журнал заданий\" centre ", 1, true) then titleLine = true end
+end
+assert(titleLine, "text centre in the tree")
+assert(db.frameDump[1]:find("/MIDDLE, font", 1, true), "title box in the skin line")
+-- Off: the client's justification comes back; on again: the middle again.
+db.foreverWindows = false
+WS.Apply()
+assert(mapTitle.justifyV == "BOTTOM", "map title justification restored")
+db.foreverWindows = true
+WS.Apply()
+assert(mapTitle.justifyV == "MIDDLE" and ms.active, "map skinned again")
+-- Nozdor's map holder carries an empty TitleText: the title with letters is the one centred (it stayed low).
+local emptyTitle = region("FontString", mapBorder); emptyTitle.text = ""
+mapBorder.TitleText = emptyTitle
+WS.Apply()
+assert(ms.metalTitle == mapTitle and mapTitle.points[1][2] == ms.chrome, "the title with letters is centred")
+-- Maximized, the navigation bar starts under the ring: its left end moves past the rim, the right end stays.
+local navBar = CreateFrame("Frame", "WorldMapFrameNavBar", map); navBar.shown = true; navBar.w = 1202
+navBar.points = { { "TOPLEFT", map, "TOPLEFT", 8, -25 }, { "TOPRIGHT", map, "TOPRIGHT", -7, -25 } }
+ms.chrome.left, ms.chrome.top = -1, 12
+navBar.left, navBar.top = 8, -25
+WS.Apply()
+assert(navBar.points[1][4] == 64 and navBar.points[2][4] == -7, "bar's left end past the ring, right end kept")
+navBar.left = 64
+assert(WS.Repair() == nil and navBar.points[1][4] == 64, "a cleared bar is left alone")
+-- The client re-anchors the bar (mode switch): laid again from the client's new points.
+navBar.points = { { "TOPLEFT", map, "TOPLEFT", 20, -25 }, { "TOPRIGHT", map, "TOPRIGHT", -7, -25 } }
+navBar.left = 20
+WS.Repair()
+assert(navBar.points[1][4] == 64, "re-anchored bar cleared again")
+-- One anchor only: moved and made narrower, the right end in place.
+navBar.points = { { "TOPLEFT", map, "TOPLEFT", 8, -25 } }
+navBar.left = 8
+WS.Apply()
+assert(navBar.points[1][4] == 64 and navBar.w == 1202 - 56, "single-anchor bar narrower by the shift")
+-- Skin off: the client's points and width come back.
+navBar.left = 64
+db.foreverWindows = false
+WS.Apply()
+assert(navBar.points[1][4] == 8 and navBar.w == 1202, "bar back as the client had it")
+db.foreverWindows = true
+WS.Apply()
+navBar.shown = false
+-- A new size of the window (maximized) is hooked for one more tree.
+assert(map.scripts.OnSizeChanged, "size changes of the window are watched")
 -- Maximized: the portrait frame follows the chrome into its stratum (it stayed under the rock ground).
 map.strata = "FULLSCREEN"
 mapPortrait.strata = "HIGH"

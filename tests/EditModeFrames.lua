@@ -98,6 +98,9 @@ GameMenuFrame_AddButton = noop
 UISpecialFrames = {}
 tinsert = table.insert
 InCombatLockdown = function() return false end
+SlashCmdList = {}
+wipe = function(t) for k in pairs(t) do t[k] = nil end return t end
+debugstack = function() return "Interface\\FrameXML\\UIParent.lua:100: in function `UIParent_ManageFramePositions'\n" end
 PlaySound, HideUIPanel = noop, noop
 BUFF_MAX_DISPLAY, DEBUFF_MAX_DISPLAY, BUFFS_PER_ROW = 32, 16, 8
 
@@ -145,6 +148,9 @@ ui.Slider = ui.Checkbox
 ui.GryphonHolders = { "ForeverStockUILeftGryphon", "ForeverStockUIRightGryphon" }
 for _, name in ipairs(ui.GryphonHolders) do new("Frame", name, UIParent) end
 assert(loadfile("EditLayouts.lua"))("ForeverUI", ui)
+-- The client's managed frame table (UIParent_ManageFramePositions) and an unprotected frame it moves itself.
+new("Frame", "WatchFrame", UIParent)
+UIPARENT_MANAGED_FRAME_POSITIONS = { PlayerFrame = { baseY = 0 }, PETACTIONBAR_YPOS = { baseY = 0 } }
 assert(loadfile("EditMode.lua"))("ForeverUI", ui)
 for frame in pairs(eventFrames) do
     if frame.scripts.OnEvent then frame.scripts.OnEvent(frame, "PLAYER_LOGIN") end
@@ -305,5 +311,42 @@ assert(PlayerFrame:GetPoint(1) == "TOPLEFT" and select(4, PlayerFrame:GetPoint(1
 assert(PlayerFrame.scale == 1, "stock scale back")
 assert(EM.SetBarStyle("retail") and settings.barLayout == "retail", "bar look without moving bars")
 EM.SetBarStyle("classic")
+
+-- A frame placed by Edit Mode leaves the client's managed table; other keys stay.
+assert(UIPARENT_MANAGED_FRAME_POSITIONS.PlayerFrame == nil, "placed frame out of the client layout")
+assert(UIPARENT_MANAGED_FRAME_POSITIONS.PETACTIONBAR_YPOS, "other managed keys kept")
+-- The quest tracker moved by the client in combat goes back to its spot at once.
+local watchConfig = settings.editLayout.WatchFrame
+watchConfig.position = { -50, -300 }
+runUpdates()
+InCombatLockdown = function() return true end
+WatchFrame:ClearAllPoints()
+WatchFrame:SetPoint("TOPRIGHT", MinimapCluster, "BOTTOMRIGHT", 0, -14)
+local wp, wrel, _, wx, wy = WatchFrame:GetPoint(1)
+assert(wp == "TOPRIGHT" and wrel == UIParent and wx == -50 and wy == -300 and WatchFrame:GetNumPoints() == 1,
+    "tracker pinned back in combat")
+InCombatLockdown = function() return false end
+
+-- /fuimoves: frames the client moves in combat, by caller, and their shift from the start of combat.
+local function fireAll(event)
+    for frame in pairs(eventFrames) do
+        if frame.scripts and frame.scripts.OnEvent then frame.scripts.OnEvent(frame, event) end
+    end
+end
+InCombatLockdown = function() return true end
+fireAll("PLAYER_REGEN_DISABLED")
+PlayerFrame.GetBottom = function() return 112 end
+PlayerFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 12)
+InCombatLockdown = function() return false end
+fireAll("PLAYER_REGEN_ENABLED")
+PlayerFrame.GetBottom = nil
+PlayerFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0) -- out of combat: not counted
+local lines, realPrint = {}, print
+print = function(...) lines[#lines + 1] = table.concat({ ... }, " ") end
+SlashCmdList.FOREVERUIMOVES("")
+print = realPrint
+local report = table.concat(lines, "\n")
+assert(report:find("PlayerFrame %+0%.0 %+12%.0"), "shift over the combat: " .. report)
+assert(report:find("1x PlayerFrame | UIParent%.lua:100 `UIParent_ManageFramePositions'"), "caller counted once: " .. report)
 
 print("EditModeFrames OK: Retail look before measuring, pet and totem grids, buff and debuff grids, row limit, hiding auras, Show switch, popup sliders, setup API (place, load in place, stock spots back)")
