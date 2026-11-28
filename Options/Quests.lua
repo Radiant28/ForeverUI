@@ -3,19 +3,13 @@ local L = ui.L
 
 ui.RegisterOptions("quests", {
     title = L("Квесты", "Quests"),
-    description = L("Автопринятие и автосдача заданий у квестодателя: по умолчанию — при Shift + клике по NPC. Пункты меню разговора не нажимаются никогда. Диагностика: /fuiquest.",
-        "Accept and turn in quests at quest givers by themselves: by default on Shift + click on the NPC. Gossip options are never clicked. Diagnostics: /fuiquest."),
+    description = L("Автопринятие и автосдача заданий — только при Shift + клике по квестодателю (Shift можно отпустить за 1,5 с до появления окна). Дальше весь разговор идёт сам, включая цепочки. Обычный клик — всё вручную. Пункты меню разговора не нажимаются никогда. Диагностика: /fuiquest.",
+        "Quests are accepted and turned in only on Shift + click on the quest giver (Shift may be released up to 1.5 s before the window opens). The whole talk then runs by itself, chains included. A plain click leaves everything to you. Gossip options are never clicked. Diagnostics: /fuiquest."),
     icon = "Interface\\Icons\\INV_Misc_Note_01",
     group = "general", order = 40,
     apply = function() if ui.AutoQuest then ui.AutoQuest.Apply() end end,
     sections = {
         { title = L("Автоматика", "Automation"), options = {
-            { "select", "questTrigger", L("Когда работает", "When it works"), default = "shift", values = {
-                { "shift", L("Shift + клик по NPC", "Shift + click on the NPC") },
-                { "always", L("Всегда (Shift отменяет)", "Always (Shift cancels)") },
-            }, width = "full",
-                tooltip = L("Shift + клик: аддон принимает и сдаёт задания, только если вы заговорили с NPC, удерживая Shift (можно отпустить за 1,5 с до появления окна). Дальше весь разговор идёт сам, включая цепочки. Обычный клик — всё вручную.\nВсегда: аддон работает при каждом разговоре, а Shift в этот раз его отменяет.",
-                    "Shift + click: quests are accepted and turned in only when you talk to the NPC holding Shift (it may be released up to 1.5 s before the window opens). The whole talk then runs by itself, chains included. A plain click leaves everything to you.\nAlways: the addon works on every talk, and Shift cancels it that time.") },
             { "toggle", "questAutoAccept", L("Принимать задания", "Accept quests"), default = true,
                 tooltip = L("Открывает новые задания у NPC по очереди и принимает их. Цепочки берутся подряд. При полном журнале (25) останавливается и пишет в чат.",
                     "Opens new quests at the NPC one by one and accepts them. Chains are taken in a row. Stops with a chat note when the log is full (25).") },

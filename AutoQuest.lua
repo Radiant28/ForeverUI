@@ -1,7 +1,6 @@
 -- AutoQuest.lua: accept and turn in quests at quest givers by itself. WotLK 3.3.5a (12340), Lua 5.1.
 -- Only quest entries are touched, never gossip options (teleports, trainers, Nozdor service NPCs).
--- By default it works only when the NPC is clicked with Shift held (questTrigger "shift"); in the
--- "always" mode Shift cancels the visit instead. A reward with a choice is never
+-- It works only when the NPC is clicked with Shift held; a plain click leaves everything to the player. A reward with a choice is never
 -- picked: the most valuable choice (vendor price) is highlighted and the choice is left to the player.
 local _, ui = ...
 local L = ui.L
@@ -12,7 +11,7 @@ ui.AutoQuest = AQ
 local settings
 local MAX_QUESTS = MAX_QUESTLOG_QUESTS or 25
 local SESSION_GAP = 2      -- seconds after the last quest/gossip window closed before a visit ends
-local SHIFT_GRACE = 1.5    -- seconds a released Shift still starts a visit (questTrigger "shift")
+local SHIFT_GRACE = 1.5    -- seconds a released Shift still starts a visit
 local PRICE_WAIT = 3      -- seconds to wait for reward item data before giving up on the highlight
 local LOG_SIZE = 40
 
@@ -47,26 +46,19 @@ local function shiftRecently()
     return IsShiftKeyDown() or GetTime() - lastShift <= SHIFT_GRACE
 end
 
--- questTrigger "shift": the visit runs only when it was started with Shift held (Shift + click on the NPC);
--- "always": every visit runs and Shift cancels it.
+-- The visit runs only when it was started with Shift held (Shift + click on the NPC); a plain click
+-- leaves everything to the player. Once on, the whole talk runs, chains included.
 local function visit()
     local key = giverKey()
     local fresh = not session or session.key ~= key or (session.closedAt and GetTime() - session.closedAt > SESSION_GAP)
     if fresh then session = { key = key, tried = {}, progress = {} } end
     session.closedAt = nil
     local shift = fresh and shiftRecently() or IsShiftKeyDown()
-    if settings.questTrigger == "always" then
-        if shift and not session.skip then
-            session.skip = true
-            note("Shift: visit skipped")
-        end
-    else
-        if shift and not session.armed then
-            session.armed = true
-            note("Shift: visit on")
-        end
-        session.skip = not session.armed
+    if shift and not session.armed then
+        session.armed = true
+        note("Shift: visit on")
     end
+    session.skip = not session.armed
     return session
 end
 
@@ -441,8 +433,7 @@ function AQ.Report(what)
         ui.Print(L("Журнал автоквестов очищен.", "Auto quest log cleared."))
         return
     end
-    ui.Print(L("Автоквесты: режим ", "Auto quests: mode ") .. tostring(settings.questTrigger)
-        .. L(", принятие ", ", accept ") .. yes(settings.questAutoAccept)
+    ui.Print(L("Автоквесты (Shift + клик): принятие ", "Auto quests (Shift + click): accept ") .. yes(settings.questAutoAccept)
         .. L(", сдача ", ", turn in ") .. yes(settings.questAutoTurnIn)
         .. L(", в журнале ", ", in log ") .. questCount() .. "/" .. MAX_QUESTS)
     if UnitExists("npc") or (GossipFrame and GossipFrame:IsShown()) or (QuestFrame and QuestFrame:IsShown()) then
@@ -490,6 +481,7 @@ events:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         self:UnregisterEvent("PLAYER_LOGIN")
         settings = ui.Settings()
+        settings.questTrigger = nil   -- the removed "always / Shift + click" choice (2026-11-28)
         for name in pairs(handlers) do self:RegisterEvent(name) end
         SLASH_FOREVERSTOCKQUEST1 = "/fuiquest"
         SlashCmdList.FOREVERSTOCKQUEST = function(message) AQ.Report((message or ""):match("^%s*(%S*)")) end

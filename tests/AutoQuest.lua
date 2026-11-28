@@ -80,7 +80,7 @@ local function world()
     questLog = {}
     panel = { title = "", completable = true, money = 0, choices = {}, xp = 0, rewardMoney = 0 }
     items = {}
-    shift = false
+    shift = true   -- sections 1-11: the player Shift+clicked the NPC; section 12 tests the plain click
     reset()
 end
 world()
@@ -189,7 +189,9 @@ for _, banned in ipairs({ "C_Timer", "SetShown%(", "C_GossipInfo", "C_QuestLog",
 end
 assert(not source:find("SelectGossipOption"), "gossip options are never clicked")
 assert(loadfile("AutoQuest.lua"))("ForeverUI", ui)
+settings.questTrigger = "always"   -- saved by the build that still had the mode choice
 fire("PLAYER_LOGIN")
+assert(settings.questTrigger == nil, "the removed mode key is erased")
 local AQ = ui.AutoQuest
 assert(AQ and SlashCmdList.FOREVERSTOCKQUEST, "module and /fuiquest are published")
 
@@ -205,14 +207,13 @@ local defaults = {}
 for _, section in ipairs(schema.spec.sections) do
     for _, opt in ipairs(section.options) do defaults[opt[2]] = opt.default end
 end
-local expected = { questTrigger = "shift", questAutoAccept = true, questAutoTurnIn = true, questDaily = true, questTrivial = false,
+assert(defaults.questTrigger == nil, "no mode choice: Shift + click only")
+local expected = { questAutoAccept = true, questAutoTurnIn = true, questDaily = true, questTrivial = false,
     questRepeatable = false, questShared = true, questFromItems = true, questChat = true }
 for key, value in pairs(expected) do
     assert(defaults[key] == value, "default of " .. key)
     settings[key] = value
 end
--- Sections 1-11 run in the "always" mode (Shift cancels); the default Shift + click mode is section 12.
-settings.questTrigger = "always"
 
 -- Moves the visit on: the frame closes and enough time passes for the next talk to be a new visit.
 local function leave() fire("GOSSIP_CLOSED") fire("QUEST_FINISHED") now = now + 5 end
@@ -254,22 +255,6 @@ fire("QUEST_FINISHED")
 reset()
 fire("GOSSIP_SHOW")
 assert(count("SelectGossipAvailableQuest") == 0 and count("SelectGossipActiveQuest") == 0, "no repeats in one visit")
-leave()
-
--- 2. Shift held: nothing at all for this visit, even after Shift is released.
-world()
-questLog = { { title = "Волки", complete = 1 } }
-gossip.active = { { title = "Волки" } }
-gossip.available = { { title = "Медведи" } }
-shift = true
-fire("GOSSIP_SHOW")
-shift = false
-panel.title = "Медведи"
-fire("QUEST_DETAIL")
-assert(#calls == 0, "Shift skips the visit")
-leave()
-fire("GOSSIP_SHOW")
-assert(last("SelectGossipActiveQuest"), "next visit works again")
 leave()
 
 -- 3. Reward choice: nothing is taken, the most valuable choice is highlighted.
@@ -484,10 +469,10 @@ assert(said("? Волки") and said("! Серое") and said("grey"), "/fuiques
 SlashCmdList.FOREVERSTOCKQUEST("clear")
 assert(#AQ.Log == 0, "/fuiquest clear")
 
--- 12. Default mode: only a talk started with Shift (Shift + click on the NPC) runs.
-settings.questTrigger = "shift"
+-- 12. Only a talk started with Shift (Shift + click on the NPC) runs; a plain click does nothing.
 local function giver()
     world()
+    shift = false
     questLog = { { title = "Волки", complete = 1 } }
     gossip.active = { { title = "Волки" } }
     gossip.available = { { title = "Медведи" } }
@@ -550,4 +535,4 @@ fire("GOSSIP_SHOW")
 assert(#calls == 0, "Ctrl does not start a talk")
 leave()
 
-print("AutoQuest OK: Shift + click mode (grace, mid-talk, other keys), visit order, chains, Shift, reward highlight (late data), money, repeatable hand-ins, filters, full log, stride 4, collapsed log, greeting, sources, switches, /fuiquest")
+print("AutoQuest OK: Shift + click only (plain click, grace, mid-talk, other keys, old key erased), visit order, chains, reward highlight (late data), money, repeatable hand-ins, filters, full log, stride 4, collapsed log, greeting, sources, switches, /fuiquest")
