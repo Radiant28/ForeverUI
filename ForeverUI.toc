@@ -45,6 +45,7 @@ BagSortPlan.lua
 BagSort.lua
 Bags.lua
 Merchant.lua
+AutoQuest.lua
 Enchanting.lua
 SkinExtras.lua
 WindowSkin.lua
@@ -80,6 +81,7 @@ Options\Bags.lua
 Options\BagSort.lua
 Options\Equipment.lua
 Options\Merchant.lua
+Options\Quests.lua
 Options\Enchanting.lua
 Options\Skins.lua
 Options\Chat.lua
