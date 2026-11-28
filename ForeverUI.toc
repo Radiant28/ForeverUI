@@ -2,7 +2,7 @@
 ## Title: Forever UI
 ## Notes: WoW: Forever styling and equipment labels for the stock interface.
 ## Notes-ruRU: Оформление штатного интерфейса в стиле WoW: Forever и подписи экипировки.
-## Version: 1.4.4
+## Version: 1.4.5
 ## SavedVariables: ForeverStockUIDB, ForeverUI_NameplatesDB
 
 Libs\LibStub\LibStub.lua
@@ -33,6 +33,8 @@ EditLayouts.lua
 EditMode.lua
 Performance.lua
 Chat.lua
+ChatBubbles.lua
+ChatEmotes.lua
 ItemUsability.lua
 Loot.lua
 LootRolls.lua

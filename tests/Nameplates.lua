@@ -1054,6 +1054,7 @@ tick()
 assert(passerView.health.color[1] == 0.41, "class learnt from the combat log")
 driver.scripts.OnEvent(driver, "CHAT_MSG_SAY", "hi", "Talker-Realm", "", "", "", "", 0, 0, "", 0, 1, "0x0000000000000100")
 assert(cfg.classCache.Passer == "MAGE" and cfg.classCache.Talker == "WARRIOR", "classes saved by name")
+
 NozdorActionNative = nativeQuery
 
 -- The stock cast bar has no spell text: the name comes from the combat log, matched by the icon.
@@ -1181,6 +1182,51 @@ tick()
 assert(bankerView.health:IsShown())
 cfg.friendlyNPCNameOnly, cfg.hideFullHealthOutOfCombat = true, hideFull
 banker:Hide()
+tick()
+
+-- Another faction's pet in a sanctuary has no unit token: its learnt minion title or a pet seen on
+-- mouseover marks it, and it is hidden like other pets. Outside a sanctuary the name alone does nothing.
+local zonePVP = "sanctuary"
+function GetZonePVPInfo() return zonePVP end
+assert(cfg.hideMinions, "pets are hidden by default")
+cfg.npcTitleCache["Камнегрыз"] = "<Прислужник Карла>"
+local pet = plate("Камнегрыз")
+tick()
+assert(not pet.children[3]:IsShown(), "a pet known by its minion title is hidden in a sanctuary")
+zonePVP = "contested"
+tick()
+assert(pet.children[3]:IsShown(), "outside a sanctuary the same name keeps its plate")
+zonePVP = "sanctuary"
+cfg.hideMinions = false
+tick()
+assert(pet.children[3]:IsShown(), "pets stay when hiding them is off")
+cfg.hideMinions = true
+pet:Hide()
+-- A guardian-style title of a real NPC keeps the plate.
+cfg.npcTitleCache["Всадник"] = "<Страж Даларана>"
+local rider = plate("Всадник")
+tick()
+assert(rider.children[3]:IsShown(), "an NPC titled <Страж Даларана> keeps its plate")
+rider:Hide()
+-- A pet seen on mouseover is remembered by name for the session, also without a title.
+units.mouseover = { name = "Гримдак", level = 80, controlled = true }
+tooltipUnits.mouseover = { "Гримдак" }
+tick()
+units.mouseover, tooltipUnits.mouseover = nil, nil
+local imp = plate("Гримдак")
+tick()
+assert(not imp.children[3]:IsShown(), "a pet seen on mouseover is hidden later without a unit token")
+imp:Hide()
+-- A known player name never counts as a pet (a mage's mirror images carry the mage's name).
+units.mouseover = { name = "Зеркальщик", level = 80, controlled = true }
+tick()
+units.mouseover = nil
+ForeverUI_NameplatesDB.classCache["Зеркальщик"] = "MAGE"
+local mage = plate("Зеркальщик")
+tick()
+assert(mage.children[3]:IsShown(), "a known player's plate stays although images with the name were pets")
+mage:Hide()
+GetZonePVPInfo = nil
 tick()
 NozdorActionNative = nativeQuery
 

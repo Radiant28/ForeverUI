@@ -152,6 +152,8 @@ local function LoadConfig()
     if type(cfg.npcTitleCache) ~= "table" then cfg.npcTitleCache = {} end
     if type(cfg.npcEliteCache) ~= "table" then cfg.npcEliteCache = {} end
     if type(cfg.guildCache) ~= "table" then cfg.guildCache = {} end
+    -- Removed 2026-11-28 with the other-faction investigation (client behaviour): faction cache and plate dumps.
+    cfg.factionCache, cfg.platesDump, cfg.whyDump = nil, nil, nil
     cfg.crowdThreshold = Clamp(cfg.crowdThreshold, 5, 60, defaults.crowdThreshold)
     cfg.subtitleSize = Clamp(cfg.subtitleSize, 6, 18, defaults.subtitleSize)
     cfg.edgeFadeInner = Clamp(cfg.edgeFadeInner, 10, 190, defaults.edgeFadeInner)
@@ -1321,11 +1323,45 @@ local eliteClasses = { elite = true, worldboss = true, rare = true, rareelite = 
 local SCAN_BUDGET, SCAN_TRIES = 2, 5
 local scanBudget, scanTries, learnRetry = SCAN_BUDGET, {}, {}
 
+-- Pets without a unit token, in sanctuaries only (Dalaran, Shattrath: wfn.sanctuary). There the client
+-- draws the plate of another faction's pet but no plate of its owner. A plate counts as a pet when its
+-- name was a pet on a mouseover, target or focus this session, or its learnt title is the client's pet or
+-- minion title ("<Прислужник Карла>"). Guardian titles are left out: "<Страж Даларана>" is a real NPC title.
+-- Sanctuaries only, because an unrenamed hunter pet shares its name with wild beasts that keep their plates.
+local minion = { names = {}, titles = {} }
+for _, format in ipairs({ UNITNAME_TITLE_PET or false, UNITNAME_TITLE_MINION or false,
+    "Питомец %s", "Прислужник %s", "%s's Pet", "%s's Minion" }) do
+    -- ruRU wraps the owner in a declension code: "Прислужник |3-1(%s)".
+    local text = type(format) == "string" and (format:gsub("|3%-%d+%((.-)%)", "%1"))
+    local first, last
+    if text then first, last = text:find("%s", 1, true) end
+    if first then
+        local prefix, suffix = text:sub(1, first - 1), text:sub(last + 1)
+        if (prefix .. suffix):find("%S") then
+            local escape = "[%^%$%(%)%%%.%[%]%*%+%-%?]"
+            minion.titles["^<" .. prefix:gsub(escape, "%%%0") .. ".+" .. suffix:gsub(escape, "%%%0") .. ">$"] = true
+        end
+    end
+end
+
+function minion.Named(name)
+    if not name or classByName[name] then return false end
+    if minion.names[name] then return true end
+    local title = npcTitleByName[name]
+    if not title or title == "" then return false end
+    for pattern in pairs(minion.titles) do
+        if title:find(pattern) then return true end
+    end
+    return false
+end
+wfn.IsMinionName = minion.Named
+
 -- Reads the title of an NPC unit (mouseover in the world, target, focus) once per name.
 local function LearnTitle(unit, now)
     if not UnitExists(unit) or UnitIsPlayer(unit) then return end
     local name = UnitName(unit)
     if not name then return end
+    if UnitPlayerControlled(unit) then minion.names[name] = true end
     local classification = UnitClassification(unit)
     if classification then eliteByName[name] = eliteClasses[classification] or false end
     if not cfg.npcTitles or scanBudget <= 0 or npcTitleByName[name] or now < (learnRetry[name] or 0) then return end
@@ -1714,6 +1750,9 @@ local function SyncPlate(view, plate, unit, guid, playerLevel, inCombat, inDunge
     -- so the plate counts as a player even when the plate GUID does not look like one.
     local blue = r < 0.01 and g < 0.01 and b > 0.99
     if blue and not unit and kind ~= "player" then kind, view.kind = "player", "player" end
+    -- Another faction's pet in a sanctuary, known by name or title (minion.Named); view.kind stays, so the
+    -- plate is an NPC again outside the sanctuary.
+    if kind == "unknown" and not unit and wfn.sanctuary and minion.Named(name) then kind = "minion" end
     local neutral = unit and UnitReaction(unit, "player") == 4 or (not unit and r > 0.99 and g > 0.99 and b < 0.01)
     local friendly
     if unit then
@@ -2027,6 +2066,7 @@ local function ScanWorldFrame(_, delta)
     LearnTitle("target", now); LearnTitle("mouseover", now); LearnTitle("focus", now)
     local _, instanceType = IsInInstance()
     wfn.place = wfn.Place(instanceType)
+    wfn.sanctuary = GetZonePVPInfo and GetZonePVPInfo() == "sanctuary" or false
     local inDungeon = instanceType == "party" or instanceType == "raid"
     if cfg.stackForever then StackPlates(blend) else ClearStack() end
     -- Crowd saver: with many plates on screen, quiet ones (no unit, no cast, no threat, not the old
@@ -2095,6 +2135,8 @@ driver:SetScript("OnEvent", function(self, event, unit, ...)
         if IsInGuild and IsInGuild() and GuildRoster then GuildRoster() end
         RememberRoster()
         CreateResizer()
+        -- ChatBubbles.lua draws its own bubbles above the plates only while this scanner runs.
+        wfn.active = true
         self:SetScript("OnUpdate", ScanWorldFrame)
     elseif event == "DISPLAY_SIZE_CHANGED" then
         RefreshPixelSize()
